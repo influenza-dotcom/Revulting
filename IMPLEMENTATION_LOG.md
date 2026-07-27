@@ -1080,6 +1080,43 @@ spore's noxious blast therefore renders as a fiery one. Upstream Vulture's own
 aliasing, single-hop and legal, but it is a type substitution and a candidate
 for an honest recolour (cf. make_gold_dragons.py).
 
+**Missing tile art crashed instead of placeholding - FIXED (vulture_tile.cpp).**
+Gamedata ships as 2419 loose PNGs with no DLB, so one absent or truncated file
+was fatal rather than conspicuous. Three holes, all on constantly-hit paths:
+`vulture_shade_tile()` dereferenced `orig->xmod` / `orig->graphic->w` unchecked
+(EVERY dark square goes through it); `vulture_load_tile()` never checked
+`vulture_load_surface()`, so a corrupt PNG yielded a tile with `graphic == NULL`
+- not a NULL tile, so callers' NULL checks did not catch it; and
+`vulture_put_tilehighlight()` dereferenced `tile->graphic->format` unchecked.
+
+Now `vulture_get_tile_shaded()` substitutes the reserved ERROR placeholder for
+anything that will not load, so missing art is VISIBLE rather than an invisible
+hole. `vulture_error_tile_for()` picks the placeholder of the tile's OWN
+category (each fixed-size category reserves its last slot) so hotspots are
+right; edge/floor/wall are variable-size with no known slot and fall back to
+misc. A placeholder cannot stand in for itself, which ends the recursion. A
+fresh copy is loaded per cache slot - one pointer under several ids would let
+`vulture_tilecache_discard()` free it twice. Warn-once-per-tile via a static
+std::set (GAMETILECOUNT is a RUNTIME value - `WALTILECOUNT` reads
+`vulture_typecount[]` - so a fixed array does not compile). Also:
+`vulture_free_tile()` NULL-tolerant, `delete data` -> `delete[] data`.
+
+(*) VERIFIED BY INJECTING THE FAULT, not by inspection: pulled all 18
+`floor.floor_rough_*` tiles out of the package and played. Game starts, the
+walked corridor renders as bright magenta/black hazard placeholders correctly
+anchored in the isometric grid, 9 distinct tiles substituted, each logged
+EXACTLY once, fully playable throughout. Tiles restored and confirmed
+byte-identical to the tracked gamedata master (2419/2419); a clean run then
+showed zero placeholder pixels and zero substitutions.
+
+**Version control.** `C:/Users/dalla/Vulture` is now a git repo (5b3dcd9
+baseline, 4899 files). Six nested repos (refs/*, vulture-baseline, win-build)
+are excluded, as are the regenerable VultureNetHack/ package, shots/, hearse/,
+the 91MB msys2 installer, and all local runtime state that carries the player's
+name/email/saves. NOTE: `VultureNetHack/tiles` is NOT tracked - the tracked
+master is `vulture5-win/win/vulture/gamedata/tiles`, and the two are currently
+kept in sync BY HAND.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
