@@ -4,6 +4,7 @@
                              no idea why but it won't compile otherwise */
 
 #include <errno.h>
+#include <set>
 
 extern "C" {
 	#include "hack.h"
@@ -53,8 +54,56 @@ static int vulture_obfuscate_object(int obj_id);
 
 inline static void vulture_free_tile(vulture_tile *tile)
 {
+	if (!tile)
+		return;
+
 	SDL_FreeSurface(tile->graphic);
 	delete tile;
+}
+
+
+/* A tile is only usable if it exists AND carries a decoded surface.
+ * vulture_load_tile() can hand back a tile whose graphic failed to decode,
+ * which is not the same thing as a NULL tile and has to be checked for
+ * separately - it is the case that used to crash the shading path. */
+inline static bool vulture_tile_is_drawable(const vulture_tile *tile)
+{
+	return tile != NULL && tile->graphic != NULL;
+}
+
+
+/* Which conspicuous ERROR placeholder should stand in for a tile that would
+ * not load. Every FIXED-size category reserves its last slot for exactly this
+ * (see the offset block in vulture_tile.h), so the substitute carries the
+ * right category's hotspots and lands where the real tile would have.
+ *
+ * The three variable-size categories - edge, floor and wall - size themselves
+ * from vulture_typecount[] at load time and so have no arithmetically-known
+ * reserved slot; they fall back to the misc placeholder, which is still
+ * conspicuous, just anchored like a misc tile.
+ *
+ * Returning tile_id itself means "this IS the placeholder", i.e. there is
+ * nothing left to substitute. */
+static int vulture_error_tile_for(int tile_id)
+{
+	/* deliberately not static: several of these counts are runtime values */
+	const int range_end[] = {
+		OBJTILEOFFSET + OBJTILECOUNT,
+		ICOTILEOFFSET + ICOTILECOUNT,
+		MONTILEOFFSET + MONTILECOUNT,
+		STATILEOFFSET + STATILECOUNT,
+		FIGTILEOFFSET + FIGTILECOUNT,
+		EXPTILEOFFSET + EXPTILECOUNT,
+		CURTILEOFFSET + CURTILECOUNT,
+		MISCTILEOFFSET + MISCTILECOUNT
+	};
+	unsigned int i;
+
+	for (i = 0; i < sizeof range_end / sizeof range_end[0]; i++)
+		if (tile_id < range_end[i])
+			return range_end[i] - 1;
+
+	return V_MISC_ERROR;
 }
 
 
@@ -279,11 +328,59 @@ vulture_tile * vulture_get_tile_shaded(int tile_id, int shadelevel)
 	{
 		if (shadelevel > 0)
 		{
-			tile = vulture_get_tile_shaded(tile_id, 0);
-			tile = vulture_shade_tile(tile, shadelevel);
+			/* Shade a copy of the unshaded tile. That recursive call has
+			 * already substituted the placeholder if the art was missing,
+			 * so what comes back is either drawable or NULL - and
+			 * vulture_shade_tile() tolerates NULL either way. */
+			tile = vulture_shade_tile(vulture_get_tile_shaded(tile_id, 0),
+			                          shadelevel);
 		}
 		else
 			tile = vulture_load_tile(tile_id);
+	}
+
+	/* Art that is missing or failed to decode must become the CONSPICUOUS
+	 * error tile. Never a crash, and never nothing: gamedata ships as ~2400
+	 * loose PNGs with no DLB, so a single absent or truncated file used to
+	 * take the whole game down through vulture_shade_tile(), and silently
+	 * drawing invisible floor would hide exactly the problem this port is
+	 * supposed to make obvious.
+	 *
+	 * A placeholder cannot stand in for itself, so when the missing tile IS
+	 * the placeholder there is nothing left to substitute and the NULL simply
+	 * propagates to callers, all of which skip it. */
+	if (!vulture_tile_is_drawable(tile))
+	{
+		int err_id = vulture_error_tile_for(tile_id);
+
+		/* warn once per tile, not once per frame: this sits in the draw
+		 * path, so an unconditional log would grow without bound.
+		 * (GAMETILECOUNT is a runtime value - WALTILECOUNT reads
+		 * vulture_typecount[] - so this cannot be a fixed array.) */
+		static std::set<int> warned;
+
+		if (warned.insert(tile_id).second)
+			vulture_write_log(V_LOG_ERROR, __FILE__, __LINE__,
+				"tile_id %d ('%s') has no usable graphic; drawing the error "
+				"tile instead\n", tile_id, vulture_tile_filename(tile_id));
+
+		vulture_free_tile(tile);
+		tile = NULL;
+
+		if (err_id != tile_id)
+		{
+			/* Load a FRESH copy rather than reusing the cached placeholder:
+			 * vulture_tilecache_discard() frees every slot it holds, so
+			 * parking one pointer under several ids would free it twice. */
+			tile = vulture_load_tile(err_id);
+			if (tile && shadelevel > 0)
+			{
+				vulture_tile *shaded = vulture_shade_tile(tile, shadelevel);
+
+				vulture_free_tile(tile);
+				tile = shaded;
+			}
+		}
 	}
 
 	vulture_tilecache_add(tile, shaded_id);
@@ -317,23 +414,38 @@ vulture_tile * vulture_load_tile(int tile_id)
 	fsize = ftell(fp);
 	rewind(fp);
 
+	/* a truncated or empty file has nothing to decode */
+	if (fsize <= 0)
+	{
+		fclose(fp);
+		return NULL;
+	}
+
 	/* load the tile */
 	data = new char[fsize];
 	fread(data, fsize, 1, fp);
 
 	newtile = new vulture_tile;
-	if (!newtile)
-	{
-		free(data);
-		return NULL;
-	}
 
 	newtile->graphic = vulture_load_surface(data, fsize);
 	newtile->xmod = vulture_gametiles[tile_id].hs_x;
 	newtile->ymod = vulture_gametiles[tile_id].hs_y;
 
-	delete data;
+	delete[] data;
 	fclose(fp);
+
+	/* A corrupt PNG leaves graphic == NULL. Returning the tile anyway would
+	 * hand every caller a landmine - vulture_shade_tile() dereferences
+	 * graphic->w unconditionally - so fail here and let the caller
+	 * substitute the error tile. */
+	if (!newtile->graphic)
+	{
+		vulture_write_log(V_LOG_DEBUG, __FILE__, __LINE__,
+			"Tile %d ('%s') failed to decode\n", tile_id,
+			vulture_gametiles[tile_id].filename.c_str());
+		delete newtile;
+		return NULL;
+	}
 
 	if (TILE_IS_WALL(tile_id))
 		vulture_set_tile_alpha(newtile, vulture_opts.wall_opacity);
@@ -349,7 +461,15 @@ vulture_tile * vulture_load_tile(int tile_id)
  * destination alpha, making transparent corners visible as dark rects. */
 static inline vulture_tile * vulture_shade_tile(vulture_tile *orig, int shadelevel)
 {
-	vulture_tile *tile = new vulture_tile;
+	vulture_tile *tile;
+
+	/* Nothing to shade. This is the crash that used to take the game down:
+	 * every dark square goes through here, so one missing floor or wall PNG
+	 * was fatal rather than merely ugly. */
+	if (!vulture_tile_is_drawable(orig))
+		return NULL;
+
+	tile = new vulture_tile;
 
 	tile->xmod = orig->xmod;
 	tile->ymod = orig->ymod;
@@ -383,8 +503,11 @@ void vulture_put_tilehighlight(int x, int y, int tile_id)
 	if (tile_id < 0)
 		return;
 
-	/* get the base tile */
+	/* get the base tile; it is the error placeholder if the art was missing,
+	 * and NULL only if the placeholder itself could not be loaded */
 	tile = vulture_get_tile_shaded(tile_id, 0);
+	if (!vulture_tile_is_drawable(tile))
+		return;
 
 	pxf = tile->graphic->format;
 
