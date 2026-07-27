@@ -1,0 +1,58 @@
+=== compile harness ===
+=== link ===
+
+===== RUN 1: normal config (expect PASS + giant ant OWNS a file) =====
+parsed OK: GAMETILECOUNT=2440  sum(typecount)=2440
+--- per-category ERROR placeholder checks ---
+  OK  object    ERROR -> abs 454  'tiles/object.error.png'
+  OK  objicon   ERROR -> abs 909  'tiles/objicon.error.png'
+  OK  monster   ERROR -> abs 1292  'tiles/monster.error.png'
+  OK  statue    ERROR -> abs 1675  'tiles/statue.error.png'
+  OK  figurine  ERROR -> abs 2058  'tiles/figurine.error.png'
+  OK  misc      ERROR -> abs 2227  'tiles/misc.error.png'
+  OK  floor     ERROR -> abs 2350  'tiles/floor.error.png'
+  OK  wall      ERROR -> abs 2439  'tiles/wall.error.png'
+  OK  explosion ERROR -> abs 2122  'tiles/explosion.error.png'
+  OK  cursor    ERROR -> abs 2140  'tiles/cursor.error.png'
+  OK  edge      ERROR -> abs 2240  'tiles/edge.error.png'
+--- break probe: monster[0] abs=910 ptr=-1 (err_abs=1292), expect=own ---
+RESULT: PASS
+run1 exit=0
+
+===== RUN 2: intentional break — remove monster.PM_GIANT_ANT & explosion.FIERY_1 =====
+removed lines: 2
+-- probe monster 0 (giant ant) should now redirect to ERROR --
+parsed OK: GAMETILECOUNT=2440  sum(typecount)=2440
+--- per-category ERROR placeholder checks ---
+  OK  object    ERROR -> abs 454  'tiles/object.error.png'
+  OK  objicon   ERROR -> abs 909  'tiles/objicon.error.png'
+  OK  monster   ERROR -> abs 1292  'tiles/monster.error.png'
+  OK  statue    ERROR -> abs 1675  'tiles/statue.error.png'
+  OK  figurine  ERROR -> abs 2058  'tiles/figurine.error.png'
+  OK  misc      ERROR -> abs 2227  'tiles/misc.error.png'
+  OK  floor     ERROR -> abs 2350  'tiles/floor.error.png'
+  OK  wall      ERROR -> abs 2439  'tiles/wall.error.png'
+  OK  explosion ERROR -> abs 2122  'tiles/explosion.error.png'
+  OK  cursor    ERROR -> abs 2140  'tiles/cursor.error.png'
+  OK  edge      ERROR -> abs 2240  'tiles/edge.error.png'
+--- break probe: monster[0] abs=910 ptr=1292 (err_abs=1292), expect=error ---
+RESULT: PASS
+run2a exit=0
+-- probe explosion 45 (FIERY_1) should now redirect to ERROR --
+parsed OK: GAMETILECOUNT=2440  sum(typecount)=2440
+--- per-category ERROR placeholder checks ---
+  OK  object    ERROR -> abs 454  'tiles/object.error.png'
+  OK  objicon   ERROR -> abs 909  'tiles/objicon.error.png'
+  OK  monster   ERROR -> abs 1292  'tiles/monster.error.png'
+  OK  statue    ERROR -> abs 1675  'tiles/statue.error.png'
+  OK  figurine  ERROR -> abs 2058  'tiles/figurine.error.png'
+  OK  misc      ERROR -> abs 2227  'tiles/misc.error.png'
+  OK  floor     ERROR -> abs 2350  'tiles/floor.error.png'
+  OK  wall      ERROR -> abs 2439  'tiles/wall.error.png'
+  OK  explosion ERROR -> abs 2122  'tiles/explosion.error.png'
+  OK  cursor    ERROR -> abs 2140  'tiles/cursor.error.png'
+  OK  edge      ERROR -> abs 2240  'tiles/edge.error.png'
+--- break probe: explosion[45] abs=2104 ptr=2122 (err_abs=2122), expect=error ---
+RESULT: PASS
+run2b exit=0
+===== LOADER TEST DONE =====

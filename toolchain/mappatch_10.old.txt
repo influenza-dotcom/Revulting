@@ -1,0 +1,2 @@
+                /* furniture is only found in svr.rooms, so set the background
+                 * type */

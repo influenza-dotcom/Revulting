@@ -1,0 +1,4 @@
+Files /c/Users/dalla/Vulture/refs/nethack-3.6.6/include/config.h and /c/Users/dalla/Vulture/vulture-baseline/include/config.h differ
+Files /c/Users/dalla/Vulture/refs/nethack-3.6.6/include/global.h and /c/Users/dalla/Vulture/vulture-baseline/include/global.h differ
+Files /c/Users/dalla/Vulture/refs/nethack-3.6.6/include/hack.h and /c/Users/dalla/Vulture/vulture-baseline/include/hack.h differ
+Files /c/Users/dalla/Vulture/refs/nethack-3.6.6/include/tradstdc.h and /c/Users/dalla/Vulture/vulture-baseline/include/tradstdc.h differ

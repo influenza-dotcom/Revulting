@@ -1,0 +1,591 @@
+/* NetHack may be freely redistributed.  See license for details. */
+
+#include <ctype.h>
+#include "SDL.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+extern "C" {
+#include "hack.h"
+}
+
+#include "vulture_gen.h"
+#include "vulture_win.h"
+#include "vulture_gra.h"
+#include "vulture_sdl.h"
+#include "vulture_mou.h"
+#include "vulture_main.h"
+#include "vulture_opt.h"
+#include "vulture_init.h" /* vulture_ui_rescale() */
+
+#include "winclass/button.h"
+#include "winclass/enhancebutton.h"
+#include "winclass/inputdialog.h"
+#include "winclass/levelwin.h"
+#include "winclass/choicedialog.h"
+
+#define V_EVENTSTACK_SIZE 32
+
+
+/******************************************************************************
+* globals vars
+******************************************************************************/
+
+SDL_Rect *vulture_invrects = NULL;
+int vulture_invrects_num = 0;
+int vulture_invrects_max = 0;
+
+
+/*********************************/
+
+vulture_window_graphics vulture_winelem; /* contains borders, background, etc */
+
+int vulture_windows_inited = 0;
+int vulture_suppress_helpmsg;
+int vulture_winid_map = 0;
+int vulture_winid_minimap = 0;
+int vulture_whatis_singleshot = 0;
+
+vulture_event * vulture_eventstack = NULL;
+int vulture_eventstack_top;
+
+
+/******************************************************************************
+* function pre-declarations
+******************************************************************************/
+
+static int vulture_event_dispatcher_core(SDL_Event * event, void * result, window * topwin);
+static int vulture_handle_event(window * topwin, window * win,
+								void * result, SDL_Event * event, int * redraw);
+
+
+/******************************
+* High-level window functions
+******************************/
+void vulture_messagebox(std::string message)
+{
+    window *win;
+    int dummy;
+
+		win = new choicedialog(ROOTWIN, message, "c", 0);
+
+    vulture_event_dispatcher(&dummy, V_RESPOND_INT, win);
+
+    delete win;
+}
+
+
+int vulture_get_input(int force_x, int force_y, const char *ques, char *input,
+                      const char *default_text)
+{
+	int response;
+  bool isRootWindow = false;
+
+	inputdialog *win = new inputdialog(ROOTWIN, ques, 256, force_x, force_y,
+	                                   default_text ? default_text : "");
+
+	vulture_write_log(V_LOG_DEBUG, __FILE__, __LINE__, "vulture_get_input(%d,%d,%s) {entry}\n", force_x, force_y, ques);
+
+	if (!ROOTWIN)
+  {
+    vulture_write_log(V_LOG_DEBUG, __FILE__, __LINE__, "vulture_get_input(%d,%d,%s) {No Root Window}\n", force_x, force_y, ques);
+    isRootWindow = true;
+		ROOTWIN = win;
+  }
+
+	vulture_write_log(V_LOG_DEBUG, __FILE__, __LINE__, "vulture_get_input(%d,%d,%s) {Root} %s\n", force_x, force_y, ques,ROOTWIN->caption.c_str());
+
+	/* get input */
+	vulture_event_dispatcher(&response, V_RESPOND_INT, win);
+
+	/* copy result into input */
+	win->copy_input(input);
+
+  if (isRootWindow)
+    ROOTWIN = NULL;
+
+	/* clean up */
+	delete win;
+
+	vulture_write_log(V_LOG_DEBUG, __FILE__, __LINE__, "vulture_get_input(%d,%d,%s) {exit}\n", force_x, force_y, ques);
+
+	return response;
+}
+
+
+
+/******************************
+* Event handling functions
+******************************/
+
+void vulture_event_dispatcher(void * result, int resulttype, window * topwin)
+{
+	vulture_event * queued_event;
+	int event_result = V_EVENT_UNHANDLED;
+	point mouse;
+	SDL_Event event;
+	int redraw;
+	window *win;
+
+	/* first, check whether we have an autoresponse queued */
+	while ( (queued_event = vulture_eventstack_get()))
+	{
+		if (queued_event->rtype == resulttype || queued_event->rtype == V_RESPOND_ANY)
+		{
+			/* suppress some messages during automatic actions */
+			vulture_suppress_helpmsg = 1;
+
+			if (resulttype == V_RESPOND_POSKEY)
+				*(vulture_event*)result = *queued_event;
+			else if (resulttype == V_RESPOND_CHARACTER)
+				*(char*)result = (char)queued_event->num;
+			else
+				*(int*)result = queued_event->num;
+			return;
+		}
+	}
+
+	/* this block will take us out of singleshot-whatis mode (triggered by the context menu) */
+	if (vulture_whatis_singleshot && resulttype == V_RESPOND_POSKEY)
+	{
+		((vulture_event*)result)->num = ' ';
+		vulture_whatis_singleshot = 0;
+		return;
+	}
+
+	/* check whether we want to draw the "enhance" icon */
+	if (enhancebtn)
+		enhancebtn->check_enhance();
+
+	/* nothing queued, do normal event processing */
+	if (!topwin)
+		topwin = ROOTWIN;
+
+	if (!vulture_whatis_singleshot)
+		/* no need to suppress messages now... */
+		vulture_suppress_helpmsg = 0;
+
+	/* kill the tooltip */
+	vulture_mouse_invalidate_tooltip(1);
+
+	/* fake a mousemotion event, to make the window set its preferred cursor before we draw */
+	memset(&event, 0, sizeof(event));
+	event.type = SDL_MOUSEMOTION;
+	mouse = vulture_get_mouse_pos();
+	win = topwin->get_window_from_point(mouse);
+	vulture_handle_event(topwin, win, result, &event, &redraw);
+
+	/* draw windows, if necessary */
+	topwin->draw_windows();
+	vulture_mouse_draw();
+	vulture_refresh_window_region();
+	vulture_mouse_refresh();
+	vulture_mouse_restore_bg();
+
+	while (event_result != V_EVENT_HANDLED_FINAL)
+	{
+		/* Get next event OR wait 100ms */
+		vulture_wait_event(&event, 100);
+
+		event_result = vulture_event_dispatcher_core(&event, result, topwin);
+
+#ifdef __EMSCRIPTEN__
+		emscripten_sleep(1);
+#else
+		SDL_Delay(20);
+#endif
+	}
+}
+
+
+
+int vulture_event_dispatcher_nonblocking(void * result, window * topwin)
+{
+	SDL_Event event;
+	int event_result = V_EVENT_UNHANDLED;
+
+	if (!topwin)
+		topwin = ROOTWIN;
+
+	/* kill the tooltip */
+	vulture_mouse_invalidate_tooltip(1);
+
+	/* draw windows, if necessary */
+	topwin->draw_windows();
+	vulture_mouse_draw();
+	vulture_refresh_window_region();
+	vulture_mouse_refresh();
+	vulture_mouse_restore_bg();
+
+	while (event_result != V_EVENT_HANDLED_FINAL)
+	{
+		if (!vulture_poll_event(&event))
+			return 0;
+
+		event_result = vulture_event_dispatcher_core(&event, result, topwin);
+	}
+
+	return 1;
+}
+
+
+static int vulture_event_dispatcher_core(SDL_Event * event, void * result, window * topwin)
+{
+	window *win, *win_old;
+	int event_result = V_EVENT_UNHANDLED;
+	int redraw = 0, hovertime_prev = 0;
+	static int hovertime = 0;
+	point mouse, mouse_old = vulture_get_mouse_prev_pos();
+
+	if (event->type == SDL_TIMEREVENT) {
+		hovertime_prev = hovertime;
+		hovertime += 150; /* 100 ms event timeout + 20 ms delay after the last event */
+		event->user.code = hovertime;
+	} else {
+		hovertime = 0;
+		event->user.code = 0;
+	}
+
+	/* keyboard events are always given to topwin, because mouse cursor
+		* position has nothing to do with keyboard input */
+	if (event->type == SDL_KEYDOWN) {
+		event_result = topwin->event_handler(topwin, result, event);
+		if (event_result == V_EVENT_HANDLED_REDRAW || event_result == V_EVENT_UNHANDLED_REDRAW)
+			redraw = 1;
+	}
+	else {
+		/* find out what window the mouse is over now */
+		mouse = vulture_get_mouse_pos();
+		win = topwin->get_window_from_point(mouse);
+
+		/* All other events belong to the window under the mouse cursor */
+		if (event->type == SDL_MOUSEMOTION) {
+			/* delete tooltip; if the mouse gets moved somewhere interesting
+				* the window it is over will set up a new tooltip */
+			vulture_mouse_invalidate_tooltip(0);
+
+			/* notify the window the mouse got moved out of */
+			win_old = topwin->get_window_from_point(mouse_old);
+			if (win_old && win != win_old && win_old != win->parent) {
+				event->type = SDL_MOUSEMOVEOUT;
+				event_result = vulture_handle_event(topwin, win_old, result, event, &redraw);
+				event->type = SDL_MOUSEMOTION;
+			}
+		}
+
+		/* the mouse might be outside the window of interest (topwin).
+			* if so win is NULL and we can go wait for the next event now... */
+		if (!win)
+			return V_EVENT_UNHANDLED;
+
+		event_result = vulture_handle_event(topwin, win, result, event, &redraw);
+	}
+
+	if (redraw)
+		topwin->draw_windows();
+
+	if (redraw || event->type != SDL_TIMEREVENT ||
+		(hovertime > HOVERTIMEOUT && hovertime_prev < HOVERTIMEOUT))
+		vulture_mouse_draw();
+
+	/* refresh all regions (except mouse & tt) needing a refresh here,
+		* do NOT do so in draw() functions */
+	if (redraw || vulture_invrects_num)
+		vulture_refresh_window_region();
+
+	if (redraw || event->type != SDL_TIMEREVENT ||
+		(hovertime > HOVERTIMEOUT && hovertime_prev < HOVERTIMEOUT))
+	{
+		vulture_mouse_refresh();
+		vulture_mouse_restore_bg();
+	}
+
+	return event_result;
+}
+
+
+/* takes an event and passes it each window in the win->parent->...->topwin
+* chain until one of the windows handles the event or until the event is
+* rejected by topwin */
+static int vulture_handle_event(window *topwin, window *win,
+								void *result, SDL_Event *event, int *redraw)
+{
+	int event_result = V_EVENT_UNHANDLED;
+	window * winptr = win;
+
+	while (event_result < V_EVENT_HANDLED_NOREDRAW)
+	{
+		event_result = winptr->event_handler(win, result, event);
+		if (event_result == V_EVENT_HANDLED_REDRAW ||
+			event_result == V_EVENT_UNHANDLED_REDRAW)
+			*redraw = 1;
+
+		if (winptr == topwin)
+			break;
+
+		/* try this window's parent next */
+		winptr = winptr->parent;
+	}
+
+	return event_result;
+}
+
+
+
+/* push an event onto the eventstack */
+void vulture_eventstack_add(int num, int x, int y, int rtype)
+{
+	if (!vulture_eventstack)
+	{
+		vulture_eventstack = (vulture_event *)malloc(V_EVENTSTACK_SIZE * sizeof(vulture_event));
+		vulture_eventstack_top = -1;
+	}
+
+	vulture_eventstack_top++;
+	if (vulture_eventstack_top >= V_EVENTSTACK_SIZE)
+	{
+		printf("WARNING: eventstack full.\n");
+		vulture_eventstack_top = V_EVENTSTACK_SIZE - 1;
+		return;
+	}
+
+	vulture_eventstack[vulture_eventstack_top].num = num;
+	vulture_eventstack[vulture_eventstack_top].x = x;
+	vulture_eventstack[vulture_eventstack_top].y = y; 
+	vulture_eventstack[vulture_eventstack_top].rtype = rtype;
+}
+
+
+/* pop an event off the eventstack */
+vulture_event * vulture_eventstack_get(void)
+{
+	if (!vulture_eventstack)
+		return NULL;
+
+	/* stack empty? */
+	if (vulture_eventstack_top >= V_EVENTSTACK_SIZE || vulture_eventstack_top < 0)
+		return NULL;
+
+	vulture_eventstack_top--;
+
+	return &vulture_eventstack[vulture_eventstack_top+1];
+}
+
+
+void vulture_eventstack_destroy(void)
+{
+	if (vulture_eventstack)
+		free(vulture_eventstack);
+}
+
+
+void vulture_invalidate_region(int x , int y, int w, int h)
+{
+	int i;
+
+	/* look at known invalid rects */
+	for (i = 0; i < vulture_invrects_num; i++)
+	{
+		if (x > vulture_invrects[i].x &&
+			y > vulture_invrects[i].y &&
+			x + w < vulture_invrects[i].x + vulture_invrects[i].w &&
+			y + h < vulture_invrects[i].y + vulture_invrects[i].h)
+			/* new invalid region is fully inside an already known one */
+			return;
+
+		else if (x < vulture_invrects[i].x &&
+				y < vulture_invrects[i].y &&
+				x + w > vulture_invrects[i].x + vulture_invrects[i].w &&
+				y + h > vulture_invrects[i].y + vulture_invrects[i].h)
+				/* old invalid region is fully inside new one;
+				* stop searching here and reuse this entry in the array */
+			break;
+	}
+
+	if (i >= vulture_invrects_max)
+	{
+		vulture_invrects = (SDL_Rect *)realloc(vulture_invrects, (vulture_invrects_max + 16) * sizeof(SDL_Rect));
+		vulture_invrects_max += 16;
+	}
+
+	if (i == vulture_invrects_num)
+		vulture_invrects_num++;
+
+	vulture_invrects[i].x = x;
+	vulture_invrects[i].y = y;
+	vulture_invrects[i].w = w;
+	vulture_invrects[i].h = h;
+}
+
+
+/* refresh invalid regions */
+void vulture_refresh_window_region(void)
+{
+	int x1 = 9999, y1 = 9999, x2 = 0, y2 = 0;
+	int i;
+
+	/* find the bounding rectangla around all invalid rects */
+	for (i = 0; i < vulture_invrects_num; i++)
+	{
+		x1 = (x1 < vulture_invrects[i].x) ? x1 : vulture_invrects[i].x;
+		y1 = (y1 < vulture_invrects[i].y) ? y1 : vulture_invrects[i].y;
+
+		x2 = (x2 > (vulture_invrects[i].x + vulture_invrects[i].w)) ?
+			x2 : (vulture_invrects[i].x + vulture_invrects[i].w);
+		y2 = (y2 > (vulture_invrects[i].y + vulture_invrects[i].h)) ?
+			y2 : (vulture_invrects[i].y + vulture_invrects[i].h);
+	}
+
+	/* refresh the bounding rect */
+	if (x1 < x2 && y1 < y2)
+		vulture_refresh_region(x1, y1, x2, y2);
+
+	/* there are now 0 invalid rects */
+	if (vulture_invrects)
+		free(vulture_invrects);
+
+	vulture_invrects = NULL;
+	vulture_invrects_num = 0;
+	vulture_invrects_max = 0;
+}
+
+
+/* resize the vulture application window to the given width and height */
+void vulture_win_resize(int width, int height)
+{
+	window *current, *topwin;
+	SDL_Event event;
+	vulture_event dummy;
+	bool descend = true;
+	int rescaled;
+
+	/*
+	 * Reconcile the UI scale with the render scale BEFORE anything lays
+	 * itself out.
+	 *
+	 * Every relayout ultimately arrives here, and every window's
+	 * handle_resize_event() recomputes its geometry from text metrics and
+	 * from the chrome surfaces' ->w/->h - so the fonts and the artwork have
+	 * to already be at the new factor by the time we start walking the window
+	 * list.  Putting the call here rather than at the individual call sites
+	 * is deliberate: there is more than one way to change the render scale
+	 * (the F8 toggle goes through vulture_set_render_scale(), while the
+	 * Interface Options entry goes through vulture_set_screensize(), which
+	 * is also the plain window-resize path), and an unreconciled path is not
+	 * a crash - it silently renders the whole UI at 1/s apparent size, which
+	 * is exactly the bug this work exists to fix.
+	 *
+	 * vulture_ui_rescale() returns immediately when the two already agree, so
+	 * an ordinary window resize pays nothing for this.
+	 */
+	rescaled = vulture_ui_rescale();
+
+	/* Everything already on the screen was drawn at the OLD factor, and it is
+	 * not in general covered by what the new layout will draw (the status bar
+	 * and minimap change size, so they leave uncovered pixels behind).  Clear
+	 * to black and invalidate the whole surface so the walk below repaints
+	 * from scratch. */
+	if (rescaled && vulture_screen) {
+		SDL_FillRect(vulture_screen, NULL, CLR32_BLACK);
+		vulture_invalidate_region(0, 0, vulture_screen->w, vulture_screen->h);
+	}
+
+  if (levwin == NULL)
+  {
+		SDL_FillRect(vulture_screen, NULL, CLR32_BLACK);
+		vulture_invalidate_region(0,0,vulture_screen->w,vulture_screen->h);
+    vulture_refresh_window_region();
+  }
+
+	vulture_write_log(V_LOG_DEBUG, __FILE__, __LINE__, "vulture_win_resize(%d,%d) {entry}\n", width, height);
+
+  if ( !ROOTWIN ) return;
+
+	vulture_write_log(V_LOG_DEBUG, __FILE__, __LINE__, "vulture_win_resize(%d,%d) {perform}\n", width, height);
+
+	current = topwin = ROOTWIN;
+
+	event.type = SDL_WINDOWEVENT;
+	event.window.event = SDL_WINDOWEVENT_RESIZED;
+	event.window.data1 = width;
+	event.window.data2 = height;
+
+	current->event_handler(current, &dummy, &event);
+	if (rescaled)
+		current->discard_background();
+
+	/* ROOTWIN has no parent, so update its abs position directly */
+	if (!current->parent) {
+		current->abs_x = current->x;
+		current->abs_y = current->y;
+	}
+
+	do {
+		current = current->walk_winlist(&descend);
+
+		current->event_handler(current, &dummy, &event);
+
+		/* The cached backdrop was captured at the old size (and from a screen
+		 * drawn at the old factor), so it is worse than useless now: restoring
+		 * it would stamp a wrong-sized rectangle of stale pixels.  Drop it and
+		 * let update_background() re-capture. */
+		if (rescaled)
+			current->discard_background();
+
+		/* recalc absolute position */
+		if (current->v_type != V_WINTYPE_NONE && current->parent) {
+			current->abs_x = current->parent->abs_x + current->x;
+			current->abs_y = current->parent->abs_y + current->y;
+		}
+	}
+	while (current != topwin);
+
+	/* redraw everything */
+  if (levwin != NULL)
+    levwin->force_redraw();
+
+	topwin->draw_windows();
+	vulture_refresh_window_region();
+}
+
+
+#ifdef VULTURE_NETHACK
+/* show a main menu with common options when the user presses esc */
+void vulture_show_mainmenu()
+{
+	int winid, n;
+	anything any;
+	menu_item *selected;
+
+	winid = vulture_create_nhwindow(NHW_MENU);
+	vulture_start_menu(winid, MENU_BEHAVE_STANDARD);
+	
+	any.a_int = 1;
+	vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'h', 0, ATR_BOLD, NO_COLOR, "Help", MENU_ITEMFLAGS_NONE);
+	any.a_int = 2;
+	vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'O', 0, ATR_BOLD, NO_COLOR, "Options", MENU_ITEMFLAGS_NONE);
+	any.a_int = 3;
+	vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'I', 0, ATR_BOLD, NO_COLOR, "Interface options", MENU_ITEMFLAGS_NONE);
+	any.a_int = 4;
+	vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'S', 0, ATR_BOLD, NO_COLOR, "Save & Quit", MENU_ITEMFLAGS_NONE);
+	any.a_int = 5;
+	vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'Q', 0, ATR_BOLD, NO_COLOR, "Quit", MENU_ITEMFLAGS_NONE);
+
+	vulture_end_menu(winid, "Main menu");
+	n = vulture_select_menu(winid, PICK_ONE, &selected);
+	vulture_destroy_nhwindow(winid);
+
+	if (n < 1)
+		return;
+
+	switch(selected[0].item.a_int)
+	{
+		case 1: dohelp(); break;
+		case 2: doset(); break;
+		case 3: vulture_iface_opts(); break;
+		case 4: dosave(); break;
+		case 5: done2(); break;
+	}
+}
+#endif

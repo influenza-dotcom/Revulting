@@ -1,0 +1,13 @@
+/* SDL2 port of the SDL1.2 "Dark Arts" intro movie player.
+ * The vendored THEORAPLAY decoder thread converts frames straight to RGBA
+ * (SDL2 has no YUV overlays for software surfaces); each frame is wrapped in
+ * an SDL_Surface, aspect-fit onto the window's software surface (letterboxed
+ * on black) and presented through the port's own refresh path
+ * (vulture_refresh() -> SDL_UpdateWindowSurface). */
+
+#include <string.h>
+#include <stdlib.h>
+
+#include "vendor/theoraplay/theoraplay.h"
+
+static Uint32 baseticks = 0;

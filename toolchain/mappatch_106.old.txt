@@ -1,0 +1,2 @@
+	vulture_opts.play_music = 0;
+	vulture_opts.play_effects = 0;

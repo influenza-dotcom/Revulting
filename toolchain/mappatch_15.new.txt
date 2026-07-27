@@ -1,0 +1,1 @@
+            /* do no more if we're on the rogue level or in the mines, because

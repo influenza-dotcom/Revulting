@@ -1,0 +1,18 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/src/display.c	2026-07-23 22:33:51.760100000 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/src/display.c	2026-07-23 22:30:36.579076700 -0700
+@@ -1560,7 +1560,15 @@
+         return;
+     }
+ 
++#ifdef VULTURE_GRAPHICS
++    /* for vulture we must add any glyph that is passed to show_glyph to the glyph buffer
++     * otherwise jtp_print_glyph does not "see" that location.
++     * For example when a monster picks up an item the topmost glyph will be the monster,
++     * which does not change. However we need to see that the item is no longer there.*/
++    {
++#else
+     if (gbuf[y][x].glyph != glyph || iflags.use_background_glyph) {
++#endif
+         gbuf[y][x].glyph = glyph;
+         gbuf[y][x].new = 1;
+         if (gbuf_start[y] > x)

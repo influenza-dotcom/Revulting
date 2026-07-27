@@ -1,0 +1,2 @@
+		else if (!strncmp(configline, "play_effects", optend - configline))
+			vulture_opts.play_effects = atoi(param);

@@ -1,0 +1,6 @@
+	vulture_opts.play_music = 0;
+	vulture_opts.play_effects = 0;
+	/* default ON: user confs written by vulture_write_userconfig() before
+	 * this option existed have no play_intro_video line, and they must
+	 * keep playing the intro until the user turns it off */
+	vulture_opts.play_intro_video = 1;

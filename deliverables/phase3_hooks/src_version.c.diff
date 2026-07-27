@@ -1,0 +1,22 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/src/version.c	2026-07-23 22:33:51.861640800 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/src/version.c	2026-07-23 22:30:36.659077000 -0700
+@@ -255,6 +255,11 @@
+ const char *filename;
+ boolean complain;
+ {
++#ifdef __EMSCRIPTEN__
++    /* In the web build, data files are always built together with
++     * the binary, so version checks are unnecessary */
++    return TRUE;
++#else
+     if (
+ #ifdef VERSION_COMPATIBILITY
+         version_data->incarnation < VERSION_COMPATIBILITY
+@@ -281,6 +286,7 @@
+         return FALSE;
+     }
+     return TRUE;
++#endif /* !__EMSCRIPTEN__ */
+ }
+ 
+ /* this used to be based on file date and somewhat OS-dependant,

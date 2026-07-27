@@ -1,0 +1,2 @@
+     * of rooms gets the next few decorations this will distibute decorations
+     * seemingly at random but repeatably throughout the level (rooms are

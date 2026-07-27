@@ -1,0 +1,1 @@
+    /* centre the decorations in the svr.rooms, as the previous code always plces

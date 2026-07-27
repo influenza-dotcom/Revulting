@@ -1,0 +1,33 @@
+{
+  "gate": "PASS",
+  "source_tiles": 1515,
+  "target_tiles": 1082,
+  "atlas_order_tiles": 1082,
+  "placeholders": 151,
+  "atlas_sha256": "40f508388792f4f2189d944e65bc59977f442b6362160f405a770b079511b4a5",
+  "atlas_dims": [
+    280,
+    518
+  ],
+  "order_diffs": 51,
+  "provenance": {
+    "head": 752,
+    "force_placeholder": 12,
+    "head_alias": 86,
+    "full_name": 525,
+    "unmatched->placeholder": 139,
+    "slash_name": 1
+  },
+  "violations": [],
+  "meta_hashes": {
+    "5.0.0/monsters": "da534a7f2447f4195f87b7d93ef8680d8fe848e55fd9dba5769be212ab9dce13",
+    "5.0.0/objects": "990392ca9f1e0fadaeda0a200927e7498f1f53ce1cc61a43186915405eeb71ee",
+    "5.0.0/other": "683e870fb3638eae0e178e139aa3ea22da27500fe3692d78b675e0e97fe3cd13",
+    "3.6.6/monsters": "9aa96c527763a7af708ccddf2c36f2a0c50e6a3e7811346d940c24f35542c25a",
+    "3.6.6/objects": "8cbc24ae031d91261db10e95de4899407d5c360385714e70ed15ecee6a480caa",
+    "3.6.6/other": "47726e0918e3f2913a4d14dd8b2ec93ea250655f5bbc6abb172647bb426163b1",
+    "3.6.0/monsters": "9aa96c527763a7af708ccddf2c36f2a0c50e6a3e7811346d940c24f35542c25a",
+    "3.6.0/objects": "454141b0a6c81b3484f2f307427c0ca320f438fcd8d4340d78085fe4921bd0a0",
+    "3.6.0/other": "637b4c673175a70d60e9d16d9570203c43a29bc9463b840410cd7928bdca9913"
+  }
+}

@@ -1,0 +1,757 @@
+[
+ [
+  "monsters",
+  82,
+  "displacer beast,male"
+ ],
+ [
+  "monsters",
+  83,
+  "displacer beast,female"
+ ],
+ [
+  "monsters",
+  272,
+  "baby gold dragon,male"
+ ],
+ [
+  "monsters",
+  273,
+  "baby gold dragon,female"
+ ],
+ [
+  "monsters",
+  294,
+  "gold dragon,male"
+ ],
+ [
+  "monsters",
+  295,
+  "gold dragon,female"
+ ],
+ [
+  "monsters",
+  432,
+  "genetic engineer,male"
+ ],
+ [
+  "monsters",
+  433,
+  "genetic engineer,female"
+ ],
+ [
+  "monsters",
+  594,
+  "amorous demon,male"
+ ],
+ [
+  "monsters",
+  595,
+  "amorous demon,female"
+ ],
+ [
+  "monsters",
+  680,
+  "cave dweller,male"
+ ],
+ [
+  "monsters",
+  681,
+  "cave dweller,female"
+ ],
+ [
+  "objects",
+  1,
+  "strange / generic strange"
+ ],
+ [
+  "objects",
+  2,
+  "weapon / generic weapon"
+ ],
+ [
+  "objects",
+  3,
+  "armor / generic armor"
+ ],
+ [
+  "objects",
+  4,
+  "ring / generic ring"
+ ],
+ [
+  "objects",
+  5,
+  "amulet / generic amulet"
+ ],
+ [
+  "objects",
+  6,
+  "tool / generic tool"
+ ],
+ [
+  "objects",
+  7,
+  "food / generic food"
+ ],
+ [
+  "objects",
+  8,
+  "potion / generic potion"
+ ],
+ [
+  "objects",
+  9,
+  "scroll / generic scroll"
+ ],
+ [
+  "objects",
+  10,
+  "spellbook / generic spellbook"
+ ],
+ [
+  "objects",
+  11,
+  "wand / generic wand"
+ ],
+ [
+  "objects",
+  12,
+  "coin / generic coin"
+ ],
+ [
+  "objects",
+  13,
+  "gem / generic gem"
+ ],
+ [
+  "objects",
+  14,
+  "large rock / generic large rock"
+ ],
+ [
+  "objects",
+  15,
+  "iron ball / generic iron ball"
+ ],
+ [
+  "objects",
+  16,
+  "iron chain / generic iron chain"
+ ],
+ [
+  "objects",
+  17,
+  "venom / generic venom"
+ ],
+ [
+  "objects",
+  74,
+  "silver mace"
+ ],
+ [
+  "objects",
+  96,
+  "crystal helmet / helm of brilliance"
+ ],
+ [
+  "objects",
+  98,
+  "etched helmet / helm of caution"
+ ],
+ [
+  "objects",
+  102,
+  "gold dragon scale mail"
+ ],
+ [
+  "objects",
+  113,
+  "gold dragon scales"
+ ],
+ [
+  "objects",
+  153,
+  "wooden shield / shield of drain resistance"
+ ],
+ [
+  "objects",
+  154,
+  "wooden shield / shield of shock resistance"
+ ],
+ [
+  "objects",
+  212,
+  "perforated / amulet of guarding"
+ ],
+ [
+  "objects",
+  213,
+  "cubical / amulet of flying"
+ ],
+ [
+  "objects",
+  262,
+  "grappling hook"
+ ],
+ [
+  "objects",
+  271,
+  "enormous meatball"
+ ],
+ [
+  "objects",
+  408,
+  "checkered / chain lightning"
+ ],
+ [
+  "objects",
+  417,
+  "redwood / stasis"
+ ],
+ [
+  "objects",
+  481,
+  "splash of venom / splash of blinding venom"
+ ],
+ [
+  "objects",
+  482,
+  "splash of venom / splash of acid venom"
+ ],
+ [
+  "other",
+  0,
+  "stone"
+ ],
+ [
+  "other",
+  21,
+  "engraving in a room"
+ ],
+ [
+  "other",
+  24,
+  "engraving in a corridor"
+ ],
+ [
+  "other",
+  29,
+  "branch staircase up"
+ ],
+ [
+  "other",
+  30,
+  "branch staircase down"
+ ],
+ [
+  "other",
+  31,
+  "branch ladder up"
+ ],
+ [
+  "other",
+  32,
+  "branch ladder down"
+ ],
+ [
+  "other",
+  45,
+  "wall of lava"
+ ],
+ [
+  "other",
+  76,
+  "trapped door"
+ ],
+ [
+  "other",
+  77,
+  "trapped chest"
+ ],
+ [
+  "other",
+  78,
+  "missile zap 1 0"
+ ],
+ [
+  "other",
+  79,
+  "missile zap 1 1"
+ ],
+ [
+  "other",
+  80,
+  "missile zap 1 2"
+ ],
+ [
+  "other",
+  81,
+  "missile zap 1 3"
+ ],
+ [
+  "other",
+  82,
+  "fire zap 2 0"
+ ],
+ [
+  "other",
+  83,
+  "fire zap 2 1"
+ ],
+ [
+  "other",
+  84,
+  "fire zap 2 2"
+ ],
+ [
+  "other",
+  85,
+  "fire zap 2 3"
+ ],
+ [
+  "other",
+  86,
+  "frost zap 3 0"
+ ],
+ [
+  "other",
+  87,
+  "frost zap 3 1"
+ ],
+ [
+  "other",
+  88,
+  "frost zap 3 2"
+ ],
+ [
+  "other",
+  89,
+  "frost zap 3 3"
+ ],
+ [
+  "other",
+  90,
+  "sleep zap 4 0"
+ ],
+ [
+  "other",
+  91,
+  "sleep zap 4 1"
+ ],
+ [
+  "other",
+  92,
+  "sleep zap 4 2"
+ ],
+ [
+  "other",
+  93,
+  "sleep zap 4 3"
+ ],
+ [
+  "other",
+  94,
+  "death zap 5 0"
+ ],
+ [
+  "other",
+  95,
+  "death zap 5 1"
+ ],
+ [
+  "other",
+  96,
+  "death zap 5 2"
+ ],
+ [
+  "other",
+  97,
+  "death zap 5 3"
+ ],
+ [
+  "other",
+  98,
+  "lightning zap 6 0"
+ ],
+ [
+  "other",
+  99,
+  "lightning zap 6 1"
+ ],
+ [
+  "other",
+  100,
+  "lightning zap 6 2"
+ ],
+ [
+  "other",
+  101,
+  "lightning zap 6 3"
+ ],
+ [
+  "other",
+  102,
+  "poison gas zap 7 0"
+ ],
+ [
+  "other",
+  103,
+  "poison gas zap 7 1"
+ ],
+ [
+  "other",
+  104,
+  "poison gas zap 7 2"
+ ],
+ [
+  "other",
+  105,
+  "poison gas zap 7 3"
+ ],
+ [
+  "other",
+  106,
+  "acid zap 8 0"
+ ],
+ [
+  "other",
+  107,
+  "acid zap 8 1"
+ ],
+ [
+  "other",
+  108,
+  "acid zap 8 2"
+ ],
+ [
+  "other",
+  109,
+  "acid zap 8 3"
+ ],
+ [
+  "other",
+  128,
+  "explosion dark top left"
+ ],
+ [
+  "other",
+  129,
+  "explosion dark top center"
+ ],
+ [
+  "other",
+  130,
+  "explosion dark top right"
+ ],
+ [
+  "other",
+  131,
+  "explosion dark middle left"
+ ],
+ [
+  "other",
+  132,
+  "explosion dark middle center"
+ ],
+ [
+  "other",
+  133,
+  "explosion dark middle right"
+ ],
+ [
+  "other",
+  134,
+  "explosion dark bottom left"
+ ],
+ [
+  "other",
+  135,
+  "explosion dark bottom center"
+ ],
+ [
+  "other",
+  136,
+  "explosion dark bottom right"
+ ],
+ [
+  "other",
+  137,
+  "explosion noxious top left"
+ ],
+ [
+  "other",
+  138,
+  "explosion noxious top center"
+ ],
+ [
+  "other",
+  139,
+  "explosion noxious top right"
+ ],
+ [
+  "other",
+  140,
+  "explosion noxious middle left"
+ ],
+ [
+  "other",
+  141,
+  "explosion noxious middle center"
+ ],
+ [
+  "other",
+  142,
+  "explosion noxious middle right"
+ ],
+ [
+  "other",
+  143,
+  "explosion noxious bottom left"
+ ],
+ [
+  "other",
+  144,
+  "explosion noxious bottom center"
+ ],
+ [
+  "other",
+  145,
+  "explosion noxious bottom right"
+ ],
+ [
+  "other",
+  146,
+  "explosion muddy top left"
+ ],
+ [
+  "other",
+  147,
+  "explosion muddy top center"
+ ],
+ [
+  "other",
+  148,
+  "explosion muddy top right"
+ ],
+ [
+  "other",
+  149,
+  "explosion muddy middle left"
+ ],
+ [
+  "other",
+  150,
+  "explosion muddy middle center"
+ ],
+ [
+  "other",
+  151,
+  "explosion muddy middle right"
+ ],
+ [
+  "other",
+  152,
+  "explosion muddy bottom left"
+ ],
+ [
+  "other",
+  153,
+  "explosion muddy bottom center"
+ ],
+ [
+  "other",
+  154,
+  "explosion muddy bottom right"
+ ],
+ [
+  "other",
+  155,
+  "explosion wet top left"
+ ],
+ [
+  "other",
+  156,
+  "explosion wet top center"
+ ],
+ [
+  "other",
+  157,
+  "explosion wet top right"
+ ],
+ [
+  "other",
+  158,
+  "explosion wet middle left"
+ ],
+ [
+  "other",
+  159,
+  "explosion wet middle center"
+ ],
+ [
+  "other",
+  160,
+  "explosion wet middle right"
+ ],
+ [
+  "other",
+  161,
+  "explosion wet bottom left"
+ ],
+ [
+  "other",
+  162,
+  "explosion wet bottom center"
+ ],
+ [
+  "other",
+  163,
+  "explosion wet bottom right"
+ ],
+ [
+  "other",
+  164,
+  "explosion magical top left"
+ ],
+ [
+  "other",
+  165,
+  "explosion magical top center"
+ ],
+ [
+  "other",
+  166,
+  "explosion magical top right"
+ ],
+ [
+  "other",
+  167,
+  "explosion magical middle left"
+ ],
+ [
+  "other",
+  168,
+  "explosion magical middle center"
+ ],
+ [
+  "other",
+  169,
+  "explosion magical middle right"
+ ],
+ [
+  "other",
+  170,
+  "explosion magical bottom left"
+ ],
+ [
+  "other",
+  171,
+  "explosion magical bottom center"
+ ],
+ [
+  "other",
+  172,
+  "explosion magical bottom right"
+ ],
+ [
+  "other",
+  173,
+  "explosion fiery top left"
+ ],
+ [
+  "other",
+  174,
+  "explosion fiery top center"
+ ],
+ [
+  "other",
+  175,
+  "explosion fiery top right"
+ ],
+ [
+  "other",
+  176,
+  "explosion fiery middle left"
+ ],
+ [
+  "other",
+  177,
+  "explosion fiery middle center"
+ ],
+ [
+  "other",
+  178,
+  "explosion fiery middle right"
+ ],
+ [
+  "other",
+  179,
+  "explosion fiery bottom left"
+ ],
+ [
+  "other",
+  180,
+  "explosion fiery bottom center"
+ ],
+ [
+  "other",
+  181,
+  "explosion fiery bottom right"
+ ],
+ [
+  "other",
+  182,
+  "explosion frosty top left"
+ ],
+ [
+  "other",
+  183,
+  "explosion frosty top center"
+ ],
+ [
+  "other",
+  184,
+  "explosion frosty top right"
+ ],
+ [
+  "other",
+  185,
+  "explosion frosty middle left"
+ ],
+ [
+  "other",
+  186,
+  "explosion frosty middle center"
+ ],
+ [
+  "other",
+  187,
+  "explosion frosty middle right"
+ ],
+ [
+  "other",
+  188,
+  "explosion frosty bottom left"
+ ],
+ [
+  "other",
+  189,
+  "explosion frosty bottom center"
+ ],
+ [
+  "other",
+  190,
+  "explosion frosty bottom right"
+ ],
+ [
+  "other",
+  197,
+  "unexplored"
+ ],
+ [
+  "other",
+  198,
+  "nothing"
+ ]
+]

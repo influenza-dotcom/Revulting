@@ -1,0 +1,2 @@
+     * svn.nroom. (svn.nroom is the global containing the number of svr.rooms on the
+     * svl.level) */

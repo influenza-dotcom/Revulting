@@ -1,0 +1,15 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/include/tradstdc.h	2026-07-23 22:33:51.732099800 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/include/tradstdc.h	2026-07-23 22:30:36.553076000 -0700
+@@ -431,10 +431,12 @@
+ #define NORETURN __attribute__((noreturn))
+ /* disable gcc's __attribute__((__warn_unused_result__)) since explicitly
+    discarding the result by casting to (void) is not accepted as a 'use' */
++#ifndef __has_attribute
+ #define __warn_unused_result__ /*empty*/
+ #define warn_unused_result /*empty*/
+ #endif
+ #endif
++#endif
+ 
+ #ifndef PRINTF_F
+ #define PRINTF_F(f, v)

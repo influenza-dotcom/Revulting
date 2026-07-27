@@ -1,0 +1,2 @@
+    /* level title */
+    textwin *txt = new textwin(this, "");

@@ -1,0 +1,22 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/src/windows.c	2026-07-23 22:33:51.866641600 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/src/windows.c	2026-07-23 22:30:36.663075900 -0700
+@@ -57,6 +57,9 @@
+ extern void FDECL(trace_procs_init, (int));
+ extern void *FDECL(trace_procs_chain, (int, int, void *, void *, void *));
+ #endif
++#ifdef VULTURE_GRAPHICS
++# include "vulture_main.h"
++#endif
+ 
+ STATIC_DCL void FDECL(def_raw_print, (const char *s));
+ STATIC_DCL void NDECL(def_wait_synch);
+@@ -125,6 +128,9 @@
+ #ifdef GNOME_GRAPHICS
+     { &Gnome_procs, 0 CHAINR(0) },
+ #endif
++#ifdef VULTURE_GRAPHICS
++    { &vulture_procs, win_vulture_init CHAINR(0) },
++#endif
+ #ifdef MSWIN_GRAPHICS
+     { &mswin_procs, 0 CHAINR(0) },
+ #endif

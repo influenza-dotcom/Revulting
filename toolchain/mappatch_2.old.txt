@@ -1,0 +1,6 @@
+    /* Draw the svl.level name */
+#ifdef VULTURE_SLASHEM
+    describe_level(buffer, TRUE);
+#else
+    if (!describe_level(buffer, 0))
+        sprintf(buffer, "%s, svl.level %d ", svd.dungeons[u.uz.dnum].dname,

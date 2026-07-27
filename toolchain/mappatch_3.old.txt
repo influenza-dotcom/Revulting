@@ -1,0 +1,7 @@
+            if (map_glyph != NO_GLYPH
+                && (map_glyph != cmap_to_glyph(S_stone)
+                    || (svl.level.locations[j][i].seenv && is_dark))) {
+                vulture_put_img(map_x + SYMBOL_WIDTH * j,
+                                map_y + SYMBOL_HEIGHT * i,
+                                map_symbols[vulture_patha_cell(map_glyph)]);
+            }

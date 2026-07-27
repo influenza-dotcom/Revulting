@@ -1,0 +1,6 @@
+	/* the intro movie is optional (play_intro_video in vulture.conf) and
+	 * skippable with any key or mouse click; the SDL2 implementation is
+	 * safe to call when movie/darkarts.ogv is missing. This build is
+	 * Windows x64 only, so the old 32-bit-Linux #if guard is gone. */
+	if (vulture_opts.play_intro_video)
+		vulture_show_darkarts_intro();

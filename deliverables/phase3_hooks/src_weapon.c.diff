@@ -1,0 +1,28 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/src/weapon.c	2026-07-23 22:33:51.863641200 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/src/weapon.c	2026-07-23 22:30:36.660078000 -0700
+@@ -55,6 +55,12 @@
+     "bare handed combat", "martial arts"
+ };
+ 
++#ifdef VULTURE_GRAPHICS
++boolean FDECL(can_advance, (int, BOOLEAN_P));
++#else
++STATIC_DCL boolean FDECL(can_advance, (int, BOOLEAN_P));
++#endif
++
+ #define P_NAME(type)                                    \
+     ((skill_names_indices[type] > 0)                    \
+          ? OBJ_NAME(objects[skill_names_indices[type]]) \
+@@ -1077,7 +1083,12 @@
+ }
+ 
+ /* return true if this skill can be advanced */
++/*ARGSUSED*/
++#ifdef VULTURE_GRAPHICS
+ boolean
++#else
++STATIC_OVL boolean
++#endif
+ can_advance(skill, speedy)
+ int skill;
+ boolean speedy;

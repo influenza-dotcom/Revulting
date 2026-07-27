@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# What this repo is for: the NetHack 5.0.0 -> Vulture SDL2 port and the tooling
+# that builds it. Everything ignored below is either (a) somebody else's git
+# repo, (b) regenerable output, or (c) a large binary that adds no history.
+#
+# Note: vulture5-win/.gitignore is upstream NetHack's and still applies on top
+# of this file - it already covers *.o, *.a, tags, editor backups and so on.
+# ---------------------------------------------------------------------------
+
+# (a) Nested git repos - upstream sources and the pinned 3.6.6 baseline.
+#     These are checkouts of other people's history; tracking them here would
+#     embed them as broken pseudo-submodules.
+/refs/
+/vulture-baseline/
+/win-build/
+
+# (b) Regenerable output.
+#     VultureNetHack/ is the shipped package: toolchain/finalize_exe.sh builds
+#     the exe into it, and its config/ + tiles/ are deployed copies of
+#     vulture5-win/win/vulture/gamedata/, which IS tracked. Nothing original
+#     lives here - but see the note in IMPLEMENTATION_LOG.md, because the two
+#     tile trees are currently maintained in parallel by hand.
+/VultureNetHack/
+/vulture5-win/binary/
+/vulture5-win/win/vulture/build_nethack_3_6_0/
+
+# (c) Large binaries with no reason to be in history.
+/toolchain/msys2-installer.exe
+/hearse/
+/shots/
+
+# Build artefacts not already covered by the upstream ignore file.
+*.exe
+*.dll
+*.res
+*.stackdump
+/vulture5-win/src/GNUmakefile
+
+# Local runtime state that must never be committed - these carry a real
+# player's name, email and save data.
+*.nethackrc
+vulture.conf
+hearse.ini
+livelog
+xlogfile
+logfile
+record
+bon[A-Z]*
+*.bak
+*.prezoom

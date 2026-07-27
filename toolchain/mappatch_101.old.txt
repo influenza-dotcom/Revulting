@@ -1,0 +1,3 @@
+/* XXX Remove Video
+
+static Uint32 baseticks = 0;

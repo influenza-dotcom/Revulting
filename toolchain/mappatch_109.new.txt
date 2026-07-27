@@ -1,0 +1,13 @@
+show_helpbar=1
+show_actionbar=1
+show_minimap=1
+
+
+% ------------------
+% Intro movie
+% ------------------
+% Play the "Dark Arts" intro movie when the game starts.
+% Any key press or mouse click skips the movie.
+% 0 = skip; 1 = play
+%
+play_intro_video=1

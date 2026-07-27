@@ -1,0 +1,2 @@
+        /* traps are not seen magically (I think?), so this only triggers when
+           loading a level */

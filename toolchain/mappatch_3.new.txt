@@ -1,0 +1,17 @@
+            /* 5.0.0: never-seen squares arrive as GLYPH_UNEXPLORED (and
+             * GLYPH_NOTHING), no longer as the stone cmap glyph, so skip
+             * them explicitly - blank parchment, as in 3.6.6. Seen-but-dark
+             * stone is drawn with the darkroom symbol because 5.0.0's
+             * "stone" tile has no named counterpart in the 3.6.6 atlas
+             * (its remap entry is the placeholder). */
+            if (map_glyph != NO_GLYPH
+                && map_glyph != GLYPH_UNEXPLORED
+                && map_glyph != GLYPH_NOTHING
+                && (map_glyph != cmap_to_glyph(S_stone)
+                    || (svl.level.locations[j][i].seenv && is_dark))) {
+                int cell_glyph = (map_glyph == cmap_to_glyph(S_stone))
+                                     ? cmap_to_glyph(S_darkroom) : map_glyph;
+                vulture_put_img(map_x + SYMBOL_WIDTH * j,
+                                map_y + SYMBOL_HEIGHT * i,
+                                map_symbols[vulture_patha_cell(cell_glyph)]);
+            }

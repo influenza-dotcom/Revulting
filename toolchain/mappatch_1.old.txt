@@ -1,0 +1,2 @@
+$(OTM)/tilemap.o: $(WSHR)/tilemap.c $(NHLUAH) | $(OTM)
+	$(cc) $(CFLAGSU) $< -o$@

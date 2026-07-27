@@ -1,0 +1,51 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/src/end.c	2026-07-23 22:33:51.775102100 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/src/end.c	2026-07-23 22:30:36.591076400 -0700
+@@ -67,6 +67,20 @@
+ 
+ #if defined(__BEOS__) || defined(MICRO) || defined(OS2)
+ extern void FDECL(nethack_exit, (int));
++#elif defined(__EMSCRIPTEN__)
++#include <emscripten.h>
++static void nethack_exit(int status) {
++    emscripten_run_script(
++        "var c = document.getElementById('canvas');"
++        "if (c) c.style.display = 'none';"
++        "document.querySelectorAll('.overlay-btn').forEach(function(b){b.style.display='none';});"
++        "var d = document.createElement('div');"
++        "d.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;justify-content:center;align-items:center;background:#000;color:#ccc;font-family:sans-serif;';"
++        "d.innerHTML = '<h2>Game Over</h2><br><button onclick=\"location.reload()\" style=\"font-size:18px;padding:10px 24px;cursor:pointer;\">Play Again</button>';"
++        "document.body.appendChild(d);"
++    );
++    emscripten_force_exit(status);
++}
+ #else
+ #define nethack_exit exit
+ #endif
+@@ -254,7 +268,7 @@
+ static boolean
+ NH_panictrace_gdb()
+ {
+-#ifdef PANICTRACE_GDB
++#if defined(PANICTRACE_GDB) && !defined(__EMSCRIPTEN__)
+     /* A (more) generic method to get a stack trace - invoke
+      * gdb on ourself. */
+     const char *gdbpath = GDBVAR;
+@@ -282,7 +296,7 @@
+     }
+ #else
+     return FALSE;
+-#endif /* !PANICTRACE_GDB */
++#endif /* !PANICTRACE_GDB || __EMSCRIPTEN__ */
+ }
+ #endif /* PANICTRACE */
+ 
+@@ -1448,7 +1462,9 @@
+         if (!done_stopprint || flags.tombstone)
+             endwin = create_nhwindow(NHW_TEXT);
+ 
++#ifndef VULTURE_GRAPHICS
+         if (how < GENOCIDED && flags.tombstone && endwin != WIN_ERR)
++#endif
+             outrip(endwin, how, endtime);
+     } else
+         done_stopprint = 1; /* just avoid any more output */

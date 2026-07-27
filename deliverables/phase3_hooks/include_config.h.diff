@@ -1,0 +1,87 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/include/config.h	2026-07-23 22:33:51.686100200 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/include/config.h	2026-07-23 22:30:36.513076400 -0700
+@@ -15,6 +15,11 @@
+  *              MacOSX uses the UNIX configuration, not the old MAC one.
+  */
+ 
++#ifdef __EMSCRIPTEN__
++/* Emscripten/WebAssembly build - mark for special handling */
++# define EMSCRIPTEN_BUILD
++#endif
++
+ #define UNIX /* delete if no fork(), exec() available */
+ 
+ /* #define MSDOS */ /* in case it's not auto-detected */
+@@ -42,7 +47,7 @@
+  * Define all of those you want supported in your binary.
+  * Some combinations make no sense.  See the installation document.
+  */
+-#if !defined(NOTTYGRAPHICS)
++#if !defined(NOTTYGRAPHICS) && !defined(__EMSCRIPTEN__)
+ #define TTY_GRAPHICS /* good old tty based graphics */
+ #endif
+ /* #define CURSES_GRAPHICS *//* Curses interface - Karl Garrison*/
+@@ -51,11 +56,15 @@
+ /* #define GNOME_GRAPHICS */ /* Gnome interface */
+ /* #define MSWIN_GRAPHICS */ /* Windows NT, CE, Graphics */
+ 
++#define VULTURE_GRAPHICS /* Vulture's Eye isometric graphics interface */
++#undef TTY_GRAPHICS
++
+ /*
+  * Define the default window system.  This should be one that is compiled
+  * into your system (see defines above).  Known window systems are:
+  *
+  *      tty, X11, mac, amii, BeOS, Qt, Gem, Gnome
++ *	    vulture (Vulture's Eye)
+  */
+ 
+ /* MAC also means MAC windows */
+@@ -100,6 +109,12 @@
+ #endif
+ #endif
+ 
++#ifdef VULTURE_GRAPHICS
++# ifndef DEFAULT_WINDOW_SYS
++#  define DEFAULT_WINDOW_SYS "vulture"
++# endif
++#endif /* VULTURE_GRAPHICS */
++
+ #ifdef GNOME_GRAPHICS
+ #define USE_XPM           /* Use XPM format for images (required) */
+ #define GRAPHIC_TOMBSTONE /* Use graphical tombstone (rip.ppm) */
+@@ -263,8 +278,8 @@
+ 
+ #if defined(UNIX) && !defined(ZLIB_COMP) && !defined(COMPRESS)
+ /* path and file name extension for compression program */
+-#define COMPRESS "/usr/bin/compress" /* Lempel-Ziv compression */
+-#define COMPRESS_EXTENSION ".Z"      /* compress's extension */
++/* #define COMPRESS "/usr/bin/compress" */ /* Lempel-Ziv compression */
++/* #define COMPRESS_EXTENSION ".Z" */      /* compress's extension */
+ /* An example of one alternative you might want to use: */
+ /* #define COMPRESS "/usr/local/bin/gzip" */ /* FSF gzip compression */
+ /* #define COMPRESS_EXTENSION ".gz" */       /* normal gzip extension */
+@@ -311,7 +326,7 @@
+  *      a tar-like file, thus making a neater installation.  See *conf.h
+  *      for detailed configuration.
+  */
+-/* #define DLB */ /* not supported on all platforms */
++#define DLB  /* not supported on all platforms */
+ 
+ /*
+  *      Defining REPRODUCIBLE_BUILD causes 'util/makedefs -v' to construct
+@@ -351,9 +366,11 @@
+  * If you define HACKDIR, then this will be the default playground;
+  * otherwise it will be the current directory.
+  */
+-#ifndef HACKDIR
+-#define HACKDIR "/usr/games/lib/nethackdir"
+-#endif
++# ifdef __EMSCRIPTEN__
++#  define HACKDIR "/nhdata"
++# elif !defined(HACKDIR)
++#  define HACKDIR "./"
++# endif
+ 
+ /*
+  * Some system administrators are stupid enough to make Hack suid root

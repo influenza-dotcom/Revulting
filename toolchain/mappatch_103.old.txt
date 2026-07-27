@@ -1,0 +1,6 @@
+/* XXX Remove Video
+#if defined(_WIN32) || defined(__APPLE__) || defined(__x86_64) || defined(__amd64)
+  // Don't show intro on Linux 32bit
+	vulture_show_darkarts_intro();
+#endif
+*/

@@ -1,0 +1,2 @@
+            /* IS_FURNITURE() may be true while the cmap is S_stone for dark
+             * rooms  */

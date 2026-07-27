@@ -1,0 +1,257 @@
+[
+ [
+  851,
+  "wall",
+  "vertical wall"
+ ],
+ [
+  852,
+  "wall",
+  "horizontal wall"
+ ],
+ [
+  853,
+  "wall",
+  "top left corner wall"
+ ],
+ [
+  854,
+  "wall",
+  "top right corner wall"
+ ],
+ [
+  855,
+  "wall",
+  "bottom left corner wall"
+ ],
+ [
+  856,
+  "wall",
+  "bottom right corner wall"
+ ],
+ [
+  857,
+  "wall",
+  "cross wall"
+ ],
+ [
+  858,
+  "wall",
+  "tuwall"
+ ],
+ [
+  859,
+  "wall",
+  "tdwall"
+ ],
+ [
+  860,
+  "wall",
+  "tlwall"
+ ],
+ [
+  861,
+  "wall",
+  "trwall"
+ ],
+ [
+  862,
+  "doorway",
+  "no door"
+ ],
+ [
+  863,
+  "open door",
+  "vertical open door"
+ ],
+ [
+  864,
+  "open door",
+  "horizontal open door"
+ ],
+ [
+  865,
+  "closed door",
+  "vertical closed door"
+ ],
+ [
+  866,
+  "closed door",
+  "horizontal closed door"
+ ],
+ [
+  879,
+  "opulent throne",
+  "throne"
+ ],
+ [
+  882,
+  "water",
+  "pool"
+ ],
+ [
+  885,
+  "lowered drawbridge",
+  "vertical open drawbridge"
+ ],
+ [
+  886,
+  "lowered drawbridge",
+  "horizontal open drawbridge"
+ ],
+ [
+  887,
+  "raised drawbridge",
+  "vertical closed drawbridge"
+ ],
+ [
+  888,
+  "raised drawbridge",
+  "horizontal closed drawbridge"
+ ],
+ [
+  915,
+  "wall",
+  "vertical beam"
+ ],
+ [
+  916,
+  "wall",
+  "horizontal beam"
+ ],
+ [
+  917,
+  "wall",
+  "left slant beam"
+ ],
+ [
+  918,
+  "wall",
+  "right slant beam"
+ ],
+ [
+  919,
+  "cmap 69",
+  "dig beam"
+ ],
+ [
+  920,
+  "cmap 70",
+  "flash beam"
+ ],
+ [
+  921,
+  "cmap 71",
+  "boom left"
+ ],
+ [
+  922,
+  "cmap 72",
+  "boom right"
+ ],
+ [
+  923,
+  "cmap 73",
+  "shield1"
+ ],
+ [
+  924,
+  "cmap 74",
+  "shield2"
+ ],
+ [
+  925,
+  "cmap 75",
+  "shield3"
+ ],
+ [
+  926,
+  "cmap 76",
+  "shield4"
+ ],
+ [
+  929,
+  "cmap 79",
+  "swallow top left"
+ ],
+ [
+  930,
+  "cmap 80",
+  "swallow top center"
+ ],
+ [
+  931,
+  "cmap 81",
+  "swallow top right"
+ ],
+ [
+  932,
+  "cmap 82",
+  "swallow middle left"
+ ],
+ [
+  933,
+  "cmap 83",
+  "swallow middle right"
+ ],
+ [
+  934,
+  "cmap 84",
+  "swallow bottom left "
+ ],
+ [
+  935,
+  "cmap 85",
+  "swallow bottom center"
+ ],
+ [
+  936,
+  "cmap 86",
+  "swallow bottom right"
+ ],
+ [
+  937,
+  "explosion dark 0",
+  "explosion top left"
+ ],
+ [
+  938,
+  "explosion dark 1",
+  "explosion top centre"
+ ],
+ [
+  939,
+  "explosion dark 2",
+  "explosion top right"
+ ],
+ [
+  940,
+  "explosion dark 3",
+  "explosion middle left"
+ ],
+ [
+  941,
+  "explosion dark 4",
+  "explosion middle center"
+ ],
+ [
+  942,
+  "explosion dark 5",
+  "explosion middle right"
+ ],
+ [
+  943,
+  "explosion dark 6",
+  "explosion bottom left"
+ ],
+ [
+  944,
+  "explosion dark 7",
+  "explosion bottom center"
+ ],
+ [
+  945,
+  "explosion dark 8",
+  "explosion bottom right"
+ ]
+]

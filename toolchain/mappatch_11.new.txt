@@ -1,0 +1,1 @@
+        return; /* the level doesn't have distinct rooms, so do nothing */

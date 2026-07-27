@@ -1,0 +1,4 @@
+	int recenter;
+	int play_music;
+	int play_effects;
+	int play_intro_video;

@@ -1,0 +1,52 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/include/global.h	2026-07-23 22:33:51.698100600 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/include/global.h	2026-07-23 22:30:36.522076800 -0700
+@@ -168,6 +168,10 @@
+ #endif
+ #endif
+ 
++#ifdef VULTURE_GRAPHICS
++# include "vulture_conf.h"
++#endif
++
+ /* Displayable name of this port; don't redefine if defined in *conf.h */
+ #ifndef PORT_ID
+ #ifdef AMIGA
+@@ -201,10 +205,16 @@
+ #ifdef TOS
+ #define PORT_ID "ST"
+ #endif
++#ifdef VULTURE_GRAPHICS
++# include "vulture_version.h"
++#endif
+ /* Check again in case something more specific has been defined above. */
+ #ifndef PORT_ID
+ #ifdef UNIX
+ #define PORT_ID "Unix"
++# ifdef VULTURE_GRAPHICS
++#  define PORT_SUB_ID  VULTURE_SUB_ID
++# endif
+ #endif
+ #endif
+ #ifdef VMS
+@@ -212,6 +222,9 @@
+ #endif
+ #ifdef WIN32
+ #define PORT_ID "Windows"
++# ifdef VULTURE_GRAPHICS
++#  define PORT_SUB_ID  VULTURE_SUB_ID
++# endif
+ #endif
+ #endif
+ 
+@@ -253,6 +266,11 @@
+ #define USE_TILES
+ #endif
+ #endif
++#if defined(VULTURE_GRAPHICS)
++# ifndef USE_TILES
++#  define USE_TILES
++# endif
++#endif
+ 
+ #if defined(UNIX) || defined(VMS) || defined(__EMX__) || defined(WIN32)
+ #define HANGUPHANDLING

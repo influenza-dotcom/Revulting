@@ -1,0 +1,17 @@
+        if (select_how == PICK_NONE)
+            new textwin(scrollarea, newcaption);
+        else if (newcaption.empty()) {
+            new textwin(scrollarea, "--------------");
+        }
+        else if (!i->identifier)
+            /* NetHack contract: rows added with a zero identifier
+             * (cg.zeroany) are display-only text -- headings, legends,
+             * non-selectable entries like #enhance's "can't advance"
+             * skills.  Render them as plain text so they can never be
+             * clicked or returned; the inventory window already does
+             * the equivalent via objheaderwin. */
+            new textwin(scrollarea, newcaption);
+        else
+            new optionwin(scrollarea, &(*i), newcaption, i->accelerator,
+                          i->group_accelerator, i->glyph, i->preselected,
+                          select_how == PICK_ANY);

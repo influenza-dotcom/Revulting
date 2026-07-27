@@ -1,0 +1,312 @@
+/* free any audio packets still sitting in the playback queue.
+ * Only call this after SDL_CloseAudio(): the callback is stopped by then,
+ * so the queue can be walked without holding the audio lock. */
+static void vulture_show_darkarts_intro_drain_queue(void)
+{
+    volatile AudioQueue *item = audio_queue;
+    while (item)
+    {
+        volatile AudioQueue *next = item->next;
+        THEORAPLAY_freeAudio(item->audio);
+        free((void *) item);
+        item = next;
+    }
+    audio_queue = NULL;
+    audio_queue_tail = NULL;
+}
+
+void vulture_show_darkarts_intro(void)
+{
+  THEORAPLAY_Decoder *decoder = NULL;
+  const THEORAPLAY_VideoFrame *video = NULL;
+  const THEORAPLAY_AudioPacket *audio = NULL;
+
+  SDL_Event event;
+  SDL_AudioSpec spec;
+
+  Uint32 framems = 0;
+  int has_audio = 0;
+  int audio_opened = 0;
+
+  std::string fname;
+  int quit = 0;
+
+  fname = vulture_make_filename(V_MOVIE_DIRECTORY, "", "darkarts.ogv");
+
+  decoder = THEORAPLAY_startDecodeFile(fname.c_str(), 100, THEORAPLAY_VIDFMT_RGBA);
+  if (!decoder)
+  {
+      /* missing or unreadable movie file: log it and carry on with init */
+      fprintf(stderr, "Failed to start decoding '%s'!\n", fname.c_str());
+      return;
+  }
+
+  /* wait for the decoder to examine the streams. Unlike the SDL1 version,
+     never spin forever on a broken file, and stay skippable while waiting. */
+  while (!quit && THEORAPLAY_isDecoding(decoder) &&
+         !THEORAPLAY_isInitialized(decoder))
+  {
+      while (SDL_PollEvent(&event))
+          if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN ||
+              event.type == SDL_MOUSEBUTTONDOWN)
+              quit = 1;
+      SDL_Delay(10);
+  }
+
+  has_audio = THEORAPLAY_hasAudioStream(decoder);
+
+  /* wait for the first video frame (and the first audio packet, if the
+     movie declares an audio stream). BOUNDED: a corrupt file can declare
+     a Vorbis stream yet never produce a packet -- once video is available,
+     give up on audio after ~2 seconds instead of spinning forever. */
+  {
+      const Uint32 waitstart = SDL_GetTicks();
+
+      while (!quit && THEORAPLAY_isDecoding(decoder) &&
+             (!video || (has_audio && !audio)))
+      {
+          if (has_audio && !audio)
+          {
+              audio = THEORAPLAY_getAudio(decoder);
+              if (!audio && video && (SDL_GetTicks() - waitstart) > 2000)
+                  has_audio = 0;  /* declared but silent: play without audio */
+          }
+          if (!video)
+              video = THEORAPLAY_getVideo(decoder);
+
+          while (SDL_PollEvent(&event))
+              if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN ||
+                  event.type == SDL_MOUSEBUTTONDOWN)
+                  quit = 1;
+          SDL_Delay(10);
+      }
+  }
+
+  /* if the wait ended (decoder finished/failed) with the declared audio
+     stream never yielding a packet, demote to silent playback so the
+     audio-open code below can never dereference a NULL packet */
+  if (has_audio && !audio)
+      has_audio = 0;
+
+  if (quit || !video || THEORAPLAY_decodingError(decoder))
+  {
+      if (!quit)
+          fprintf(stderr, "Could not decode '%s'!\n", fname.c_str());
+      if (audio)
+          THEORAPLAY_freeAudio(audio);
+      if (video)
+          THEORAPLAY_freeVideo(video);
+      THEORAPLAY_stopDecode(decoder);
+      if (vulture_screen)
+      {
+          SDL_FillRect(vulture_screen, NULL, SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+          vulture_refresh();
+      }
+      return;
+  }
+
+  /* nominal frame duration, used by the catch-up frame dropper below.
+     (the SDL1 version declared framems but never assigned it, leaving its
+     frame dropper dead; this restores the upstream sdlplayer behavior) */
+  framems = (video->fps == 0.0) ? 0 : ((Uint32) (1000.0 / video->fps));
+
+  if (has_audio)
+  {
+      memset(&spec, '\0', sizeof (SDL_AudioSpec));
+      spec.freq = audio->freq;
+      spec.format = AUDIO_S16SYS;
+      spec.channels = audio->channels;
+      spec.samples = 2048;
+      spec.callback = audio_callback;
+
+      /* vulture_enter_graphics_mode() starts only VIDEO|TIMER and
+         vulture_init_sound() (SDL2_mixer) runs after we return, so bring
+         the audio subsystem up ourselves. SDL refcounts subsystem inits,
+         so leaving it up for the mixer is harmless. The legacy 1.2-style
+         SDL_OpenAudio() API still exists in SDL2 and is sufficient here,
+         but the device MUST be closed again before this function returns. */
+      if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0 ||
+          SDL_OpenAudio(&spec, NULL) != 0)
+      {
+          fprintf(stderr, "Audio Init Failed: %s\n", SDL_GetError());
+          /* a missing audio device is no reason to drop the movie: play silent */
+          has_audio = 0;
+          THEORAPLAY_freeAudio(audio);
+          audio = NULL;
+      }
+      else
+          audio_opened = 1;
+  }
+
+  if (audio_opened)
+  {
+      while (audio)
+      {
+          vulture_show_darkarts_intro_queue_audio(audio);
+          audio = THEORAPLAY_getAudio(decoder);
+      }
+      SDL_PauseAudio(0);
+  }
+
+  SDL_FillRect(vulture_screen, NULL, SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+  vulture_refresh();
+
+  SDL_Delay(100); // give some cpu
+
+  baseticks = SDL_GetTicks();
+
+  while (!quit && THEORAPLAY_isDecoding(decoder))
+  {
+      const Uint32 now = SDL_GetTicks() - baseticks;
+
+      if (!video)
+          video = THEORAPLAY_getVideo(decoder);
+
+      // Play video frames when it's time.
+      if (video && (video->playms <= now))
+      {
+          if ( framems && ((now - video->playms) >= framems) )
+          {
+              // Skip frames to catch up, but keep track of the last one
+              //  in case we catch up to a series of dupe frames, which
+              //  means we'd have to draw that final frame and then wait for
+              //  more.
+              const THEORAPLAY_VideoFrame *last = video;
+              while ((video = THEORAPLAY_getVideo(decoder)) != NULL)
+              {
+                  THEORAPLAY_freeVideo(last);
+                  last = video;
+                  if ((now - video->playms) < framems)
+                      break;
+              } // while
+
+              if (!video)
+                  video = last;
+          } // if
+
+          if (!video)  // do nothing; we're far behind and out of options.
+          {
+              static int warned = 0;
+              if (!warned)
+              {
+                  warned = 1;
+                  fprintf(stderr, "WARNING: Playback can't keep up!\n");
+              } // if
+          } // if
+          else
+          {
+              /* THEORAPLAY's RGBA converter emits bytes in R,G,B,A memory
+                 order (theoraplay_cvtrgb.h), i.e. SDL_PIXELFORMAT_RGBA32 */
+              SDL_Surface *frame = SDL_CreateRGBSurfaceWithFormatFrom(
+                              (void *) video->pixels,
+                              video->width, video->height, 32,
+                              video->width * 4, SDL_PIXELFORMAT_RGBA32);
+              if (frame)
+              {
+                  /* aspect-fit into the window, letterboxed on black */
+                  SDL_Rect dstrect;
+                  int dstw = vulture_screen->w;
+                  int dsth = (dstw * (int) video->height) / (int) video->width;
+                  if (dsth > vulture_screen->h)
+                  {
+                      dsth = vulture_screen->h;
+                      dstw = (dsth * (int) video->width) / (int) video->height;
+                  }
+                  dstrect.x = (vulture_screen->w - dstw) / 2;
+                  dstrect.y = (vulture_screen->h - dsth) / 2;
+                  dstrect.w = dstw;
+                  dstrect.h = dsth;
+
+                  /* blend + scale mangles alpha in SDL2 (see the note in
+                     vulture_tile.cpp); the movie is opaque, so blit raw */
+                  SDL_SetSurfaceBlendMode(frame, SDL_BLENDMODE_NONE);
+                  SDL_BlitScaled(frame, NULL, vulture_screen, &dstrect);
+                  SDL_FreeSurface(frame);
+
+                  vulture_refresh();
+              }
+              else
+              {
+                  static int warned = 0;
+                  if (!warned)
+                  {
+                      warned = 1;
+                      fprintf(stderr, "Couldn't wrap video frame: %s\n", SDL_GetError());
+                  } // if
+              }
+          } // else
+
+          if (video)
+          {
+              THEORAPLAY_freeVideo(video);
+              video = NULL;
+          }
+      } // if
+      else  // no new video frame? Give up some CPU.
+      {
+          SDL_Delay(10);
+      } // else
+
+      while ((audio = THEORAPLAY_getAudio(decoder)) != NULL)
+      {
+          if (audio_opened)
+              vulture_show_darkarts_intro_queue_audio(audio);
+          else
+              THEORAPLAY_freeAudio(audio);
+      }
+
+      // Pump the event loop here: skip on any key, mouse click or quit.
+      memset(&event, 0, sizeof(event)); // reset event
+      while (SDL_PollEvent(&event))
+      {
+          switch (event.type)
+          {
+              case SDL_WINDOWEVENT:
+                  if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+                  {
+                      /* a resize invalidates the old window surface */
+                      vulture_screen = SDL_GetWindowSurface(vulture_sdl_window);
+                      if (!vulture_screen)
+                          quit = 1;
+                      else
+                          SDL_FillRect(vulture_screen, NULL,
+                                       SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+                  }
+                  else if (event.window.event == SDL_WINDOWEVENT_EXPOSED ||
+                           event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
+                      vulture_refresh();
+                  break;
+
+              case SDL_QUIT:
+              case SDL_KEYDOWN:
+              case SDL_MOUSEBUTTONDOWN:
+                  quit = 1;
+                  break;
+          } // switch
+      } // while
+  } // while
+
+  /* single cleanup path, shared by completion, skip and failure */
+  if (video)
+      THEORAPLAY_freeVideo(video);
+
+  if (audio_opened)
+  {
+      SDL_CloseAudio();  /* must be fully closed before vulture_init_sound() */
+      vulture_show_darkarts_intro_drain_queue();
+  }
+
+  /* drain whatever the decoder still buffered, then shut it down */
+  while ((audio = THEORAPLAY_getAudio(decoder)) != NULL)
+      THEORAPLAY_freeAudio(audio);
+  while ((video = THEORAPLAY_getVideo(decoder)) != NULL)
+      THEORAPLAY_freeVideo(video);
+  THEORAPLAY_stopDecode(decoder);
+
+  /* hand a clean black screen back to the normal init sequence */
+  if (vulture_screen)
+  {
+      SDL_FillRect(vulture_screen, NULL, SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+      vulture_refresh();
+  }
+}

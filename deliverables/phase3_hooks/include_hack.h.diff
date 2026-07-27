@@ -1,0 +1,17 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/include/hack.h	2026-07-23 22:33:51.699100400 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/include/hack.h	2026-07-23 22:30:36.523077600 -0700
+@@ -478,12 +478,14 @@
+ #define FEATURE_NOTICE_VER_PATCH \
+     (((unsigned long) (0x000000000000FF00L & flags.suppress_alert)) >> 8)
+ 
++#ifndef __cplusplus
+ #ifndef max
+ #define max(a, b) ((a) > (b) ? (a) : (b))
+ #endif
+ #ifndef min
+ #define min(x, y) ((x) < (y) ? (x) : (y))
+ #endif
++#endif
+ #define plur(x) (((x) == 1) ? "" : "s")
+ 
+ #define ARM_BONUS(obj)                      \

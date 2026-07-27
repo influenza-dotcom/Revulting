@@ -1,0 +1,8 @@
+# Path A: this object MUST see -DVULTURE_GRAPHICS so tilemap.c compiles the
+# real remap_tileidx() (win/vulture/patha/remap_table.h) instead of the
+# identity fallback; without it the generated tile.c carries raw 5.0.0 tile
+# indices [0..2302] and every parchment-map square clamps to the magenta
+# placeholder. -I$(VULTUREDIR) is required because VULTURE_GRAPHICS makes
+# global.h include vulture_conf.h/vulture_version.h, which live in win/vulture.
+$(OTM)/tilemap.o: $(WSHR)/tilemap.c $(NHLUAH) | $(OTM)
+	$(cc) $(CFLAGSU) -DVULTURE_GRAPHICS -I$(VULTUREDIR) $< -o$@

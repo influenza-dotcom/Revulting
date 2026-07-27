@@ -1,0 +1,2 @@
+		fprintf(fp, "play_effects=%d\n", vulture_opts.play_effects);
+		fprintf(fp, "play_intro_video=%d\n", vulture_opts.play_intro_video);

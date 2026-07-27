@@ -1,0 +1,1516 @@
+src_index,src_file,src_name,target_index,target_name,provenance
+0,monsters,"giant ant,male",0,giant ant,head
+1,monsters,"giant ant,female",0,giant ant,head
+2,monsters,"killer bee,male",1,killer bee,head
+3,monsters,"killer bee,female",1,killer bee,head
+4,monsters,"soldier ant,male",2,soldier ant,head
+5,monsters,"soldier ant,female",2,soldier ant,head
+6,monsters,"fire ant,male",3,fire ant,head
+7,monsters,"fire ant,female",3,fire ant,head
+8,monsters,"giant beetle,male",4,giant beetle,head
+9,monsters,"giant beetle,female",4,giant beetle,head
+10,monsters,"queen bee,male",5,queen bee,head
+11,monsters,"queen bee,female",5,queen bee,head
+12,monsters,"acid blob,male",6,acid blob,head
+13,monsters,"acid blob,female",6,acid blob,head
+14,monsters,"quivering blob,male",7,quivering blob,head
+15,monsters,"quivering blob,female",7,quivering blob,head
+16,monsters,"gelatinous cube,male",8,gelatinous cube,head
+17,monsters,"gelatinous cube,female",8,gelatinous cube,head
+18,monsters,"chickatrice,male",9,chickatrice,head
+19,monsters,"chickatrice,female",9,chickatrice,head
+20,monsters,"cockatrice,male",10,cockatrice,head
+21,monsters,"cockatrice,female",10,cockatrice,head
+22,monsters,"pyrolisk,male",11,pyrolisk,head
+23,monsters,"pyrolisk,female",11,pyrolisk,head
+24,monsters,"jackal,male",12,jackal,head
+25,monsters,"jackal,female",12,jackal,head
+26,monsters,"fox,male",13,fox,head
+27,monsters,"fox,female",13,fox,head
+28,monsters,"coyote,male",14,coyote,head
+29,monsters,"coyote,female",14,coyote,head
+30,monsters,"werejackal,male",15,werejackal,head
+31,monsters,"werejackal,female",15,werejackal,head
+32,monsters,"little dog,male",16,little dog,head
+33,monsters,"little dog,female",16,little dog,head
+34,monsters,"dingo,male",17,dingo,head
+35,monsters,"dingo,female",17,dingo,head
+36,monsters,"dog,male",18,dog,head
+37,monsters,"dog,female",18,dog,head
+38,monsters,"large dog,male",19,large dog,head
+39,monsters,"large dog,female",19,large dog,head
+40,monsters,"wolf,male",20,wolf,head
+41,monsters,"wolf,female",20,wolf,head
+42,monsters,"werewolf,male",21,werewolf,head
+43,monsters,"werewolf,female",21,werewolf,head
+44,monsters,"winter wolf cub,male",22,winter wolf cub,head
+45,monsters,"winter wolf cub,female",22,winter wolf cub,head
+46,monsters,"warg,male",23,warg,head
+47,monsters,"warg,female",23,warg,head
+48,monsters,"winter wolf,male",24,winter wolf,head
+49,monsters,"winter wolf,female",24,winter wolf,head
+50,monsters,"hell hound pup,male",25,hell hound pup,head
+51,monsters,"hell hound pup,female",25,hell hound pup,head
+52,monsters,"hell hound,male",26,hell hound,head
+53,monsters,"hell hound,female",26,hell hound,head
+54,monsters,"Cerberus,male",27,Cerberus,head
+55,monsters,"Cerberus,female",27,Cerberus,head
+56,monsters,"gas spore,male",28,gas spore,head
+57,monsters,"gas spore,female",28,gas spore,head
+58,monsters,"floating eye,male",29,floating eye,head
+59,monsters,"floating eye,female",29,floating eye,head
+60,monsters,"freezing sphere,male",30,freezing sphere,head
+61,monsters,"freezing sphere,female",30,freezing sphere,head
+62,monsters,"flaming sphere,male",31,flaming sphere,head
+63,monsters,"flaming sphere,female",31,flaming sphere,head
+64,monsters,"shocking sphere,male",32,shocking sphere,head
+65,monsters,"shocking sphere,female",32,shocking sphere,head
+66,monsters,"beholder,male",33,beholder,head
+67,monsters,"beholder,female",33,beholder,head
+68,monsters,"kitten,male",34,kitten,head
+69,monsters,"kitten,female",34,kitten,head
+70,monsters,"housecat,male",35,housecat,head
+71,monsters,"housecat,female",35,housecat,head
+72,monsters,"jaguar,male",36,jaguar,head
+73,monsters,"jaguar,female",36,jaguar,head
+74,monsters,"lynx,male",37,lynx,head
+75,monsters,"lynx,female",37,lynx,head
+76,monsters,"panther,male",38,panther,head
+77,monsters,"panther,female",38,panther,head
+78,monsters,"large cat,male",39,large cat,head
+79,monsters,"large cat,female",39,large cat,head
+80,monsters,"tiger,male",40,tiger,head
+81,monsters,"tiger,female",40,tiger,head
+82,monsters,"displacer beast,male",1199,PLACEHOLDER,force_placeholder
+83,monsters,"displacer beast,female",1199,PLACEHOLDER,force_placeholder
+84,monsters,"gremlin,male",41,gremlin,head
+85,monsters,"gremlin,female",41,gremlin,head
+86,monsters,"gargoyle,male",42,gargoyle,head
+87,monsters,"gargoyle,female",42,gargoyle,head
+88,monsters,"winged gargoyle,male",43,winged gargoyle,head
+89,monsters,"winged gargoyle,female",43,winged gargoyle,head
+90,monsters,"hobbit,male",44,hobbit,head
+91,monsters,"hobbit,female",44,hobbit,head
+92,monsters,"dwarf,male",45,dwarf,head
+93,monsters,"dwarf,female",45,dwarf,head
+94,monsters,"bugbear,male",46,bugbear,head
+95,monsters,"bugbear,female",46,bugbear,head
+96,monsters,"dwarf leader,male",47,dwarf lord,head_alias
+97,monsters,"dwarf leader,female",47,dwarf lord,head_alias
+98,monsters,"dwarf ruler,male",48,dwarf king,head_alias
+99,monsters,"dwarf ruler,female",48,dwarf king,head_alias
+100,monsters,"mind flayer,male",49,mind flayer,head
+101,monsters,"mind flayer,female",49,mind flayer,head
+102,monsters,"master mind flayer,male",50,master mind flayer,head
+103,monsters,"master mind flayer,female",50,master mind flayer,head
+104,monsters,"manes,male",51,manes,head
+105,monsters,"manes,female",51,manes,head
+106,monsters,"homunculus,male",52,homunculus,head
+107,monsters,"homunculus,female",52,homunculus,head
+108,monsters,"imp,male",53,imp,head
+109,monsters,"imp,female",53,imp,head
+110,monsters,"lemure,male",54,lemure,head
+111,monsters,"lemure,female",54,lemure,head
+112,monsters,"quasit,male",55,quasit,head
+113,monsters,"quasit,female",55,quasit,head
+114,monsters,"tengu,male",56,tengu,head
+115,monsters,"tengu,female",56,tengu,head
+116,monsters,"blue jelly,male",57,blue jelly,head
+117,monsters,"blue jelly,female",57,blue jelly,head
+118,monsters,"spotted jelly,male",58,spotted jelly,head
+119,monsters,"spotted jelly,female",58,spotted jelly,head
+120,monsters,"ochre jelly,male",59,ochre jelly,head
+121,monsters,"ochre jelly,female",59,ochre jelly,head
+122,monsters,"kobold,male",60,kobold,head
+123,monsters,"kobold,female",60,kobold,head
+124,monsters,"large kobold,male",61,large kobold,head
+125,monsters,"large kobold,female",61,large kobold,head
+126,monsters,"kobold leader,male",62,kobold lord,head_alias
+127,monsters,"kobold leader,female",62,kobold lord,head_alias
+128,monsters,"kobold shaman,male",63,kobold shaman,head
+129,monsters,"kobold shaman,female",63,kobold shaman,head
+130,monsters,"leprechaun,male",64,leprechaun,head
+131,monsters,"leprechaun,female",64,leprechaun,head
+132,monsters,"small mimic,male",65,small mimic,head
+133,monsters,"small mimic,female",65,small mimic,head
+134,monsters,"large mimic,male",66,large mimic,head
+135,monsters,"large mimic,female",66,large mimic,head
+136,monsters,"giant mimic,male",67,giant mimic,head
+137,monsters,"giant mimic,female",67,giant mimic,head
+138,monsters,"wood nymph,male",68,wood nymph,head
+139,monsters,"wood nymph,female",68,wood nymph,head
+140,monsters,"water nymph,male",69,water nymph,head
+141,monsters,"water nymph,female",69,water nymph,head
+142,monsters,"mountain nymph,male",70,mountain nymph,head
+143,monsters,"mountain nymph,female",70,mountain nymph,head
+144,monsters,"goblin,male",71,goblin,head
+145,monsters,"goblin,female",71,goblin,head
+146,monsters,"hobgoblin,male",72,hobgoblin,head
+147,monsters,"hobgoblin,female",72,hobgoblin,head
+148,monsters,"orc,male",73,orc,head
+149,monsters,"orc,female",73,orc,head
+150,monsters,"hill orc,male",74,hill orc,head
+151,monsters,"hill orc,female",74,hill orc,head
+152,monsters,"Mordor orc,male",75,Mordor orc,head
+153,monsters,"Mordor orc,female",75,Mordor orc,head
+154,monsters,"Uruk-hai,male",76,Uruk-hai,head
+155,monsters,"Uruk-hai,female",76,Uruk-hai,head
+156,monsters,"orc shaman,male",77,orc shaman,head
+157,monsters,"orc shaman,female",77,orc shaman,head
+158,monsters,"orc-captain,male",78,orc-captain,head
+159,monsters,"orc-captain,female",78,orc-captain,head
+160,monsters,"rock piercer,male",79,rock piercer,head
+161,monsters,"rock piercer,female",79,rock piercer,head
+162,monsters,"iron piercer,male",80,iron piercer,head
+163,monsters,"iron piercer,female",80,iron piercer,head
+164,monsters,"glass piercer,male",81,glass piercer,head
+165,monsters,"glass piercer,female",81,glass piercer,head
+166,monsters,"rothe,male",82,rothe,head
+167,monsters,"rothe,female",82,rothe,head
+168,monsters,"mumak,male",83,mumak,head
+169,monsters,"mumak,female",83,mumak,head
+170,monsters,"leocrotta,male",84,leocrotta,head
+171,monsters,"leocrotta,female",84,leocrotta,head
+172,monsters,"wumpus,male",85,wumpus,head
+173,monsters,"wumpus,female",85,wumpus,head
+174,monsters,"titanothere,male",86,titanothere,head
+175,monsters,"titanothere,female",86,titanothere,head
+176,monsters,"baluchitherium,male",87,baluchitherium,head
+177,monsters,"baluchitherium,female",87,baluchitherium,head
+178,monsters,"mastodon,male",88,mastodon,head
+179,monsters,"mastodon,female",88,mastodon,head
+180,monsters,"sewer rat,male",89,sewer rat,head
+181,monsters,"sewer rat,female",89,sewer rat,head
+182,monsters,"giant rat,male",90,giant rat,head
+183,monsters,"giant rat,female",90,giant rat,head
+184,monsters,"rabid rat,male",91,rabid rat,head
+185,monsters,"rabid rat,female",91,rabid rat,head
+186,monsters,"wererat,male",92,wererat,head
+187,monsters,"wererat,female",92,wererat,head
+188,monsters,"rock mole,male",93,rock mole,head
+189,monsters,"rock mole,female",93,rock mole,head
+190,monsters,"woodchuck,male",94,woodchuck,head
+191,monsters,"woodchuck,female",94,woodchuck,head
+192,monsters,"cave spider,male",95,cave spider,head
+193,monsters,"cave spider,female",95,cave spider,head
+194,monsters,"centipede,male",96,centipede,head
+195,monsters,"centipede,female",96,centipede,head
+196,monsters,"giant spider,male",97,giant spider,head
+197,monsters,"giant spider,female",97,giant spider,head
+198,monsters,"scorpion,male",98,scorpion,head
+199,monsters,"scorpion,female",98,scorpion,head
+200,monsters,"lurker above,male",99,lurker above,head
+201,monsters,"lurker above,female",99,lurker above,head
+202,monsters,"trapper,male",100,trapper,head
+203,monsters,"trapper,female",100,trapper,head
+204,monsters,"pony,male",101,pony,head
+205,monsters,"pony,female",101,pony,head
+206,monsters,"white unicorn,male",102,white unicorn,head
+207,monsters,"white unicorn,female",102,white unicorn,head
+208,monsters,"gray unicorn,male",103,gray unicorn,head
+209,monsters,"gray unicorn,female",103,gray unicorn,head
+210,monsters,"black unicorn,male",104,black unicorn,head
+211,monsters,"black unicorn,female",104,black unicorn,head
+212,monsters,"horse,male",105,horse,head
+213,monsters,"horse,female",105,horse,head
+214,monsters,"warhorse,male",106,warhorse,head
+215,monsters,"warhorse,female",106,warhorse,head
+216,monsters,"fog cloud,male",107,fog cloud,head
+217,monsters,"fog cloud,female",107,fog cloud,head
+218,monsters,"dust vortex,male",108,dust vortex,head
+219,monsters,"dust vortex,female",108,dust vortex,head
+220,monsters,"ice vortex,male",109,ice vortex,head
+221,monsters,"ice vortex,female",109,ice vortex,head
+222,monsters,"energy vortex,male",110,energy vortex,head
+223,monsters,"energy vortex,female",110,energy vortex,head
+224,monsters,"steam vortex,male",111,steam vortex,head
+225,monsters,"steam vortex,female",111,steam vortex,head
+226,monsters,"fire vortex,male",112,fire vortex,head
+227,monsters,"fire vortex,female",112,fire vortex,head
+228,monsters,"baby long worm,male",113,baby long worm,head
+229,monsters,"baby long worm,female",113,baby long worm,head
+230,monsters,"baby purple worm,male",114,baby purple worm,head
+231,monsters,"baby purple worm,female",114,baby purple worm,head
+232,monsters,"long worm,male",115,long worm,head
+233,monsters,"long worm,female",115,long worm,head
+234,monsters,"purple worm,male",116,purple worm,head
+235,monsters,"purple worm,female",116,purple worm,head
+236,monsters,"grid bug,male",117,grid bug,head
+237,monsters,"grid bug,female",117,grid bug,head
+238,monsters,"xan,male",118,xan,head
+239,monsters,"xan,female",118,xan,head
+240,monsters,"yellow light,male",119,yellow light,head
+241,monsters,"yellow light,female",119,yellow light,head
+242,monsters,"black light,male",120,black light,head
+243,monsters,"black light,female",120,black light,head
+244,monsters,"zruty,male",121,zruty,head
+245,monsters,"zruty,female",121,zruty,head
+246,monsters,"couatl,male",122,couatl,head
+247,monsters,"couatl,female",122,couatl,head
+248,monsters,"Aleax,male",123,Aleax,head
+249,monsters,"Aleax,female",123,Aleax,head
+250,monsters,"Angel,male",124,Angel,head
+251,monsters,"Angel,female",124,Angel,head
+252,monsters,"ki-rin,male",125,ki-rin,head
+253,monsters,"ki-rin,female",125,ki-rin,head
+254,monsters,"Archon,male",126,Archon,head
+255,monsters,"Archon,female",126,Archon,head
+256,monsters,"bat,male",127,bat,head
+257,monsters,"bat,female",127,bat,head
+258,monsters,"giant bat,male",128,giant bat,head
+259,monsters,"giant bat,female",128,giant bat,head
+260,monsters,"raven,male",129,raven,head
+261,monsters,"raven,female",129,raven,head
+262,monsters,"vampire bat,male",130,vampire bat,head
+263,monsters,"vampire bat,female",130,vampire bat,head
+264,monsters,"plains centaur,male",131,plains centaur,head
+265,monsters,"plains centaur,female",131,plains centaur,head
+266,monsters,"forest centaur,male",132,forest centaur,head
+267,monsters,"forest centaur,female",132,forest centaur,head
+268,monsters,"mountain centaur,male",133,mountain centaur,head
+269,monsters,"mountain centaur,female",133,mountain centaur,head
+270,monsters,"baby gray dragon,male",134,baby gray dragon,head
+271,monsters,"baby gray dragon,female",134,baby gray dragon,head
+272,monsters,"baby gold dragon,male",1199,PLACEHOLDER,force_placeholder
+273,monsters,"baby gold dragon,female",1199,PLACEHOLDER,force_placeholder
+274,monsters,"baby silver dragon,male",135,baby silver dragon,head
+275,monsters,"baby silver dragon,female",135,baby silver dragon,head
+276,monsters,"baby shimmering dragon,male",136,baby shimmering dragon,head
+277,monsters,"baby shimmering dragon,female",136,baby shimmering dragon,head
+278,monsters,"baby red dragon,male",137,baby red dragon,head
+279,monsters,"baby red dragon,female",137,baby red dragon,head
+280,monsters,"baby white dragon,male",138,baby white dragon,head
+281,monsters,"baby white dragon,female",138,baby white dragon,head
+282,monsters,"baby orange dragon,male",139,baby orange dragon,head
+283,monsters,"baby orange dragon,female",139,baby orange dragon,head
+284,monsters,"baby black dragon,male",140,baby black dragon,head
+285,monsters,"baby black dragon,female",140,baby black dragon,head
+286,monsters,"baby blue dragon,male",141,baby blue dragon,head
+287,monsters,"baby blue dragon,female",141,baby blue dragon,head
+288,monsters,"baby green dragon,male",142,baby green dragon,head
+289,monsters,"baby green dragon,female",142,baby green dragon,head
+290,monsters,"baby yellow dragon,male",143,baby yellow dragon,head
+291,monsters,"baby yellow dragon,female",143,baby yellow dragon,head
+292,monsters,"gray dragon,male",144,gray dragon,head
+293,monsters,"gray dragon,female",144,gray dragon,head
+294,monsters,"gold dragon,male",1199,PLACEHOLDER,force_placeholder
+295,monsters,"gold dragon,female",1199,PLACEHOLDER,force_placeholder
+296,monsters,"silver dragon,male",145,silver dragon,head
+297,monsters,"silver dragon,female",145,silver dragon,head
+298,monsters,"shimmering dragon,male",146,shimmering dragon,head
+299,monsters,"shimmering dragon,female",146,shimmering dragon,head
+300,monsters,"red dragon,male",147,red dragon,head
+301,monsters,"red dragon,female",147,red dragon,head
+302,monsters,"white dragon,male",148,white dragon,head
+303,monsters,"white dragon,female",148,white dragon,head
+304,monsters,"orange dragon,male",149,orange dragon,head
+305,monsters,"orange dragon,female",149,orange dragon,head
+306,monsters,"black dragon,male",150,black dragon,head
+307,monsters,"black dragon,female",150,black dragon,head
+308,monsters,"blue dragon,male",151,blue dragon,head
+309,monsters,"blue dragon,female",151,blue dragon,head
+310,monsters,"green dragon,male",152,green dragon,head
+311,monsters,"green dragon,female",152,green dragon,head
+312,monsters,"yellow dragon,male",153,yellow dragon,head
+313,monsters,"yellow dragon,female",153,yellow dragon,head
+314,monsters,"stalker,male",154,stalker,head
+315,monsters,"stalker,female",154,stalker,head
+316,monsters,"air elemental,male",155,air elemental,head
+317,monsters,"air elemental,female",155,air elemental,head
+318,monsters,"fire elemental,male",156,fire elemental,head
+319,monsters,"fire elemental,female",156,fire elemental,head
+320,monsters,"earth elemental,male",157,earth elemental,head
+321,monsters,"earth elemental,female",157,earth elemental,head
+322,monsters,"water elemental,male",158,water elemental,head
+323,monsters,"water elemental,female",158,water elemental,head
+324,monsters,"lichen,male",159,lichen,head
+325,monsters,"lichen,female",159,lichen,head
+326,monsters,"brown mold,male",160,brown mold,head
+327,monsters,"brown mold,female",160,brown mold,head
+328,monsters,"yellow mold,male",161,yellow mold,head
+329,monsters,"yellow mold,female",161,yellow mold,head
+330,monsters,"green mold,male",162,green mold,head
+331,monsters,"green mold,female",162,green mold,head
+332,monsters,"red mold,male",163,red mold,head
+333,monsters,"red mold,female",163,red mold,head
+334,monsters,"shrieker,male",164,shrieker,head
+335,monsters,"shrieker,female",164,shrieker,head
+336,monsters,"violet fungus,male",165,violet fungus,head
+337,monsters,"violet fungus,female",165,violet fungus,head
+338,monsters,"gnome,male",166,gnome,head
+339,monsters,"gnome,female",166,gnome,head
+340,monsters,"gnome leader,male",167,gnome lord,head_alias
+341,monsters,"gnome leader,female",167,gnome lord,head_alias
+342,monsters,"gnomish wizard,male",168,gnomish wizard,head
+343,monsters,"gnomish wizard,female",168,gnomish wizard,head
+344,monsters,"gnome ruler,male",169,gnome king,head_alias
+345,monsters,"gnome ruler,female",169,gnome king,head_alias
+346,monsters,"giant,male",170,giant,head
+347,monsters,"giant,female",170,giant,head
+348,monsters,"stone giant,male",171,stone giant,head
+349,monsters,"stone giant,female",171,stone giant,head
+350,monsters,"hill giant,male",172,hill giant,head
+351,monsters,"hill giant,female",172,hill giant,head
+352,monsters,"fire giant,male",173,fire giant,head
+353,monsters,"fire giant,female",173,fire giant,head
+354,monsters,"frost giant,male",174,frost giant,head
+355,monsters,"frost giant,female",174,frost giant,head
+356,monsters,"ettin,male",175,ettin,head
+357,monsters,"ettin,female",175,ettin,head
+358,monsters,"storm giant,male",176,storm giant,head
+359,monsters,"storm giant,female",176,storm giant,head
+360,monsters,"titan,male",177,titan,head
+361,monsters,"titan,female",177,titan,head
+362,monsters,"minotaur,male",178,minotaur,head
+363,monsters,"minotaur,female",178,minotaur,head
+364,monsters,"jabberwock,male",179,jabberwock,head
+365,monsters,"jabberwock,female",179,jabberwock,head
+366,monsters,"vorpal jabberwock,male",180,vorpal jabberwock,head
+367,monsters,"vorpal jabberwock,female",180,vorpal jabberwock,head
+368,monsters,"Keystone Kop,male",181,Keystone Kop,head
+369,monsters,"Keystone Kop,female",181,Keystone Kop,head
+370,monsters,"Kop Sergeant,male",182,Kop Sergeant,head
+371,monsters,"Kop Sergeant,female",182,Kop Sergeant,head
+372,monsters,"Kop Lieutenant,male",183,Kop Lieutenant,head
+373,monsters,"Kop Lieutenant,female",183,Kop Lieutenant,head
+374,monsters,"Kop Kaptain,male",184,Kop Kaptain,head
+375,monsters,"Kop Kaptain,female",184,Kop Kaptain,head
+376,monsters,"lich,male",185,lich,head
+377,monsters,"lich,female",185,lich,head
+378,monsters,"demilich,male",186,demilich,head
+379,monsters,"demilich,female",186,demilich,head
+380,monsters,"master lich,male",187,master lich,head
+381,monsters,"master lich,female",187,master lich,head
+382,monsters,"arch-lich,male",188,arch-lich,head
+383,monsters,"arch-lich,female",188,arch-lich,head
+384,monsters,"kobold mummy,male",189,kobold mummy,head
+385,monsters,"kobold mummy,female",189,kobold mummy,head
+386,monsters,"gnome mummy,male",190,gnome mummy,head
+387,monsters,"gnome mummy,female",190,gnome mummy,head
+388,monsters,"orc mummy,male",191,orc mummy,head
+389,monsters,"orc mummy,female",191,orc mummy,head
+390,monsters,"dwarf mummy,male",192,dwarf mummy,head
+391,monsters,"dwarf mummy,female",192,dwarf mummy,head
+392,monsters,"elf mummy,male",193,elf mummy,head
+393,monsters,"elf mummy,female",193,elf mummy,head
+394,monsters,"human mummy,male",194,human mummy,head
+395,monsters,"human mummy,female",194,human mummy,head
+396,monsters,"ettin mummy,male",195,ettin mummy,head
+397,monsters,"ettin mummy,female",195,ettin mummy,head
+398,monsters,"giant mummy,male",196,giant mummy,head
+399,monsters,"giant mummy,female",196,giant mummy,head
+400,monsters,"red naga hatchling,male",197,red naga hatchling,head
+401,monsters,"red naga hatchling,female",197,red naga hatchling,head
+402,monsters,"black naga hatchling,male",198,black naga hatchling,head
+403,monsters,"black naga hatchling,female",198,black naga hatchling,head
+404,monsters,"golden naga hatchling,male",199,golden naga hatchling,head
+405,monsters,"golden naga hatchling,female",199,golden naga hatchling,head
+406,monsters,"guardian naga hatchling,male",200,guardian naga hatchling,head
+407,monsters,"guardian naga hatchling,female",200,guardian naga hatchling,head
+408,monsters,"red naga,male",201,red naga,head
+409,monsters,"red naga,female",201,red naga,head
+410,monsters,"black naga,male",202,black naga,head
+411,monsters,"black naga,female",202,black naga,head
+412,monsters,"golden naga,male",203,golden naga,head
+413,monsters,"golden naga,female",203,golden naga,head
+414,monsters,"guardian naga,male",204,guardian naga,head
+415,monsters,"guardian naga,female",204,guardian naga,head
+416,monsters,"ogre,male",205,ogre,head
+417,monsters,"ogre,female",205,ogre,head
+418,monsters,"ogre leader,male",206,ogre lord,head_alias
+419,monsters,"ogre leader,female",206,ogre lord,head_alias
+420,monsters,"ogre tyrant,male",207,ogre king,head_alias
+421,monsters,"ogre tyrant,female",207,ogre king,head_alias
+422,monsters,"gray ooze,male",208,gray ooze,head
+423,monsters,"gray ooze,female",208,gray ooze,head
+424,monsters,"brown pudding,male",209,brown pudding,head
+425,monsters,"brown pudding,female",209,brown pudding,head
+426,monsters,"green slime,male",210,green slime,head
+427,monsters,"green slime,female",210,green slime,head
+428,monsters,"black pudding,male",211,black pudding,head
+429,monsters,"black pudding,female",211,black pudding,head
+430,monsters,"quantum mechanic,male",212,quantum mechanic,head
+431,monsters,"quantum mechanic,female",212,quantum mechanic,head
+432,monsters,"genetic engineer,male",1199,PLACEHOLDER,force_placeholder
+433,monsters,"genetic engineer,female",1199,PLACEHOLDER,force_placeholder
+434,monsters,"rust monster,male",213,rust monster,head
+435,monsters,"rust monster,female",213,rust monster,head
+436,monsters,"disenchanter,male",214,disenchanter,head
+437,monsters,"disenchanter,female",214,disenchanter,head
+438,monsters,"garter snake,male",215,garter snake,head
+439,monsters,"garter snake,female",215,garter snake,head
+440,monsters,"snake,male",216,snake,head
+441,monsters,"snake,female",216,snake,head
+442,monsters,"water moccasin,male",217,water moccasin,head
+443,monsters,"water moccasin,female",217,water moccasin,head
+444,monsters,"python,male",218,python,head
+445,monsters,"python,female",218,python,head
+446,monsters,"pit viper,male",219,pit viper,head
+447,monsters,"pit viper,female",219,pit viper,head
+448,monsters,"cobra,male",220,cobra,head
+449,monsters,"cobra,female",220,cobra,head
+450,monsters,"troll,male",221,troll,head
+451,monsters,"troll,female",221,troll,head
+452,monsters,"ice troll,male",222,ice troll,head
+453,monsters,"ice troll,female",222,ice troll,head
+454,monsters,"rock troll,male",223,rock troll,head
+455,monsters,"rock troll,female",223,rock troll,head
+456,monsters,"water troll,male",224,water troll,head
+457,monsters,"water troll,female",224,water troll,head
+458,monsters,"Olog-hai,male",225,Olog-hai,head
+459,monsters,"Olog-hai,female",225,Olog-hai,head
+460,monsters,"umber hulk,male",226,umber hulk,head
+461,monsters,"umber hulk,female",226,umber hulk,head
+462,monsters,"vampire,male",227,vampire,head
+463,monsters,"vampire,female",227,vampire,head
+464,monsters,"vampire leader,male",228,vampire lord,head_alias
+465,monsters,"vampire leader,female",228,vampire lord,head_alias
+466,monsters,"vampire mage,male",229,vampire mage,head
+467,monsters,"vampire mage,female",229,vampire mage,head
+468,monsters,"Vlad the Impaler,male",230,Vlad the Impaler,head
+469,monsters,"Vlad the Impaler,female",230,Vlad the Impaler,head
+470,monsters,"barrow wight,male",231,barrow wight,head
+471,monsters,"barrow wight,female",231,barrow wight,head
+472,monsters,"wraith,male",232,wraith,head
+473,monsters,"wraith,female",232,wraith,head
+474,monsters,"Nazgul,male",233,Nazgul,head
+475,monsters,"Nazgul,female",233,Nazgul,head
+476,monsters,"xorn,male",234,xorn,head
+477,monsters,"xorn,female",234,xorn,head
+478,monsters,"monkey,male",235,monkey,head
+479,monsters,"monkey,female",235,monkey,head
+480,monsters,"ape,male",236,ape,head
+481,monsters,"ape,female",236,ape,head
+482,monsters,"owlbear,male",237,owlbear,head
+483,monsters,"owlbear,female",237,owlbear,head
+484,monsters,"yeti,male",238,yeti,head
+485,monsters,"yeti,female",238,yeti,head
+486,monsters,"carnivorous ape,male",239,carnivorous ape,head
+487,monsters,"carnivorous ape,female",239,carnivorous ape,head
+488,monsters,"sasquatch,male",240,sasquatch,head
+489,monsters,"sasquatch,female",240,sasquatch,head
+490,monsters,"kobold zombie,male",241,kobold zombie,head
+491,monsters,"kobold zombie,female",241,kobold zombie,head
+492,monsters,"gnome zombie,male",242,gnome zombie,head
+493,monsters,"gnome zombie,female",242,gnome zombie,head
+494,monsters,"orc zombie,male",243,orc zombie,head
+495,monsters,"orc zombie,female",243,orc zombie,head
+496,monsters,"dwarf zombie,male",244,dwarf zombie,head
+497,monsters,"dwarf zombie,female",244,dwarf zombie,head
+498,monsters,"elf zombie,male",245,elf zombie,head
+499,monsters,"elf zombie,female",245,elf zombie,head
+500,monsters,"human zombie,male",246,human zombie,head
+501,monsters,"human zombie,female",246,human zombie,head
+502,monsters,"ettin zombie,male",247,ettin zombie,head
+503,monsters,"ettin zombie,female",247,ettin zombie,head
+504,monsters,"ghoul,male",248,ghoul,head
+505,monsters,"ghoul,female",248,ghoul,head
+506,monsters,"giant zombie,male",249,giant zombie,head
+507,monsters,"giant zombie,female",249,giant zombie,head
+508,monsters,"skeleton,male",250,skeleton,head
+509,monsters,"skeleton,female",250,skeleton,head
+510,monsters,"straw golem,male",251,straw golem,head
+511,monsters,"straw golem,female",251,straw golem,head
+512,monsters,"paper golem,male",252,paper golem,head
+513,monsters,"paper golem,female",252,paper golem,head
+514,monsters,"rope golem,male",253,rope golem,head
+515,monsters,"rope golem,female",253,rope golem,head
+516,monsters,"gold golem,male",254,gold golem,head
+517,monsters,"gold golem,female",254,gold golem,head
+518,monsters,"leather golem,male",255,leather golem,head
+519,monsters,"leather golem,female",255,leather golem,head
+520,monsters,"wood golem,male",256,wood golem,head
+521,monsters,"wood golem,female",256,wood golem,head
+522,monsters,"flesh golem,male",257,flesh golem,head
+523,monsters,"flesh golem,female",257,flesh golem,head
+524,monsters,"clay golem,male",258,clay golem,head
+525,monsters,"clay golem,female",258,clay golem,head
+526,monsters,"stone golem,male",259,stone golem,head
+527,monsters,"stone golem,female",259,stone golem,head
+528,monsters,"glass golem,male",260,glass golem,head
+529,monsters,"glass golem,female",260,glass golem,head
+530,monsters,"iron golem,male",261,iron golem,head
+531,monsters,"iron golem,female",261,iron golem,head
+532,monsters,"human,male",262,human,head
+533,monsters,"human,female",262,human,head
+534,monsters,"wererat,male",263,wererat,head
+535,monsters,"wererat,female",263,wererat,head
+536,monsters,"werejackal,male",264,werejackal,head
+537,monsters,"werejackal,female",264,werejackal,head
+538,monsters,"werewolf,male",265,werewolf,head
+539,monsters,"werewolf,female",265,werewolf,head
+540,monsters,"elf,male",266,elf,head
+541,monsters,"elf,female",266,elf,head
+542,monsters,"Woodland-elf,male",267,Woodland-elf,head
+543,monsters,"Woodland-elf,female",267,Woodland-elf,head
+544,monsters,"Green-elf,male",268,Green-elf,head
+545,monsters,"Green-elf,female",268,Green-elf,head
+546,monsters,"Grey-elf,male",269,Grey-elf,head
+547,monsters,"Grey-elf,female",269,Grey-elf,head
+548,monsters,"elf-noble,male",270,elf-lord,head_alias
+549,monsters,"elf-noble,female",270,elf-lord,head_alias
+550,monsters,"elven monarch,male",271,Elvenking,head_alias
+551,monsters,"elven monarch,female",271,Elvenking,head_alias
+552,monsters,"doppelganger,male",272,doppelganger,head
+553,monsters,"doppelganger,female",272,doppelganger,head
+554,monsters,"shopkeeper,male",273,shopkeeper,head
+555,monsters,"shopkeeper,female",273,shopkeeper,head
+556,monsters,"guard,male",274,guard,head
+557,monsters,"guard,female",274,guard,head
+558,monsters,"prisoner,male",275,prisoner,head
+559,monsters,"prisoner,female",275,prisoner,head
+560,monsters,"Oracle,male",276,Oracle,head
+561,monsters,"Oracle,female",276,Oracle,head
+562,monsters,"aligned cleric,male",277,aligned priest,head_alias
+563,monsters,"aligned cleric,female",277,aligned priest,head_alias
+564,monsters,"high cleric,male",278,high priest,head_alias
+565,monsters,"high cleric,female",278,high priest,head_alias
+566,monsters,"soldier,male",279,soldier,head
+567,monsters,"soldier,female",279,soldier,head
+568,monsters,"sergeant,male",280,sergeant,head
+569,monsters,"sergeant,female",280,sergeant,head
+570,monsters,"nurse,male",281,nurse,head
+571,monsters,"nurse,female",281,nurse,head
+572,monsters,"lieutenant,male",282,lieutenant,head
+573,monsters,"lieutenant,female",282,lieutenant,head
+574,monsters,"captain,male",283,captain,head
+575,monsters,"captain,female",283,captain,head
+576,monsters,"watchman,male",284,watchman,head
+577,monsters,"watchman,female",284,watchman,head
+578,monsters,"watch captain,male",285,watch captain,head
+579,monsters,"watch captain,female",285,watch captain,head
+580,monsters,"Medusa,male",286,Medusa,head
+581,monsters,"Medusa,female",286,Medusa,head
+582,monsters,"Wizard of Yendor,male",287,Wizard of Yendor,head
+583,monsters,"Wizard of Yendor,female",287,Wizard of Yendor,head
+584,monsters,"Croesus,male",288,Croesus,head
+585,monsters,"Croesus,female",288,Croesus,head
+586,monsters,"Charon,male",289,Charon,head
+587,monsters,"Charon,female",289,Charon,head
+588,monsters,"ghost,male",290,ghost,head
+589,monsters,"ghost,female",290,ghost,head
+590,monsters,"shade,male",291,shade,head
+591,monsters,"shade,female",291,shade,head
+592,monsters,"water demon,male",292,water demon,head
+593,monsters,"water demon,female",292,water demon,head
+594,monsters,"amorous demon,male",1199,PLACEHOLDER,force_placeholder
+595,monsters,"amorous demon,female",1199,PLACEHOLDER,force_placeholder
+596,monsters,"horned devil,male",294,horned devil,head
+597,monsters,"horned devil,female",294,horned devil,head
+598,monsters,"erinys,male",296,erinys,head
+599,monsters,"erinys,female",296,erinys,head
+600,monsters,"barbed devil,male",297,barbed devil,head
+601,monsters,"barbed devil,female",297,barbed devil,head
+602,monsters,"marilith,male",298,marilith,head
+603,monsters,"marilith,female",298,marilith,head
+604,monsters,"vrock,male",299,vrock,head
+605,monsters,"vrock,female",299,vrock,head
+606,monsters,"hezrou,male",300,hezrou,head
+607,monsters,"hezrou,female",300,hezrou,head
+608,monsters,"bone devil,male",301,bone devil,head
+609,monsters,"bone devil,female",301,bone devil,head
+610,monsters,"ice devil,male",302,ice devil,head
+611,monsters,"ice devil,female",302,ice devil,head
+612,monsters,"nalfeshnee,male",303,nalfeshnee,head
+613,monsters,"nalfeshnee,female",303,nalfeshnee,head
+614,monsters,"pit fiend,male",304,pit fiend,head
+615,monsters,"pit fiend,female",304,pit fiend,head
+616,monsters,"sandestin,male",305,sandestin,head
+617,monsters,"sandestin,female",305,sandestin,head
+618,monsters,"balrog,male",306,balrog,head
+619,monsters,"balrog,female",306,balrog,head
+620,monsters,"Juiblex,male",307,Juiblex,head
+621,monsters,"Juiblex,female",307,Juiblex,head
+622,monsters,"Yeenoghu,male",308,Yeenoghu,head
+623,monsters,"Yeenoghu,female",308,Yeenoghu,head
+624,monsters,"Orcus,male",309,Orcus,head
+625,monsters,"Orcus,female",309,Orcus,head
+626,monsters,"Geryon,male",310,Geryon,head
+627,monsters,"Geryon,female",310,Geryon,head
+628,monsters,"Dispater,male",311,Dispater,head
+629,monsters,"Dispater,female",311,Dispater,head
+630,monsters,"Baalzebub,male",312,Baalzebub,head
+631,monsters,"Baalzebub,female",312,Baalzebub,head
+632,monsters,"Asmodeus,male",313,Asmodeus,head
+633,monsters,"Asmodeus,female",313,Asmodeus,head
+634,monsters,"Demogorgon,male",314,Demogorgon,head
+635,monsters,"Demogorgon,female",314,Demogorgon,head
+636,monsters,"Death,male",315,Death,head
+637,monsters,"Death,female",315,Death,head
+638,monsters,"Pestilence,male",316,Pestilence,head
+639,monsters,"Pestilence,female",316,Pestilence,head
+640,monsters,"Famine,male",317,Famine,head
+641,monsters,"Famine,female",317,Famine,head
+642,monsters,"mail daemon,male",318,mail daemon,head
+643,monsters,"mail daemon,female",318,mail daemon,head
+644,monsters,"djinni,male",319,djinni,head
+645,monsters,"djinni,female",319,djinni,head
+646,monsters,"jellyfish,male",320,jellyfish,head
+647,monsters,"jellyfish,female",320,jellyfish,head
+648,monsters,"piranha,male",321,piranha,head
+649,monsters,"piranha,female",321,piranha,head
+650,monsters,"shark,male",322,shark,head
+651,monsters,"shark,female",322,shark,head
+652,monsters,"giant eel,male",323,giant eel,head
+653,monsters,"giant eel,female",323,giant eel,head
+654,monsters,"electric eel,male",324,electric eel,head
+655,monsters,"electric eel,female",324,electric eel,head
+656,monsters,"kraken,male",325,kraken,head
+657,monsters,"kraken,female",325,kraken,head
+658,monsters,"newt,male",326,newt,head
+659,monsters,"newt,female",326,newt,head
+660,monsters,"gecko,male",327,gecko,head
+661,monsters,"gecko,female",327,gecko,head
+662,monsters,"iguana,male",328,iguana,head
+663,monsters,"iguana,female",328,iguana,head
+664,monsters,"baby crocodile,male",329,baby crocodile,head
+665,monsters,"baby crocodile,female",329,baby crocodile,head
+666,monsters,"lizard,male",330,lizard,head
+667,monsters,"lizard,female",330,lizard,head
+668,monsters,"chameleon,male",331,chameleon,head
+669,monsters,"chameleon,female",331,chameleon,head
+670,monsters,"crocodile,male",332,crocodile,head
+671,monsters,"crocodile,female",332,crocodile,head
+672,monsters,"salamander,male",333,salamander,head
+673,monsters,"salamander,female",333,salamander,head
+674,monsters,"long worm tail,male",334,long worm tail,head
+675,monsters,"long worm tail,female",334,long worm tail,head
+676,monsters,"archeologist,male",335,archeologist,head
+677,monsters,"archeologist,female",335,archeologist,head
+678,monsters,"barbarian,male",336,barbarian,head
+679,monsters,"barbarian,female",336,barbarian,head
+680,monsters,"cave dweller,male",1199,PLACEHOLDER,force_placeholder
+681,monsters,"cave dweller,female",1199,PLACEHOLDER,force_placeholder
+682,monsters,"healer,male",339,healer,head
+683,monsters,"healer,female",339,healer,head
+684,monsters,"knight,male",340,knight,head
+685,monsters,"knight,female",340,knight,head
+686,monsters,"monk,male",341,monk,head
+687,monsters,"monk,female",341,monk,head
+688,monsters,"cleric,male",277,aligned priest,head_alias
+689,monsters,"cleric,female",277,aligned priest,head_alias
+690,monsters,"ranger,male",344,ranger,head
+691,monsters,"ranger,female",344,ranger,head
+692,monsters,"rogue,male",345,rogue,head
+693,monsters,"rogue,female",345,rogue,head
+694,monsters,"samurai,male",346,samurai,head
+695,monsters,"samurai,female",346,samurai,head
+696,monsters,"tourist,male",347,tourist,head
+697,monsters,"tourist,female",347,tourist,head
+698,monsters,"valkyrie,male",348,valkyrie,head
+699,monsters,"valkyrie,female",348,valkyrie,head
+700,monsters,"wizard,male",349,wizard,head
+701,monsters,"wizard,female",349,wizard,head
+702,monsters,"Lord Carnarvon,male",350,Lord Carnarvon,head
+703,monsters,"Lord Carnarvon,female",350,Lord Carnarvon,head
+704,monsters,"Pelias,male",351,Pelias,head
+705,monsters,"Pelias,female",351,Pelias,head
+706,monsters,"Shaman Karnov,male",352,Shaman Karnov,head
+707,monsters,"Shaman Karnov,female",352,Shaman Karnov,head
+708,monsters,"Earendil,male",353,Earendil,head
+709,monsters,"Earendil,female",353,Earendil,head
+710,monsters,"Elwing,male",354,Elwing,head
+711,monsters,"Elwing,female",354,Elwing,head
+712,monsters,"Hippocrates,male",355,Hippocrates,head
+713,monsters,"Hippocrates,female",355,Hippocrates,head
+714,monsters,"King Arthur,male",356,King Arthur,head
+715,monsters,"King Arthur,female",356,King Arthur,head
+716,monsters,"Grand Master,male",357,Grand Master,head
+717,monsters,"Grand Master,female",357,Grand Master,head
+718,monsters,"Arch Priest,male",358,Arch Priest,head
+719,monsters,"Arch Priest,female",358,Arch Priest,head
+720,monsters,"Orion,male",359,Orion,head
+721,monsters,"Orion,female",359,Orion,head
+722,monsters,"Master of Thieves,male",360,Master of Thieves,head
+723,monsters,"Master of Thieves,female",360,Master of Thieves,head
+724,monsters,"Lord Sato,male",361,Lord Sato,head
+725,monsters,"Lord Sato,female",361,Lord Sato,head
+726,monsters,"Twoflower,male",362,Twoflower,head
+727,monsters,"Twoflower,female",362,Twoflower,head
+728,monsters,"Norn,male",363,Norn,head
+729,monsters,"Norn,female",363,Norn,head
+730,monsters,"Neferet the Green,male",364,Neferet the Green,head
+731,monsters,"Neferet the Green,female",364,Neferet the Green,head
+732,monsters,"Minion of Huhetotl,male",365,Minion of Huhetotl,head
+733,monsters,"Minion of Huhetotl,female",365,Minion of Huhetotl,head
+734,monsters,"Thoth Amon,male",366,Thoth Amon,head
+735,monsters,"Thoth Amon,female",366,Thoth Amon,head
+736,monsters,"Chromatic Dragon,male",367,Chromatic Dragon,head
+737,monsters,"Chromatic Dragon,female",367,Chromatic Dragon,head
+738,monsters,"Goblin King,male",368,Goblin King,head
+739,monsters,"Goblin King,female",368,Goblin King,head
+740,monsters,"Cyclops,male",369,Cyclops,head
+741,monsters,"Cyclops,female",369,Cyclops,head
+742,monsters,"Ixoth,male",370,Ixoth,head
+743,monsters,"Ixoth,female",370,Ixoth,head
+744,monsters,"Master Kaen,male",371,Master Kaen,head
+745,monsters,"Master Kaen,female",371,Master Kaen,head
+746,monsters,"Nalzok,male",372,Nalzok,head
+747,monsters,"Nalzok,female",372,Nalzok,head
+748,monsters,"Scorpius,male",373,Scorpius,head
+749,monsters,"Scorpius,female",373,Scorpius,head
+750,monsters,"Master Assassin,male",374,Master Assassin,head
+751,monsters,"Master Assassin,female",374,Master Assassin,head
+752,monsters,"Ashikaga Takauji,male",375,Ashikaga Takauji,head
+753,monsters,"Ashikaga Takauji,female",375,Ashikaga Takauji,head
+754,monsters,"Lord Surtur,male",376,Lord Surtur,head
+755,monsters,"Lord Surtur,female",376,Lord Surtur,head
+756,monsters,"Dark One,male",377,Dark One,head
+757,monsters,"Dark One,female",377,Dark One,head
+758,monsters,"student,male",378,student,head
+759,monsters,"student,female",378,student,head
+760,monsters,"chieftain,male",379,chieftain,head
+761,monsters,"chieftain,female",379,chieftain,head
+762,monsters,"neanderthal,male",380,neanderthal,head
+763,monsters,"neanderthal,female",380,neanderthal,head
+764,monsters,"High-elf,male",381,High-elf,head
+765,monsters,"High-elf,female",381,High-elf,head
+766,monsters,"attendant,male",382,attendant,head
+767,monsters,"attendant,female",382,attendant,head
+768,monsters,"page,male",383,page,head
+769,monsters,"page,female",383,page,head
+770,monsters,"abbot,male",384,abbot,head
+771,monsters,"abbot,female",384,abbot,head
+772,monsters,"acolyte,male",385,acolyte,head
+773,monsters,"acolyte,female",385,acolyte,head
+774,monsters,"hunter,male",386,hunter,head
+775,monsters,"hunter,female",386,hunter,head
+776,monsters,"thug,male",387,thug,head
+777,monsters,"thug,female",387,thug,head
+778,monsters,"ninja,male",388,ninja,head
+779,monsters,"ninja,female",388,ninja,head
+780,monsters,"roshi,male",389,roshi,head
+781,monsters,"roshi,female",389,roshi,head
+782,monsters,"guide,male",390,guide,head
+783,monsters,"guide,female",390,guide,head
+784,monsters,"warrior,male",391,warrior,head
+785,monsters,"warrior,female",391,warrior,head
+786,monsters,"apprentice,male",392,apprentice,head
+787,monsters,"apprentice,female",392,apprentice,head
+788,monsters,"invisible monster, nogender",393,invisible monster,head
+789,objects,strange object,394,strange object,full_name
+790,objects,strange / generic strange,1199,PLACEHOLDER,unmatched->placeholder
+791,objects,weapon / generic weapon,1199,PLACEHOLDER,unmatched->placeholder
+792,objects,armor / generic armor,1199,PLACEHOLDER,unmatched->placeholder
+793,objects,ring / generic ring,1199,PLACEHOLDER,unmatched->placeholder
+794,objects,amulet / generic amulet,1199,PLACEHOLDER,unmatched->placeholder
+795,objects,tool / generic tool,1199,PLACEHOLDER,unmatched->placeholder
+796,objects,food / generic food,1199,PLACEHOLDER,unmatched->placeholder
+797,objects,potion / generic potion,1199,PLACEHOLDER,unmatched->placeholder
+798,objects,scroll / generic scroll,1199,PLACEHOLDER,unmatched->placeholder
+799,objects,spellbook / generic spellbook,1199,PLACEHOLDER,unmatched->placeholder
+800,objects,wand / generic wand,1199,PLACEHOLDER,unmatched->placeholder
+801,objects,coin / generic coin,1199,PLACEHOLDER,unmatched->placeholder
+802,objects,gem / generic gem,1199,PLACEHOLDER,unmatched->placeholder
+803,objects,large rock / generic large rock,1199,PLACEHOLDER,unmatched->placeholder
+804,objects,iron ball / generic iron ball,1199,PLACEHOLDER,unmatched->placeholder
+805,objects,iron chain / generic iron chain,1199,PLACEHOLDER,unmatched->placeholder
+806,objects,venom / generic venom,1199,PLACEHOLDER,unmatched->placeholder
+807,objects,arrow,395,arrow,full_name
+808,objects,runed arrow / elven arrow,396,runed arrow / elven arrow,full_name
+809,objects,crude arrow / orcish arrow,397,crude arrow / orcish arrow,full_name
+810,objects,silver arrow,398,silver arrow,full_name
+811,objects,bamboo arrow / ya,399,bamboo arrow / ya,full_name
+812,objects,crossbow bolt,400,crossbow bolt,full_name
+813,objects,dart,401,dart,full_name
+814,objects,throwing star / shuriken,402,throwing star / shuriken,full_name
+815,objects,boomerang,403,boomerang,full_name
+816,objects,spear,404,spear,full_name
+817,objects,runed spear / elven spear,405,runed spear / elven spear,full_name
+818,objects,crude spear / orcish spear,406,crude spear / orcish spear,full_name
+819,objects,stout spear / dwarvish spear,407,stout spear / dwarvish spear,full_name
+820,objects,silver spear,408,silver spear,full_name
+821,objects,throwing spear / javelin,409,throwing spear / javelin,full_name
+822,objects,trident,410,trident,full_name
+823,objects,dagger,411,dagger,full_name
+824,objects,runed dagger / elven dagger,412,runed dagger / elven dagger,full_name
+825,objects,crude dagger / orcish dagger,413,crude dagger / orcish dagger,full_name
+826,objects,silver dagger,414,silver dagger,full_name
+827,objects,athame,415,athame,full_name
+828,objects,scalpel,416,scalpel,full_name
+829,objects,knife,417,knife,full_name
+830,objects,stiletto,418,stiletto,full_name
+831,objects,worm tooth,419,worm tooth,full_name
+832,objects,crysknife,420,crysknife,full_name
+833,objects,axe,421,axe,full_name
+834,objects,double-headed axe / battle-axe,422,double-headed axe / battle-axe,full_name
+835,objects,short sword,423,short sword,full_name
+836,objects,runed short sword / elven short sword,424,runed short sword / elven short sword,full_name
+837,objects,crude short sword / orcish short sword,425,crude short sword / orcish short sword,full_name
+838,objects,broad short sword / dwarvish short sword,426,broad short sword / dwarvish short sword,full_name
+839,objects,curved sword / scimitar,427,curved sword / scimitar,full_name
+840,objects,silver saber,428,silver saber,full_name
+841,objects,broadsword,429,broadsword,full_name
+842,objects,runed broadsword / elven broadsword,430,runed broadsword / elven broadsword,full_name
+843,objects,long sword,431,long sword,full_name
+844,objects,two-handed sword,432,two-handed sword,full_name
+845,objects,samurai sword / katana,433,samurai sword / katana,full_name
+846,objects,long samurai sword / tsurugi,434,long samurai sword / tsurugi,full_name
+847,objects,runed broadsword / runesword,435,runed broadsword / runesword,full_name
+848,objects,vulgar polearm / partisan,436,vulgar polearm / partisan,full_name
+849,objects,hilted polearm / ranseur,437,hilted polearm / ranseur,full_name
+850,objects,forked polearm / spetum,438,forked polearm / spetum,full_name
+851,objects,single-edged polearm / glaive,439,single-edged polearm / glaive,full_name
+852,objects,angled poleaxe / halberd,441,angled poleaxe / halberd,full_name
+853,objects,long poleaxe / bardiche,442,long poleaxe / bardiche,full_name
+854,objects,pole cleaver / voulge,443,pole cleaver / voulge,full_name
+855,objects,pole sickle / fauchard,445,pole sickle / fauchard,full_name
+856,objects,pruning hook / guisarme,446,pruning hook / guisarme,full_name
+857,objects,hooked polearm / bill-guisarme,447,hooked polearm / bill-guisarme,full_name
+858,objects,pronged polearm / lucern hammer,448,pronged polearm / lucern hammer,full_name
+859,objects,beaked polearm / bec de corbin,449,beaked polearm / bec de corbin,full_name
+860,objects,broad pick / dwarvish mattock,444,broad pick / dwarvish mattock,full_name
+861,objects,lance,440,lance,full_name
+862,objects,mace,450,mace,full_name
+863,objects,silver mace,1199,PLACEHOLDER,unmatched->placeholder
+864,objects,morning star,451,morning star,full_name
+865,objects,war hammer,452,war hammer,full_name
+866,objects,club,453,club,full_name
+867,objects,rubber hose,454,rubber hose,full_name
+868,objects,staff / quarterstaff,455,staff / quarterstaff,full_name
+869,objects,thonged club / aklys,456,thonged club / aklys,full_name
+870,objects,flail,457,flail,full_name
+871,objects,bullwhip,458,bullwhip,full_name
+872,objects,bow,459,bow,full_name
+873,objects,runed bow / elven bow,460,runed bow / elven bow,full_name
+874,objects,crude bow / orcish bow,461,crude bow / orcish bow,full_name
+875,objects,long bow / yumi,462,long bow / yumi,full_name
+876,objects,sling,463,sling,full_name
+877,objects,crossbow,464,crossbow,full_name
+878,objects,leather hat / elven leather helm,465,leather hat / elven leather helm,full_name
+879,objects,iron skull cap / orcish helm,466,iron skull cap / orcish helm,full_name
+880,objects,hard hat / dwarvish iron helm,467,hard hat / dwarvish iron helm,full_name
+881,objects,fedora,468,fedora,full_name
+882,objects,conical hat / cornuthaum,469,conical hat / cornuthaum,full_name
+883,objects,conical hat / dunce cap,470,conical hat / dunce cap,full_name
+884,objects,dented pot,471,dented pot,full_name
+885,objects,crystal helmet / helm of brilliance,1199,PLACEHOLDER,unmatched->placeholder
+886,objects,plumed helmet / helmet,472,plumed helmet / helmet,full_name
+887,objects,etched helmet / helm of caution,1199,PLACEHOLDER,unmatched->placeholder
+888,objects,crested helmet / helm of opposite alignment,474,crested helmet / helm of opposite alignment,full_name
+889,objects,visored helmet / helm of telepathy,475,visored helmet / helm of telepathy,full_name
+890,objects,gray dragon scale mail,476,gray dragon scale mail,full_name
+891,objects,gold dragon scale mail,1199,PLACEHOLDER,unmatched->placeholder
+892,objects,silver dragon scale mail,477,silver dragon scale mail,full_name
+893,objects,shimmering dragon scale mail,478,shimmering dragon scale mail,full_name
+894,objects,red dragon scale mail,479,red dragon scale mail,full_name
+895,objects,white dragon scale mail,480,white dragon scale mail,full_name
+896,objects,orange dragon scale mail,481,orange dragon scale mail,full_name
+897,objects,black dragon scale mail,482,black dragon scale mail,full_name
+898,objects,blue dragon scale mail,483,blue dragon scale mail,full_name
+899,objects,green dragon scale mail,484,green dragon scale mail,full_name
+900,objects,yellow dragon scale mail,485,yellow dragon scale mail,full_name
+901,objects,gray dragon scales,486,gray dragon scales,full_name
+902,objects,gold dragon scales,1199,PLACEHOLDER,unmatched->placeholder
+903,objects,silver dragon scales,487,silver dragon scales,full_name
+904,objects,shimmering dragon scales,488,shimmering dragon scales,full_name
+905,objects,red dragon scales,489,red dragon scales,full_name
+906,objects,white dragon scales,490,white dragon scales,full_name
+907,objects,orange dragon scales,491,orange dragon scales,full_name
+908,objects,black dragon scales,492,black dragon scales,full_name
+909,objects,blue dragon scales,493,blue dragon scales,full_name
+910,objects,green dragon scales,494,green dragon scales,full_name
+911,objects,yellow dragon scales,495,yellow dragon scales,full_name
+912,objects,plate mail,496,plate mail,full_name
+913,objects,crystal plate mail,497,crystal plate mail,full_name
+914,objects,bronze plate mail,498,bronze plate mail,full_name
+915,objects,splint mail,499,splint mail,full_name
+916,objects,banded mail,500,banded mail,full_name
+917,objects,dwarvish mithril-coat,501,dwarvish mithril-coat,full_name
+918,objects,elven mithril-coat,502,elven mithril-coat,full_name
+919,objects,chain mail,503,chain mail,full_name
+920,objects,crude chain mail / orcish chain mail,504,crude chain mail / orcish chain mail,full_name
+921,objects,scale mail,505,scale mail,full_name
+922,objects,studded leather armor,506,studded leather armor,full_name
+923,objects,ring mail,507,ring mail,full_name
+924,objects,crude ring mail / orcish ring mail,508,crude ring mail / orcish ring mail,full_name
+925,objects,leather armor,509,leather armor,full_name
+926,objects,leather jacket,510,leather jacket,full_name
+927,objects,Hawaiian shirt,511,Hawaiian shirt,full_name
+928,objects,T-shirt,512,T-shirt,full_name
+929,objects,mummy wrapping,513,mummy wrapping,full_name
+930,objects,faded pall / elven cloak,514,faded pall / elven cloak,full_name
+931,objects,coarse mantelet / orcish cloak,515,coarse mantelet / orcish cloak,full_name
+932,objects,hooded cloak / dwarvish cloak,516,hooded cloak / dwarvish cloak,full_name
+933,objects,slippery cloak / oilskin cloak,517,slippery cloak / oilskin cloak,full_name
+934,objects,robe,518,robe,full_name
+935,objects,apron / alchemy smock,519,apron / alchemy smock,full_name
+936,objects,leather cloak,520,leather cloak,full_name
+937,objects,tattered cape / cloak of protection,521,tattered cape / cloak of protection,full_name
+938,objects,opera cloak / cloak of invisibility,522,opera cloak / cloak of invisibility,full_name
+939,objects,ornamental cope / cloak of magic resistance,523,ornamental cope / cloak of magic resistance,full_name
+940,objects,piece of cloth / cloak of displacement,524,piece of cloth / cloak of displacement,full_name
+941,objects,wooden shield / small shield,525,small shield,slash_name
+942,objects,wooden shield / shield of drain resistance,1199,PLACEHOLDER,unmatched->placeholder
+943,objects,wooden shield / shield of shock resistance,1199,PLACEHOLDER,unmatched->placeholder
+944,objects,blue and green shield / elven shield,526,blue and green shield / elven shield,full_name
+945,objects,white-handed shield / Uruk-hai shield,527,white-handed shield / Uruk-hai shield,full_name
+946,objects,red-eyed shield / orcish shield,528,red-eyed shield / orcish shield,full_name
+947,objects,large shield,529,large shield,full_name
+948,objects,large round shield / dwarvish roundshield,530,large round shield / dwarvish roundshield,full_name
+949,objects,polished silver shield / shield of reflection,531,polished silver shield / shield of reflection,full_name
+950,objects,old gloves / leather gloves,532,old gloves / leather gloves,full_name
+951,objects,padded gloves / gauntlets of fumbling,533,padded gloves / gauntlets of fumbling,full_name
+952,objects,riding gloves / gauntlets of power,534,riding gloves / gauntlets of power,full_name
+953,objects,fencing gloves / gauntlets of dexterity,535,fencing gloves / gauntlets of dexterity,full_name
+954,objects,walking shoes / low boots,536,walking shoes / low boots,full_name
+955,objects,hard shoes / iron shoes,537,hard shoes / iron shoes,full_name
+956,objects,jackboots / high boots,538,jackboots / high boots,full_name
+957,objects,combat boots / speed boots,539,combat boots / speed boots,full_name
+958,objects,jungle boots / water walking boots,540,jungle boots / water walking boots,full_name
+959,objects,hiking boots / jumping boots,541,hiking boots / jumping boots,full_name
+960,objects,mud boots / elven boots,542,mud boots / elven boots,full_name
+961,objects,buckled boots / kicking boots,543,buckled boots / kicking boots,full_name
+962,objects,riding boots / fumble boots,544,riding boots / fumble boots,full_name
+963,objects,snow boots / levitation boots,545,snow boots / levitation boots,full_name
+964,objects,wooden / adornment,546,wooden / adornment,full_name
+965,objects,granite / gain strength,547,granite / gain strength,full_name
+966,objects,opal / gain constitution,548,opal / gain constitution,full_name
+967,objects,clay / increase accuracy,549,clay / increase accuracy,full_name
+968,objects,coral / increase damage,550,coral / increase damage,full_name
+969,objects,black onyx / protection,551,black onyx / protection,full_name
+970,objects,moonstone / regeneration,552,moonstone / regeneration,full_name
+971,objects,tiger eye / searching,553,tiger eye / searching,full_name
+972,objects,jade / stealth,554,jade / stealth,full_name
+973,objects,bronze / sustain ability,555,bronze / sustain ability,full_name
+974,objects,agate / levitation,556,agate / levitation,full_name
+975,objects,topaz / hunger,557,topaz / hunger,full_name
+976,objects,sapphire / aggravate monster,558,sapphire / aggravate monster,full_name
+977,objects,ruby / conflict,559,ruby / conflict,full_name
+978,objects,diamond / warning,560,diamond / warning,full_name
+979,objects,pearl / poison resistance,561,pearl / poison resistance,full_name
+980,objects,iron / fire resistance,562,iron / fire resistance,full_name
+981,objects,brass / cold resistance,563,brass / cold resistance,full_name
+982,objects,copper / shock resistance,564,copper / shock resistance,full_name
+983,objects,twisted / free action,565,twisted / free action,full_name
+984,objects,steel / slow digestion,566,steel / slow digestion,full_name
+985,objects,silver / teleportation,567,silver / teleportation,full_name
+986,objects,gold / teleport control,568,gold / teleport control,full_name
+987,objects,ivory / polymorph,569,ivory / polymorph,full_name
+988,objects,emerald / polymorph control,570,emerald / polymorph control,full_name
+989,objects,wire / invisibility,571,wire / invisibility,full_name
+990,objects,engagement / see invisible,572,engagement / see invisible,full_name
+991,objects,shiny / protection from shape changers,573,shiny / protection from shape changers,full_name
+992,objects,circular / amulet of ESP,574,circular / amulet of ESP,full_name
+993,objects,spherical / amulet of life saving,575,spherical / amulet of life saving,full_name
+994,objects,oval / amulet of strangulation,576,oval / amulet of strangulation,full_name
+995,objects,triangular / amulet of restful sleep,577,triangular / amulet of restful sleep,full_name
+996,objects,pyramidal / amulet versus poison,578,pyramidal / amulet versus poison,full_name
+997,objects,square / amulet of change,579,square / amulet of change,full_name
+998,objects,concave / amulet of unchanging,580,concave / amulet of unchanging,full_name
+999,objects,hexagonal / amulet of reflection,581,hexagonal / amulet of reflection,full_name
+1000,objects,octagonal / amulet of magical breathing,582,octagonal / amulet of magical breathing,full_name
+1001,objects,perforated / amulet of guarding,1199,PLACEHOLDER,unmatched->placeholder
+1002,objects,cubical / amulet of flying,1199,PLACEHOLDER,unmatched->placeholder
+1003,objects,Amulet of Yendor / cheap plastic imitation of the Amulet of Yendor,583,Amulet of Yendor / cheap plastic imitation of the Amulet of Yendor,full_name
+1004,objects,Amulet of Yendor / Amulet of Yendor,584,Amulet of Yendor / Amulet of Yendor,full_name
+1005,objects,large box,585,large box,full_name
+1006,objects,chest,586,chest,full_name
+1007,objects,ice box,587,ice box,full_name
+1008,objects,bag / sack,588,bag / sack,full_name
+1009,objects,bag / oilskin sack,589,bag / oilskin sack,full_name
+1010,objects,bag / bag of holding,590,bag / bag of holding,full_name
+1011,objects,bag / bag of tricks,591,bag / bag of tricks,full_name
+1012,objects,key / skeleton key,592,key / skeleton key,full_name
+1013,objects,lock pick,593,lock pick,full_name
+1014,objects,credit card,594,credit card,full_name
+1015,objects,candle / tallow candle,595,candle / tallow candle,full_name
+1016,objects,candle / wax candle,596,candle / wax candle,full_name
+1017,objects,brass lantern,597,brass lantern,full_name
+1018,objects,lamp / oil lamp,598,lamp / oil lamp,full_name
+1019,objects,lamp / magic lamp,599,lamp / magic lamp,full_name
+1020,objects,expensive camera,600,expensive camera,full_name
+1021,objects,looking glass / mirror,601,looking glass / mirror,full_name
+1022,objects,glass orb / crystal ball,602,glass orb / crystal ball,full_name
+1023,objects,lenses,603,lenses,full_name
+1024,objects,blindfold,604,blindfold,full_name
+1025,objects,towel,605,towel,full_name
+1026,objects,saddle,606,saddle,full_name
+1027,objects,leash,607,leash,full_name
+1028,objects,stethoscope,608,stethoscope,full_name
+1029,objects,tinning kit,609,tinning kit,full_name
+1030,objects,tin opener,610,tin opener,full_name
+1031,objects,can of grease,611,can of grease,full_name
+1032,objects,figurine,612,figurine,full_name
+1033,objects,magic marker,613,magic marker,full_name
+1034,objects,land mine,614,land mine,full_name
+1035,objects,beartrap,615,beartrap,full_name
+1036,objects,whistle / tin whistle,616,whistle / tin whistle,full_name
+1037,objects,whistle / magic whistle,617,whistle / magic whistle,full_name
+1038,objects,flute / wooden flute,618,flute / wooden flute,full_name
+1039,objects,flute / magic flute,619,flute / magic flute,full_name
+1040,objects,horn / tooled horn,620,horn / tooled horn,full_name
+1041,objects,horn / frost horn,621,horn / frost horn,full_name
+1042,objects,horn / fire horn,622,horn / fire horn,full_name
+1043,objects,horn / horn of plenty,623,horn / horn of plenty,full_name
+1044,objects,harp / wooden harp,624,harp / wooden harp,full_name
+1045,objects,harp / magic harp,625,harp / magic harp,full_name
+1046,objects,bell,626,bell,full_name
+1047,objects,bugle,627,bugle,full_name
+1048,objects,drum / leather drum,628,drum / leather drum,full_name
+1049,objects,drum / drum of earthquake,629,drum / drum of earthquake,full_name
+1050,objects,pick-axe,630,pick-axe,full_name
+1051,objects,grappling hook,1199,PLACEHOLDER,unmatched->placeholder
+1052,objects,unicorn horn,632,unicorn horn,full_name
+1053,objects,candelabrum / Candelabrum of Invocation,633,candelabrum / Candelabrum of Invocation,full_name
+1054,objects,silver bell / Bell of Opening,634,silver bell / Bell of Opening,full_name
+1055,objects,tripe ration,635,tripe ration,full_name
+1056,objects,corpse,636,corpse,full_name
+1057,objects,egg,637,egg,full_name
+1058,objects,meatball,638,meatball,full_name
+1059,objects,meat stick,639,meat stick,full_name
+1060,objects,enormous meatball,1199,PLACEHOLDER,unmatched->placeholder
+1061,objects,meat ring,641,meat ring,full_name
+1062,objects,glob of gray ooze,642,glob of gray ooze,full_name
+1063,objects,glob of brown pudding,643,glob of brown pudding,full_name
+1064,objects,glob of green slime,644,glob of green slime,full_name
+1065,objects,glob of black pudding,645,glob of black pudding,full_name
+1066,objects,kelp frond,646,kelp frond,full_name
+1067,objects,eucalyptus leaf,647,eucalyptus leaf,full_name
+1068,objects,apple,648,apple,full_name
+1069,objects,orange,649,orange,full_name
+1070,objects,pear,650,pear,full_name
+1071,objects,melon,651,melon,full_name
+1072,objects,banana,652,banana,full_name
+1073,objects,carrot,653,carrot,full_name
+1074,objects,sprig of wolfsbane,654,sprig of wolfsbane,full_name
+1075,objects,clove of garlic,655,clove of garlic,full_name
+1076,objects,slime mold,656,slime mold,full_name
+1077,objects,lump of royal jelly,657,lump of royal jelly,full_name
+1078,objects,cream pie,658,cream pie,full_name
+1079,objects,candy bar,659,candy bar,full_name
+1080,objects,fortune cookie,660,fortune cookie,full_name
+1081,objects,pancake,661,pancake,full_name
+1082,objects,lembas wafer,662,lembas wafer,full_name
+1083,objects,cram ration,663,cram ration,full_name
+1084,objects,food ration,664,food ration,full_name
+1085,objects,K-ration,665,K-ration,full_name
+1086,objects,C-ration,666,C-ration,full_name
+1087,objects,tin,667,tin,full_name
+1088,objects,ruby / gain ability,668,ruby / gain ability,full_name
+1089,objects,pink / restore ability,669,pink / restore ability,full_name
+1090,objects,orange / confusion,670,orange / confusion,full_name
+1091,objects,yellow / blindness,671,yellow / blindness,full_name
+1092,objects,emerald / paralysis,672,emerald / paralysis,full_name
+1093,objects,dark green / speed,673,dark green / speed,full_name
+1094,objects,cyan / levitation,674,cyan / levitation,full_name
+1095,objects,sky blue / hallucination,675,sky blue / hallucination,full_name
+1096,objects,brilliant blue / invisibility,676,brilliant blue / invisibility,full_name
+1097,objects,magenta / see invisible,677,magenta / see invisible,full_name
+1098,objects,purple-red / healing,678,purple-red / healing,full_name
+1099,objects,puce / extra healing,679,puce / extra healing,full_name
+1100,objects,milky / gain level,680,milky / gain level,full_name
+1101,objects,swirly / enlightenment,681,swirly / enlightenment,full_name
+1102,objects,bubbly / monster detection,682,bubbly / monster detection,full_name
+1103,objects,smoky / object detection,683,smoky / object detection,full_name
+1104,objects,cloudy / gain energy,684,cloudy / gain energy,full_name
+1105,objects,effervescent / sleeping,685,effervescent / sleeping,full_name
+1106,objects,black / full healing,686,black / full healing,full_name
+1107,objects,golden / polymorph,687,golden / polymorph,full_name
+1108,objects,brown / booze,688,brown / booze,full_name
+1109,objects,fizzy / sickness,689,fizzy / sickness,full_name
+1110,objects,dark / fruit juice,690,dark / fruit juice,full_name
+1111,objects,white / acid,691,white / acid,full_name
+1112,objects,murky / oil,692,murky / oil,full_name
+1113,objects,clear / water,693,clear / water,full_name
+1114,objects,ZELGO MER / enchant armor,694,ZELGO MER / enchant armor,full_name
+1115,objects,JUYED AWK YACC / destroy armor,695,JUYED AWK YACC / destroy armor,full_name
+1116,objects,NR 9 / confuse monster,696,NR 9 / confuse monster,full_name
+1117,objects,XIXAXA XOXAXA XUXAXA / scare monster,697,XIXAXA XOXAXA XUXAXA / scare monster,full_name
+1118,objects,PRATYAVAYAH / remove curse,698,PRATYAVAYAH / remove curse,full_name
+1119,objects,DAIYEN FOOELS / enchant weapon,699,DAIYEN FOOELS / enchant weapon,full_name
+1120,objects,LEP GEX VEN ZEA / create monster,700,LEP GEX VEN ZEA / create monster,full_name
+1121,objects,PRIRUTSENIE / taming,701,PRIRUTSENIE / taming,full_name
+1122,objects,ELBIB YLOH / genocide,702,ELBIB YLOH / genocide,full_name
+1123,objects,VERR YED HORRE / light,703,VERR YED HORRE / light,full_name
+1124,objects,VENZAR BORGAVVE / teleportation,704,VENZAR BORGAVVE / teleportation,full_name
+1125,objects,THARR / gold detection,705,THARR / gold detection,full_name
+1126,objects,YUM YUM / food detection,706,YUM YUM / food detection,full_name
+1127,objects,KERNOD WEL / identify,707,KERNOD WEL / identify,full_name
+1128,objects,ELAM EBOW / magic mapping,708,ELAM EBOW / magic mapping,full_name
+1129,objects,DUAM XNAHT / amnesia,709,DUAM XNAHT / amnesia,full_name
+1130,objects,ANDOVA BEGARIN / fire,710,ANDOVA BEGARIN / fire,full_name
+1131,objects,KIRJE / earth,711,KIRJE / earth,full_name
+1132,objects,VE FORBRYDERNE / punishment,712,VE FORBRYDERNE / punishment,full_name
+1133,objects,HACKEM MUCHE / charging,713,HACKEM MUCHE / charging,full_name
+1134,objects,VELOX NEB / stinking cloud,714,VELOX NEB / stinking cloud,full_name
+1135,objects,FOOBIE BLETCH,715,FOOBIE BLETCH,full_name
+1136,objects,TEMOV,716,TEMOV,full_name
+1137,objects,GARVEN DEH,717,GARVEN DEH,full_name
+1138,objects,READ ME,718,READ ME,full_name
+1139,objects,ETAOIN SHRDLU,719,ETAOIN SHRDLU,full_name
+1140,objects,LOREM IPSUM,720,LOREM IPSUM,full_name
+1141,objects,FNORD,721,FNORD,full_name
+1142,objects,KO BATE,722,KO BATE,full_name
+1143,objects,ABRA KA DABRA,723,ABRA KA DABRA,full_name
+1144,objects,ASHPD SODALG,724,ASHPD SODALG,full_name
+1145,objects,ZLORFIK,725,ZLORFIK,full_name
+1146,objects,GNIK SISI VLE,726,GNIK SISI VLE,full_name
+1147,objects,HAPAX LEGOMENON,727,HAPAX LEGOMENON,full_name
+1148,objects,EIRIS SAZUN IDISI,728,EIRIS SAZUN IDISI,full_name
+1149,objects,PHOL ENDE WODAN,729,PHOL ENDE WODAN,full_name
+1150,objects,GHOTI,730,GHOTI,full_name
+1151,objects,MAPIRO MAHAMA DIROMAT,731,MAPIRO MAHAMA DIROMAT,full_name
+1152,objects,VAS CORP BET MANI,732,VAS CORP BET MANI,full_name
+1153,objects,XOR OTA,733,XOR OTA,full_name
+1154,objects,STRC PRST SKRZ KRK,734,STRC PRST SKRZ KRK,full_name
+1155,objects,stamped / mail,735,stamped / mail,full_name
+1156,objects,unlabeled / blank paper,736,unlabeled / blank paper,full_name
+1157,objects,parchment / dig,737,parchment / dig,full_name
+1158,objects,vellum / magic missile,738,vellum / magic missile,full_name
+1159,objects,ragged / fireball,739,ragged / fireball,full_name
+1160,objects,dog eared / cone of cold,740,dog eared / cone of cold,full_name
+1161,objects,mottled / sleep,741,mottled / sleep,full_name
+1162,objects,stained / finger of death,742,stained / finger of death,full_name
+1163,objects,cloth / light,743,cloth / light,full_name
+1164,objects,leathery / detect monsters,744,leathery / detect monsters,full_name
+1165,objects,white / healing,745,white / healing,full_name
+1166,objects,pink / knock,746,pink / knock,full_name
+1167,objects,red / force bolt,747,red / force bolt,full_name
+1168,objects,orange / confuse monster,748,orange / confuse monster,full_name
+1169,objects,yellow / cure blindness,749,yellow / cure blindness,full_name
+1170,objects,velvet / drain life,750,velvet / drain life,full_name
+1171,objects,light green / slow monster,751,light green / slow monster,full_name
+1172,objects,dark green / wizard lock,752,dark green / wizard lock,full_name
+1173,objects,turquoise / create monster,753,turquoise / create monster,full_name
+1174,objects,cyan / detect food,754,cyan / detect food,full_name
+1175,objects,light blue / cause fear,755,light blue / cause fear,full_name
+1176,objects,dark blue / clairvoyance,756,dark blue / clairvoyance,full_name
+1177,objects,indigo / cure sickness,757,indigo / cure sickness,full_name
+1178,objects,magenta / charm monster,758,magenta / charm monster,full_name
+1179,objects,purple / haste self,759,purple / haste self,full_name
+1180,objects,violet / detect unseen,760,violet / detect unseen,full_name
+1181,objects,tan / levitation,761,tan / levitation,full_name
+1182,objects,plaid / extra healing,762,plaid / extra healing,full_name
+1183,objects,light brown / restore ability,763,light brown / restore ability,full_name
+1184,objects,dark brown / invisibility,764,dark brown / invisibility,full_name
+1185,objects,gray / detect treasure,765,gray / detect treasure,full_name
+1186,objects,wrinkled / remove curse,766,wrinkled / remove curse,full_name
+1187,objects,dusty / magic mapping,767,dusty / magic mapping,full_name
+1188,objects,bronze / identify,768,bronze / identify,full_name
+1189,objects,copper / turn undead,769,copper / turn undead,full_name
+1190,objects,silver / polymorph,770,silver / polymorph,full_name
+1191,objects,gold / teleport away,771,gold / teleport away,full_name
+1192,objects,glittering / create familiar,772,glittering / create familiar,full_name
+1193,objects,shining / cancellation,773,shining / cancellation,full_name
+1194,objects,dull / protection,774,dull / protection,full_name
+1195,objects,thin / jumping,775,thin / jumping,full_name
+1196,objects,thick / stone to flesh,776,thick / stone to flesh,full_name
+1197,objects,checkered / chain lightning,1199,PLACEHOLDER,unmatched->placeholder
+1198,objects,plain / blank paper,777,plain / blank paper,full_name
+1199,objects,paperback / novel,778,paperback / novel,full_name
+1200,objects,papyrus / Book of the Dead,779,papyrus / Book of the Dead,full_name
+1201,objects,glass / light,780,glass / light,full_name
+1202,objects,balsa / secret door detection,781,balsa / secret door detection,full_name
+1203,objects,crystal / enlightenment,782,crystal / enlightenment,full_name
+1204,objects,maple / create monster,783,maple / create monster,full_name
+1205,objects,pine / wishing,784,pine / wishing,full_name
+1206,objects,redwood / stasis,1199,PLACEHOLDER,unmatched->placeholder
+1207,objects,oak / nothing,785,oak / nothing,full_name
+1208,objects,ebony / striking,786,ebony / striking,full_name
+1209,objects,marble / make invisible,787,marble / make invisible,full_name
+1210,objects,tin / slow monster,788,tin / slow monster,full_name
+1211,objects,brass / speed monster,789,brass / speed monster,full_name
+1212,objects,copper / undead turning,790,copper / undead turning,full_name
+1213,objects,silver / polymorph,770,silver / polymorph,full_name
+1214,objects,platinum / cancellation,792,platinum / cancellation,full_name
+1215,objects,iridium / teleportation,793,iridium / teleportation,full_name
+1216,objects,zinc / opening,794,zinc / opening,full_name
+1217,objects,aluminum / locking,795,aluminum / locking,full_name
+1218,objects,uranium / probing,796,uranium / probing,full_name
+1219,objects,iron / digging,797,iron / digging,full_name
+1220,objects,steel / magic missile,798,steel / magic missile,full_name
+1221,objects,hexagonal / fire,799,hexagonal / fire,full_name
+1222,objects,short / cold,800,short / cold,full_name
+1223,objects,runed / sleep,801,runed / sleep,full_name
+1224,objects,long / death,802,long / death,full_name
+1225,objects,curved / lightning,803,curved / lightning,full_name
+1226,objects,forked,804,forked,full_name
+1227,objects,spiked,805,spiked,full_name
+1228,objects,jeweled,806,jeweled,full_name
+1229,objects,gold piece,807,gold piece,full_name
+1230,objects,white / dilithium crystal,808,white / dilithium crystal,full_name
+1231,objects,white / diamond,809,white / diamond,full_name
+1232,objects,red / ruby,810,red / ruby,full_name
+1233,objects,orange / jacinth,811,orange / jacinth,full_name
+1234,objects,blue / sapphire,812,blue / sapphire,full_name
+1235,objects,black / black opal,813,black / black opal,full_name
+1236,objects,green / emerald,814,green / emerald,full_name
+1237,objects,green / turquoise,815,green / turquoise,full_name
+1238,objects,yellow / citrine,816,yellow / citrine,full_name
+1239,objects,green / aquamarine,817,green / aquamarine,full_name
+1240,objects,yellowish brown / amber,818,yellowish brown / amber,full_name
+1241,objects,yellowish brown / topaz,819,yellowish brown / topaz,full_name
+1242,objects,black / jet,820,black / jet,full_name
+1243,objects,white / opal,821,white / opal,full_name
+1244,objects,yellow / chrysoberyl,822,yellow / chrysoberyl,full_name
+1245,objects,red / garnet,823,red / garnet,full_name
+1246,objects,violet / amethyst,824,violet / amethyst,full_name
+1247,objects,red / jasper,825,red / jasper,full_name
+1248,objects,violet / fluorite,826,violet / fluorite,full_name
+1249,objects,black / obsidian,827,black / obsidian,full_name
+1250,objects,orange / agate,828,orange / agate,full_name
+1251,objects,green / jade,829,green / jade,full_name
+1252,objects,white / worthless piece of white glass,830,white / worthless piece of white glass,full_name
+1253,objects,blue / worthless piece of blue glass,831,blue / worthless piece of blue glass,full_name
+1254,objects,red / worthless piece of red glass,832,red / worthless piece of red glass,full_name
+1255,objects,yellowish brown / worthless piece of yellowish brown glass,833,yellowish brown / worthless piece of yellowish brown glass,full_name
+1256,objects,orange / worthless piece of orange glass,834,orange / worthless piece of orange glass,full_name
+1257,objects,yellow / worthless piece of yellow glass,835,yellow / worthless piece of yellow glass,full_name
+1258,objects,black / worthless piece of black glass,836,black / worthless piece of black glass,full_name
+1259,objects,green / worthless piece of green glass,837,green / worthless piece of green glass,full_name
+1260,objects,violet / worthless piece of violet glass,838,violet / worthless piece of violet glass,full_name
+1261,objects,gray / luckstone,839,gray / luckstone,full_name
+1262,objects,gray / loadstone,840,gray / loadstone,full_name
+1263,objects,gray / touchstone,841,gray / touchstone,full_name
+1264,objects,gray / flint,842,gray / flint,full_name
+1265,objects,rock,843,rock,full_name
+1266,objects,boulder,844,boulder,full_name
+1267,objects,statue,845,statue,full_name
+1268,objects,heavy iron ball,846,heavy iron ball,full_name
+1269,objects,iron chain,847,iron chain,full_name
+1270,objects,splash of venom / splash of blinding venom,1199,PLACEHOLDER,unmatched->placeholder
+1271,objects,splash of venom / splash of acid venom,1199,PLACEHOLDER,unmatched->placeholder
+1272,other,stone,1199,PLACEHOLDER,unmatched->placeholder
+1273,other,main walls vertical,851,vertical wall,head_alias
+1274,other,main walls horizontal,852,horizontal wall,head_alias
+1275,other,main walls tlcorn,853,top left corner wall,head_alias
+1276,other,main walls trcorn,854,top right corner wall,head_alias
+1277,other,main walls blcorn,855,bottom left corner wall,head_alias
+1278,other,main walls brcorn,856,bottom right corner wall,head_alias
+1279,other,main walls cross wall,857,cross wall,head_alias
+1280,other,main walls tuwall,858,tuwall,head_alias
+1281,other,main walls tdwall,859,tdwall,head_alias
+1282,other,main walls tlwall,860,tlwall,head_alias
+1283,other,main walls trwall,861,trwall,head_alias
+1284,other,no door,862,no door,full_name
+1285,other,vertical open door,863,vertical open door,full_name
+1286,other,horizontal open door,864,horizontal open door,full_name
+1287,other,vertical closed door,865,vertical closed door,full_name
+1288,other,horizontal closed door,866,horizontal closed door,full_name
+1289,other,iron bars,867,iron bars,full_name
+1290,other,tree,868,tree,full_name
+1291,other,floor of a room,869,floor of a room,full_name
+1292,other,dark part of a room,850,dark part of a room,full_name
+1293,other,engraving in a room,1199,PLACEHOLDER,unmatched->placeholder
+1294,other,corridor,871,corridor,full_name
+1295,other,lit corridor,872,lit corridor,full_name
+1296,other,engraving in a corridor,1199,PLACEHOLDER,unmatched->placeholder
+1297,other,staircase up,873,staircase up,full_name
+1298,other,staircase down,874,staircase down,full_name
+1299,other,ladder up,875,ladder up,full_name
+1300,other,ladder down,876,ladder down,full_name
+1301,other,branch staircase up,1199,PLACEHOLDER,unmatched->placeholder
+1302,other,branch staircase down,1199,PLACEHOLDER,unmatched->placeholder
+1303,other,branch ladder up,1199,PLACEHOLDER,unmatched->placeholder
+1304,other,branch ladder down,1199,PLACEHOLDER,unmatched->placeholder
+1305,other,unaligned altar,877,altar,head_alias
+1306,other,chaotic altar,877,altar,head_alias
+1307,other,neutral altar,877,altar,head_alias
+1308,other,lawful altar,877,altar,head_alias
+1309,other,other altar,877,altar,head_alias
+1310,other,grave,878,grave,full_name
+1311,other,throne,879,throne,full_name
+1312,other,sink,880,sink,full_name
+1313,other,fountain,881,fountain,full_name
+1314,other,pool,882,pool,full_name
+1315,other,ice,883,ice,full_name
+1316,other,molten lava,884,molten lava,full_name
+1317,other,wall of lava,1199,PLACEHOLDER,unmatched->placeholder
+1318,other,vertical open drawbridge,885,vertical open drawbridge,full_name
+1319,other,horizontal open drawbridge,886,horizontal open drawbridge,full_name
+1320,other,vertical closed drawbridge,887,vertical closed drawbridge,full_name
+1321,other,horizontal closed drawbridge,888,horizontal closed drawbridge,full_name
+1322,other,air,889,air,full_name
+1323,other,cloud,890,cloud,full_name
+1324,other,water,891,water,full_name
+1325,other,arrow trap,892,arrow trap,full_name
+1326,other,dart trap,893,dart trap,full_name
+1327,other,falling rock trap,894,falling rock trap,full_name
+1328,other,squeaky board,895,squeaky board,full_name
+1329,other,bear trap,896,bear trap,full_name
+1330,other,land mine,897,land mine,full_name
+1331,other,rolling boulder trap,898,rolling boulder trap,full_name
+1332,other,sleeping gas trap,899,sleeping gas trap,full_name
+1333,other,rust trap,900,rust trap,full_name
+1334,other,fire trap,901,fire trap,full_name
+1335,other,pit,902,pit,full_name
+1336,other,spiked pit,903,spiked pit,full_name
+1337,other,hole,904,hole,full_name
+1338,other,trap door,905,trap door,full_name
+1339,other,teleportation trap,906,teleportation trap,full_name
+1340,other,level teleporter,907,level teleporter,full_name
+1341,other,magic portal,908,magic portal,full_name
+1342,other,web,909,web,full_name
+1343,other,statue trap,910,statue trap,full_name
+1344,other,magic trap,911,magic trap,full_name
+1345,other,anti-magic field,912,anti-magic field,full_name
+1346,other,polymorph trap,913,polymorph trap,full_name
+1347,other,vibrating square,914,vibrating square,full_name
+1348,other,trapped door,1199,PLACEHOLDER,unmatched->placeholder
+1349,other,trapped chest,1199,PLACEHOLDER,unmatched->placeholder
+1350,other,missile zap 1 0,1199,PLACEHOLDER,unmatched->placeholder
+1351,other,missile zap 1 1,1199,PLACEHOLDER,unmatched->placeholder
+1352,other,missile zap 1 2,1199,PLACEHOLDER,unmatched->placeholder
+1353,other,missile zap 1 3,1199,PLACEHOLDER,unmatched->placeholder
+1354,other,fire zap 2 0,1199,PLACEHOLDER,unmatched->placeholder
+1355,other,fire zap 2 1,1199,PLACEHOLDER,unmatched->placeholder
+1356,other,fire zap 2 2,1199,PLACEHOLDER,unmatched->placeholder
+1357,other,fire zap 2 3,1199,PLACEHOLDER,unmatched->placeholder
+1358,other,frost zap 3 0,1199,PLACEHOLDER,unmatched->placeholder
+1359,other,frost zap 3 1,1199,PLACEHOLDER,unmatched->placeholder
+1360,other,frost zap 3 2,1199,PLACEHOLDER,unmatched->placeholder
+1361,other,frost zap 3 3,1199,PLACEHOLDER,unmatched->placeholder
+1362,other,sleep zap 4 0,1199,PLACEHOLDER,unmatched->placeholder
+1363,other,sleep zap 4 1,1199,PLACEHOLDER,unmatched->placeholder
+1364,other,sleep zap 4 2,1199,PLACEHOLDER,unmatched->placeholder
+1365,other,sleep zap 4 3,1199,PLACEHOLDER,unmatched->placeholder
+1366,other,death zap 5 0,1199,PLACEHOLDER,unmatched->placeholder
+1367,other,death zap 5 1,1199,PLACEHOLDER,unmatched->placeholder
+1368,other,death zap 5 2,1199,PLACEHOLDER,unmatched->placeholder
+1369,other,death zap 5 3,1199,PLACEHOLDER,unmatched->placeholder
+1370,other,lightning zap 6 0,1199,PLACEHOLDER,unmatched->placeholder
+1371,other,lightning zap 6 1,1199,PLACEHOLDER,unmatched->placeholder
+1372,other,lightning zap 6 2,1199,PLACEHOLDER,unmatched->placeholder
+1373,other,lightning zap 6 3,1199,PLACEHOLDER,unmatched->placeholder
+1374,other,poison gas zap 7 0,1199,PLACEHOLDER,unmatched->placeholder
+1375,other,poison gas zap 7 1,1199,PLACEHOLDER,unmatched->placeholder
+1376,other,poison gas zap 7 2,1199,PLACEHOLDER,unmatched->placeholder
+1377,other,poison gas zap 7 3,1199,PLACEHOLDER,unmatched->placeholder
+1378,other,acid zap 8 0,1199,PLACEHOLDER,unmatched->placeholder
+1379,other,acid zap 8 1,1199,PLACEHOLDER,unmatched->placeholder
+1380,other,acid zap 8 2,1199,PLACEHOLDER,unmatched->placeholder
+1381,other,acid zap 8 3,1199,PLACEHOLDER,unmatched->placeholder
+1382,other,dig beam,919,dig beam,full_name
+1383,other,flash beam,920,flash beam,full_name
+1384,other,boom left,921,boom left,full_name
+1385,other,boom right,922,boom right,full_name
+1386,other,shield1,923,shield1,full_name
+1387,other,shield2,924,shield2,full_name
+1388,other,shield3,925,shield3,full_name
+1389,other,shield4,926,shield4,full_name
+1390,other,poison cloud,927,poison cloud,full_name
+1391,other,valid position,928,valid position,full_name
+1392,other,swallow top left,929,swallow top left,full_name
+1393,other,swallow top center,930,swallow top center,full_name
+1394,other,swallow top right,931,swallow top right,full_name
+1395,other,swallow middle left,932,swallow middle left,full_name
+1396,other,swallow middle right,933,swallow middle right,full_name
+1397,other,swallow bottom left,934,swallow bottom left ,head
+1398,other,swallow bottom center,935,swallow bottom center,full_name
+1399,other,swallow bottom right,936,swallow bottom right,full_name
+1400,other,explosion dark top left,1199,PLACEHOLDER,unmatched->placeholder
+1401,other,explosion dark top center,1199,PLACEHOLDER,unmatched->placeholder
+1402,other,explosion dark top right,1199,PLACEHOLDER,unmatched->placeholder
+1403,other,explosion dark middle left,1199,PLACEHOLDER,unmatched->placeholder
+1404,other,explosion dark middle center,1199,PLACEHOLDER,unmatched->placeholder
+1405,other,explosion dark middle right,1199,PLACEHOLDER,unmatched->placeholder
+1406,other,explosion dark bottom left,1199,PLACEHOLDER,unmatched->placeholder
+1407,other,explosion dark bottom center,1199,PLACEHOLDER,unmatched->placeholder
+1408,other,explosion dark bottom right,1199,PLACEHOLDER,unmatched->placeholder
+1409,other,explosion noxious top left,1199,PLACEHOLDER,unmatched->placeholder
+1410,other,explosion noxious top center,1199,PLACEHOLDER,unmatched->placeholder
+1411,other,explosion noxious top right,1199,PLACEHOLDER,unmatched->placeholder
+1412,other,explosion noxious middle left,1199,PLACEHOLDER,unmatched->placeholder
+1413,other,explosion noxious middle center,1199,PLACEHOLDER,unmatched->placeholder
+1414,other,explosion noxious middle right,1199,PLACEHOLDER,unmatched->placeholder
+1415,other,explosion noxious bottom left,1199,PLACEHOLDER,unmatched->placeholder
+1416,other,explosion noxious bottom center,1199,PLACEHOLDER,unmatched->placeholder
+1417,other,explosion noxious bottom right,1199,PLACEHOLDER,unmatched->placeholder
+1418,other,explosion muddy top left,1199,PLACEHOLDER,unmatched->placeholder
+1419,other,explosion muddy top center,1199,PLACEHOLDER,unmatched->placeholder
+1420,other,explosion muddy top right,1199,PLACEHOLDER,unmatched->placeholder
+1421,other,explosion muddy middle left,1199,PLACEHOLDER,unmatched->placeholder
+1422,other,explosion muddy middle center,1199,PLACEHOLDER,unmatched->placeholder
+1423,other,explosion muddy middle right,1199,PLACEHOLDER,unmatched->placeholder
+1424,other,explosion muddy bottom left,1199,PLACEHOLDER,unmatched->placeholder
+1425,other,explosion muddy bottom center,1199,PLACEHOLDER,unmatched->placeholder
+1426,other,explosion muddy bottom right,1199,PLACEHOLDER,unmatched->placeholder
+1427,other,explosion wet top left,1199,PLACEHOLDER,unmatched->placeholder
+1428,other,explosion wet top center,1199,PLACEHOLDER,unmatched->placeholder
+1429,other,explosion wet top right,1199,PLACEHOLDER,unmatched->placeholder
+1430,other,explosion wet middle left,1199,PLACEHOLDER,unmatched->placeholder
+1431,other,explosion wet middle center,1199,PLACEHOLDER,unmatched->placeholder
+1432,other,explosion wet middle right,1199,PLACEHOLDER,unmatched->placeholder
+1433,other,explosion wet bottom left,1199,PLACEHOLDER,unmatched->placeholder
+1434,other,explosion wet bottom center,1199,PLACEHOLDER,unmatched->placeholder
+1435,other,explosion wet bottom right,1199,PLACEHOLDER,unmatched->placeholder
+1436,other,explosion magical top left,1199,PLACEHOLDER,unmatched->placeholder
+1437,other,explosion magical top center,1199,PLACEHOLDER,unmatched->placeholder
+1438,other,explosion magical top right,1199,PLACEHOLDER,unmatched->placeholder
+1439,other,explosion magical middle left,1199,PLACEHOLDER,unmatched->placeholder
+1440,other,explosion magical middle center,1199,PLACEHOLDER,unmatched->placeholder
+1441,other,explosion magical middle right,1199,PLACEHOLDER,unmatched->placeholder
+1442,other,explosion magical bottom left,1199,PLACEHOLDER,unmatched->placeholder
+1443,other,explosion magical bottom center,1199,PLACEHOLDER,unmatched->placeholder
+1444,other,explosion magical bottom right,1199,PLACEHOLDER,unmatched->placeholder
+1445,other,explosion fiery top left,1199,PLACEHOLDER,unmatched->placeholder
+1446,other,explosion fiery top center,1199,PLACEHOLDER,unmatched->placeholder
+1447,other,explosion fiery top right,1199,PLACEHOLDER,unmatched->placeholder
+1448,other,explosion fiery middle left,1199,PLACEHOLDER,unmatched->placeholder
+1449,other,explosion fiery middle center,1199,PLACEHOLDER,unmatched->placeholder
+1450,other,explosion fiery middle right,1199,PLACEHOLDER,unmatched->placeholder
+1451,other,explosion fiery bottom left,1199,PLACEHOLDER,unmatched->placeholder
+1452,other,explosion fiery bottom center,1199,PLACEHOLDER,unmatched->placeholder
+1453,other,explosion fiery bottom right,1199,PLACEHOLDER,unmatched->placeholder
+1454,other,explosion frosty top left,1199,PLACEHOLDER,unmatched->placeholder
+1455,other,explosion frosty top center,1199,PLACEHOLDER,unmatched->placeholder
+1456,other,explosion frosty top right,1199,PLACEHOLDER,unmatched->placeholder
+1457,other,explosion frosty middle left,1199,PLACEHOLDER,unmatched->placeholder
+1458,other,explosion frosty middle center,1199,PLACEHOLDER,unmatched->placeholder
+1459,other,explosion frosty middle right,1199,PLACEHOLDER,unmatched->placeholder
+1460,other,explosion frosty bottom left,1199,PLACEHOLDER,unmatched->placeholder
+1461,other,explosion frosty bottom center,1199,PLACEHOLDER,unmatched->placeholder
+1462,other,explosion frosty bottom right,1199,PLACEHOLDER,unmatched->placeholder
+1463,other,warning 0,1032,warning 0,full_name
+1464,other,warning 1,1033,warning 1,full_name
+1465,other,warning 2,1034,warning 2,full_name
+1466,other,warning 3,1035,warning 3,full_name
+1467,other,warning 4,1036,warning 4,full_name
+1468,other,warning 5,1037,warning 5,full_name
+1469,other,unexplored,1199,PLACEHOLDER,unmatched->placeholder
+1470,other,nothing,1199,PLACEHOLDER,unmatched->placeholder
+1471,other,mines walls vertical,1038,sub mine walls 0,head_alias
+1472,other,mines walls horizontal,1039,sub mine walls 1,head_alias
+1473,other,mines walls tlcorn,1040,sub mine walls 2,head_alias
+1474,other,mines walls trcorn,1041,sub mine walls 3,head_alias
+1475,other,mines walls blcorn,1042,sub mine walls 4,head_alias
+1476,other,mines walls brcorn,1043,sub mine walls 5,head_alias
+1477,other,mines walls cross wall,1044,sub mine walls 6,head_alias
+1478,other,mines walls tuwall,1045,sub mine walls 7,head_alias
+1479,other,mines walls tdwall,1046,sub mine walls 8,head_alias
+1480,other,mines walls tlwall,1047,sub mine walls 9,head_alias
+1481,other,mines walls trwall,1048,sub mine walls 10,head_alias
+1482,other,gehennom walls vertical,1049,sub gehennom walls 0,head_alias
+1483,other,gehennom walls horizontal,1050,sub gehennom walls 1,head_alias
+1484,other,gehennom walls tlcorn,1051,sub gehennom walls 2,head_alias
+1485,other,gehennom walls trcorn,1052,sub gehennom walls 3,head_alias
+1486,other,gehennom walls blcorn,1053,sub gehennom walls 4,head_alias
+1487,other,gehennom walls brcorn,1054,sub gehennom walls 5,head_alias
+1488,other,gehennom walls cross wall,1055,sub gehennom walls 6,head_alias
+1489,other,gehennom walls tuwall,1056,sub gehennom walls 7,head_alias
+1490,other,gehennom walls tdwall,1057,sub gehennom walls 8,head_alias
+1491,other,gehennom walls tlwall,1058,sub gehennom walls 9,head_alias
+1492,other,gehennom walls trwall,1059,sub gehennom walls 10,head_alias
+1493,other,knox walls vertical,1060,sub knox walls 0,head_alias
+1494,other,knox walls horizontal,1061,sub knox walls 1,head_alias
+1495,other,knox walls tlcorn,1062,sub knox walls 2,head_alias
+1496,other,knox walls trcorn,1063,sub knox walls 3,head_alias
+1497,other,knox walls blcorn,1064,sub knox walls 4,head_alias
+1498,other,knox walls brcorn,1065,sub knox walls 5,head_alias
+1499,other,knox walls cross wall,1066,sub knox walls 6,head_alias
+1500,other,knox walls tuwall,1067,sub knox walls 7,head_alias
+1501,other,knox walls tdwall,1068,sub knox walls 8,head_alias
+1502,other,knox walls tlwall,1069,sub knox walls 9,head_alias
+1503,other,knox walls trwall,1070,sub knox walls 10,head_alias
+1504,other,sokoban walls vertical,1071,sub sokoban walls 0,head_alias
+1505,other,sokoban walls horizontal,1072,sub sokoban walls 1,head_alias
+1506,other,sokoban walls tlcorn,1073,sub sokoban walls 2,head_alias
+1507,other,sokoban walls trcorn,1074,sub sokoban walls 3,head_alias
+1508,other,sokoban walls blcorn,1075,sub sokoban walls 4,head_alias
+1509,other,sokoban walls brcorn,1076,sub sokoban walls 5,head_alias
+1510,other,sokoban walls cross wall,1077,sub sokoban walls 6,head_alias
+1511,other,sokoban walls tuwall,1078,sub sokoban walls 7,head_alias
+1512,other,sokoban walls tdwall,1079,sub sokoban walls 8,head_alias
+1513,other,sokoban walls tlwall,1080,sub sokoban walls 9,head_alias
+1514,other,sokoban walls trwall,1081,sub sokoban walls 10,head_alias

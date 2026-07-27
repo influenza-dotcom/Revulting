@@ -1,0 +1,11 @@
+--- /c/Users/dalla/Vulture/refs/nethack-3.6.6/src/cmd.c	2026-07-23 22:33:51.755100000 -0700
++++ /c/Users/dalla/Vulture/vulture-baseline/src/cmd.c	2026-07-23 22:30:36.575076000 -0700
+@@ -538,7 +538,7 @@
+     return 0;
+ }
+ 
+-#if defined(TTY_GRAPHICS) || defined(CURSES_GRAPHICS)
++#if defined(TTY_GRAPHICS) || defined(CURSES_GRAPHICS) || defined(VULTURE_GRAPHICS)
+ #define MAX_EXT_CMD 200 /* Change if we ever have more ext cmds */
+ 
+ /*

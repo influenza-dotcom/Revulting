@@ -1,0 +1,3 @@
+show_helpbar=1
+show_actionbar=1
+show_minimap=1

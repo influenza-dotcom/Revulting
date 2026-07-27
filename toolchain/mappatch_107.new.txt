@@ -1,0 +1,3 @@
+			"recenter_after_movement", "play_music", "play_effects",
+			"play_intro_video",
+			"fullscreen", "show_helpbar", "show_actionbar", "show_minimap",
