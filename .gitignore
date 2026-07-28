@@ -36,15 +36,16 @@
 *.stackdump
 /vulture5-win/src/GNUmakefile
 
-# Local runtime state that must never be committed - these carry a real
-# player's name, email and save data.
-*.nethackrc
-vulture.conf
-hearse.ini
-livelog
-xlogfile
-logfile
-record
-bon[A-Z]*
+# NOTE - a previous version of this file listed the player's runtime-state
+# filenames here (vulture.conf, livelog, record, bon[A-Z]*, ...) "for
+# safety".  That was a mistake that cost real files: git on Windows matches
+# ignore patterns CASE-INSENSITIVELY (core.ignorecase=true), so bon[A-Z]*
+# matched src/boneS.c, and the unanchored names matched legitimate tracked
+# paths like win/vulture/gamedata/config/vulture.conf - both were silently
+# excluded from the initial commit and were only recoverable because a copy
+# of the tree survived inside WSL.  The player's real runtime state lives
+# OUTSIDE this repo (ProgramData / AppData) or inside /VultureNetHack/,
+# which is already ignored as a whole - so no per-filename rules are needed,
+# and none should ever be re-added.
 *.bak
 *.prezoom
