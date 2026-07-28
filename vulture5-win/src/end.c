@@ -18,6 +18,29 @@ staticfn void done_intr(int);
 staticfn void done_hangup(int);
 # endif
 #endif
+#ifdef VULTURE_GRAPHICS
+/* win/vulture "RPG mode": extends the explore/wizard-mode "Die?" second
+ * chance to normal play, using the same savelife() path.  Answering y to
+ * "Die?" is a normal permadeath with bones, score list and Hearse upload.
+ *
+ * The governing option is no_permadeath=1 in the USER config,
+ * %APPDATA%\Vulture\vulture.conf - NOT the vulture.conf beside the exe:
+ * the user file is read last (it wins) and is rewritten on every exit, so
+ * once it exists the game-dir copy is only a template for new installs.
+ *
+ * Deliberate limits: a worn Amulet of Life Saving still fires FIRST and is
+ * consumed (the in-game mechanic keeps precedence), and GENOCIDED is not
+ * survivable in normal play (see the branch comment in done()).
+ *
+ * The accessor lives in the windowport (vulture_opt.cpp) because core code
+ * cannot see vulture_opts directly; every core object in the NetHackV
+ * target compiles with VULTURE_GRAPHICS (sys/windows GNUmakefile CFLAGSV),
+ * so this is absent from tty builds. */
+extern int vulture_no_permadeath(void);
+#else
+#define vulture_no_permadeath() 0
+#endif
+
 staticfn void disclose(int, boolean);
 staticfn void get_valuables(struct obj *) NO_NNARGS;
 staticfn void sort_valuables(struct valuable_data *, int);
@@ -1101,8 +1124,18 @@ done(int how)
             survive = TRUE;
         }
     }
-    /* explore and wizard modes offer player the option to keep playing */
-    if (!survive && (wizard || discover) && how <= GENOCIDED
+    /* explore and wizard modes offer player the option to keep playing;
+       the vulture windowport's no_permadeath option extends the same offer
+       to normal play ("Die? [yn]" - the default answer, n, survives).
+       GENOCIDED is deliberately excluded from the normal-play offer: even
+       the Amulet of Life Saving refuses that death ("Unfortunately you are
+       still genocided..." above), and the core treats surviving it as an
+       explore/wizard-only state (cf. timeout.c's Slimed comment) - the RPG
+       mode should not be strictly stronger than the game's own strongest
+       item. */
+    if (!survive && how <= GENOCIDED
+        && (wizard || discover
+            || (vulture_no_permadeath() && how != GENOCIDED))
 #ifdef HANGUPHANDLING
         /* if hangup has occurred, the only possible answer to a paranoid
            query is 'no'; we want 'no' as the default for "Die?" but can't

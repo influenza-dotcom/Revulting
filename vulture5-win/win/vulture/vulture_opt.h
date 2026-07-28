@@ -38,6 +38,10 @@ struct vulture_optstruct {
 	 * this is the integer factor its art is built at.  0 = auto: the largest
 	 * factor that fits on screen WITHOUT covering the message lines. */
 	int map_zoom;
+	/* "RPG mode": on death, offer the explore-mode "Die?" second chance in
+	 * normal play (savelife() revival on n).  Read by src/end.c through
+	 * vulture_no_permadeath().  0 = classic roguelike permadeath. */
+	int no_permadeath;
 	int fullscreen;
 	int show_helptb;
 	int show_actiontb;

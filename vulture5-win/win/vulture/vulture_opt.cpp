@@ -83,6 +83,8 @@ void vulture_read_main_config(FILE * fp)
 			vulture_opts.render_scale = atoi(param);
 		else if (!strncmp(configline, "map_zoom", optend - configline))
 			vulture_opts.map_zoom = atoi(param);
+		else if (!strncmp(configline, "no_permadeath", optend - configline))
+			vulture_opts.no_permadeath = (atoi(param) != 0);
 		else if (!strncmp(configline, "wall_style", optend - configline))
 		{
 			if (!strncmp(param, "full", 4))
@@ -283,6 +285,8 @@ void vulture_read_options(void)
 	vulture_opts.render_scale = 1;
 	/* 0 = auto-fit the overview map; see map::map() */
 	vulture_opts.map_zoom = 0;
+	/* classic permadeath unless the player opts out */
+	vulture_opts.no_permadeath = 0;
 	vulture_opts.fullscreen = 0;
 	vulture_opts.play_music = 0;
 	vulture_opts.play_effects = 0;
@@ -431,7 +435,7 @@ void vulture_write_userconfig(void)
 	fp = fopen(filename.c_str(), "rb");
 	if (fp) {
 		static const char *known_keys[] = {
-			"screen_xsize", "screen_ysize", "render_scale", "map_zoom",
+			"screen_xsize", "screen_ysize", "render_scale", "map_zoom", "no_permadeath",
 				"wall_style", "wall_opacity",
 			"recenter_after_movement", "play_music", "play_effects",
 			"play_intro_video",
@@ -484,6 +488,7 @@ void vulture_write_userconfig(void)
 		fprintf(fp, "screen_ysize=%d\n", vulture_opts.height);
 		fprintf(fp, "render_scale=%d\n", vulture_opts.render_scale);
 		fprintf(fp, "map_zoom=%d\n",     vulture_opts.map_zoom);
+		fprintf(fp, "no_permadeath=%d\n", vulture_opts.no_permadeath);
 		fprintf(fp, "fullscreen=%d\n",   vulture_opts.fullscreen);
 		fprintf(fp, "play_music=%d\n",   vulture_opts.play_music);
 		fprintf(fp, "play_effects=%d\n", vulture_opts.play_effects);
@@ -798,4 +803,9 @@ int vulture_iface_opts(void)
 	return 0;
 }
 
-
+/* C-callable accessor for src/end.c (core code cannot see vulture_opts:
+ * this header is C++).  Deliberately int, not bool - end.c is C. */
+extern "C" int vulture_no_permadeath(void)
+{
+	return vulture_opts.no_permadeath;
+}

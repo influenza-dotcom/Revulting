@@ -1117,6 +1117,67 @@ name/email/saves. NOTE: `VultureNetHack/tiles` is NOT tracked - the tracked
 master is `vulture5-win/win/vulture/gamedata/tiles`, and the two are currently
 kept in sync BY HAND.
 
+**No permadeath ("RPG mode") - vulture.conf no_permadeath.** User request:
+"i like nethack as an RPG game... remove the permadeath somehow. like, when i
+die, force quit the program and relaunch it or something?" The literal
+force-quit+recover design was REJECTED on evidence: with checkpointing on,
+the .0 state file is rewritten continuously (observed: same-second mtimes on
+.0 + current-level file), so crash-recovery would resurrect the player ~one
+turn before death - low HP, killer adjacent, a death loop, not a save reload.
+
+Instead the existing explore/wizard "Die? [yn]" second chance (end.c done(),
+savelife()) is extended to normal play: the branch gate becomes
+(wizard || discover || vulture_no_permadeath()). Default answer n = survive
+via savelife() (partial heal, 50+10*CON/2 HP, cures the killing condition,
+expels from engulfers, pulls out of lava); y = normal permadeath with bones,
+topten and Hearse. QUIT/ESCAPED/ASCENDED unaffected (how <= GENOCIDED=10;
+enum verified). Life-saving amulets still fire FIRST and are consumed.
+
+Plumbing: no_permadeath wired at the usual 5 points in vulture_opt.{h,cpp} +
+extern "C" accessor; end.c sees it via -DVULTURE_GRAPHICS (already on ALL
+NetHackV core objects via CFLAGSV - verified, so tty builds are untouched:
+they get a 0 macro). Linkage PROVEN: end.o shows U vulture_no_permadeath,
+vulture.o shows T, link rc=0. Set =1 in the live conf; shipped conf
+documents it and defaults 0. NOT runtime-tested - the user asked that the
+game no longer be launched for testing; first real death will be the test.
+The branch is byte-parallel to explore mode's, which is battle-tested.
+
+(*) BUILD-ORDER FIX uncovered by the clean rebuild: vulture_sdl.cpp includes
+date.h (build date in the window title) but 5.0 core stopped using date.h, so
+NOTHING generated it on a fresh checkout. $(VULTUREOBJ) now depends on
+$(INCL)/date.h.
+
+(*) (*) GITIGNORE INCIDENT (separate commit 0237548): the baseline commit had
+silently EXCLUDED src/bones.c and gamedata/config/vulture.conf - git on
+Windows matches .gitignore CASE-INSENSITIVELY (core.ignorecase=true), so
+bon[A-Z]* matched boneS.c and unanchored vulture.conf matched the tracked
+master. Discovered only because the first from-scratch build after the tree
+slim-down failed on the missing file; recovered from the WSL tree
+(/root/port/vulture5 - bones.c byte-identical to upstream) and the shipped
+package copy. Full 7147-file WSL-inventory x check-ignore sweep found no
+other source casualties. LESSONS: (1) never use [A-Z] classes or unanchored
+runtime-state names in .gitignore on Windows; (2) "N files committed" is not
+a completeness proof - only a from-scratch BUILD is; (3) the WSL tree at
+/root/port/{vulture5,nethack-5.0.0} remains a recovery source.
+
+(*) ADVERSARIAL REVIEW of the no_permadeath patch (3 lenses, pre-commit)
+found 1 blocker + 2 real issues; fixes applied before commit:
+  - BLOCKER (docs): %APPDATA%\Vultureulture.conf is rewritten on every
+    exit and read LAST, so it silently overrides the game-dir conf. A player
+    enabling no_permadeath only in the game-dir file would get an unexpected
+    PERMANENT death. Fixed with explicit warnings in the shipped conf + the
+    end.c header comment naming the winning file. (Shadowing is pre-existing
+    for all options; only the stakes are new.)
+  - GENOCIDED was survivable in normal play - STRONGER than the Amulet of
+    Life Saving, which refuses that death. Now excluded from the normal-play
+    offer (wizard/explore keep their historical behaviour).
+  - The new $(INCL)/date.h prerequisite armed a makedefs -v double-fire race
+    under make -j (two independent targets sharing one recipe). Rule is now
+    grouped (&:, GNU make 4.3+; toolchain has 4.4). Latent only - all
+    toolchain builds are serial.
+  Accepted as-is (precedented upstream): amulet fires before the free prompt
+  and is consumed; the prefix parser routes degenerate keys like 'no=1'.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

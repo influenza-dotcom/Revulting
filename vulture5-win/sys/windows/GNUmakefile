@@ -1008,7 +1008,11 @@ $(DAT)/data: $(U)makedefs.exe $(DAT)/data.base
 $(DAT)/oracles: $(U)makedefs.exe $(DAT)/oracles.txt
 	$< -h
 
-$(DAT)/options $(INCL)/date.h: $(U)makedefs.exe
+# Grouped (&:) on purpose: one 'makedefs -v' run produces BOTH files.  As
+# independent targets, a parallel build that wants both (dlb wants options,
+# the vulture sub-make wants date.h) would run the recipe twice concurrently
+# and can tear either output.  Requires GNU make 4.3+; this toolchain is 4.4.
+$(DAT)/options $(INCL)/date.h &: $(U)makedefs.exe
 	$< -v
 
 $(DAT)/porthelp: $(MSWSYS)/porthelp
@@ -1416,7 +1420,11 @@ $(GAMEDIR)/NetHackV.exe: $(NHVOBJS) $(DATEV_O) $(VULTUREOBJ) $(THEORAPLAYOBJ) \
 .PHONY: vulture-force
 vulture-force:
 
-$(VULTUREOBJ): vulture-force
+# $(INCL)/date.h: vulture_sdl.cpp puts the build date in the window title,
+# and the core stopped using date.h in 5.0 - so this sub-make is the ONLY
+# consumer and must say so, or a clean checkout fails to compile the port
+# before makedefs has ever run.
+$(VULTUREOBJ): vulture-force $(INCL)/date.h
 	$(MAKE) -C $(VULTUREDIR) VARIANT_NAME=nethack VARIANT_VERSION=3.6.0 \
 		BASECFLAGS="-Wall -g -DVULTURE_GRAPHICS -DWIN32 -include vulture_nh5compat.h"
 

@@ -1,0 +1,67 @@
+This folder holds the game plus its full source history.
+
+  VultureNetHack\   the game. Double-click NetHackV.exe to play.
+  .git\             complete history of the port's source code,
+                    build toolchain and engineering log.
+
+The source files are not checked out - only their history is kept, which
+is why this folder is ~123 MB instead of 866 MB.
+
+(History note: the original baseline commit silently MISSED two source
+files - git on Windows matches .gitignore case-insensitively, and two
+over-broad ignore rules swallowed src/bones.c and the master
+vulture.conf. Both were recovered from the old WSL build tree and
+committed on 2026-07-27, and the bad rules are gone. If you ever
+audit completeness again: compare against a full upstream file list,
+don't spot-check.)
+
+
+To get the source back
+----------------------
+Open a terminal here and run:
+
+    git checkout .
+
+That restores every tracked file: the NetHack 5.0.0 core, the Vulture
+windowport, the 2419 tile PNGs, the build scripts and
+IMPLEMENTATION_LOG.md. Run it again any time you want to make a change
+or rebuild the .exe.
+
+To put it away again afterwards, delete the restored folders
+(vulture5-win, toolchain, deliverables) and IMPLEMENTATION_LOG.md. The
+history in .git is untouched either way.
+
+Do NOT run "git add -A" or "git commit -a" while the source is checked
+out as deleted - that would record the deletion as a change and you
+would have to undo it before "git checkout ." worked again.
+
+
+Not kept
+--------
+These were deleted and are not in git. All are replaceable:
+
+  refs\             upstream NetHack clones (3.6.0/3.6.6/3.6.7/5.0.0) -
+                    re-clonable from github.com/NetHack/NetHack
+  vulture-baseline\ the original Vulture 3.6.6 - re-clonable; it was
+                    used to prove which bugs were version drift rather
+                    than porting mistakes
+  win-build\        intermediate build output
+  toolchain\msys2-installer.exe  re-downloadable from msys2.org
+  shots\            development screenshots
+
+
+Rebuilding the .exe
+-------------------
+Needs MSYS2 with the mingw-w64 toolchain. After "git checkout .":
+
+    MSYSTEM=MINGW64 /c/msys64/usr/bin/bash.exe -lc "bash /c/Users/dalla/Vulture/toolchain/finalize_exe.sh"
+
+That rebuilds and copies NetHackV.exe into VultureNetHack\.
+
+Note: the toolchain hardcodes C:\Users\dalla paths in 17 files, so it
+builds on this PC but is not yet portable to another machine.
+
+Also note: VultureNetHack\tiles is NOT tracked by git. The tracked
+master copy is vulture5-win\win\vulture\gamedata\tiles, and the two are
+kept in sync by hand - finalize_exe.sh copies only the .exe, so a tile
+edited in one place and not the other will not ship.
