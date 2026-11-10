@@ -815,6 +815,15 @@ char vulture_yn_function(const char *ques, const char *choices, char defchoice)
 	window *win;
 	char response;
 
+	/* Drop keypresses already queued before the question existed - mostly
+	 * auto-repeat from the movement key that bumped into a locked door or
+	 * box.  They were typed for the map, not as answers to this prompt.
+	 * (Vulture's own eventstack autoresponses are separate and unaffected.) */
+	if (choices) {
+		SDL_PumpEvents();
+		SDL_FlushEvent(SDL_KEYDOWN);
+	}
+
 	/* a save: yes/no or ring: right/left question  */
 	if (choices)
 		/* pass defchoice through (was a hardwired 0): choicedialog makes

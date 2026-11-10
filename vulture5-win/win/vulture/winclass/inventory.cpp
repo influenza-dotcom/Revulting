@@ -585,8 +585,13 @@ inventory::handle_keydown_event(window *target, void *result, int sym,
             return V_EVENT_HANDLED_REDRAW;
         }
 
-        /* try to match the key to an accelerator */
-        std::vector<window *> targets_found(find_accel(key));
+        /* try to match the key to an accelerator.  key is 0 for every key
+         * that types no character (Shift, numpad, arrows, F-keys), and
+         * find_accel(0) matches every child - their group_accelerator is
+         * '\0' - so a stray Shift toggled the whole grid, or in a PICK_ONE
+         * menu chose the first item.  Same defect as choicedialog.cpp. */
+        std::vector<window *> targets_found(
+            key ? find_accel(key) : std::vector<window *>());
         for (std::vector<window *>::iterator target = targets_found.begin();
              target != targets_found.end(); ++target) {
             select_option(static_cast<objitemwin *>(*target), -1);
@@ -674,7 +679,25 @@ inventory::layout()
         bottomoffset += (textheight + V_UI(14));
 
     for (item_iterator i = items.begin(); i != items.end(); ++i) {
-        if (!i->identifier)
+        /* Blank unselectable rows are spacers: in a text menu they are a
+         * gap, but this grid gives every row a full cell, so they showed up
+         * as empty boxes (e.g. 5.0.0's "Reroll this character?" menu, which
+         * adds "" lines between its choices, the inventory and the stats).
+         * Skip them; the layout below works from the cells actually
+         * created, so nothing else needs to know. */
+        if (!i->identifier && i->str.empty())
+            continue;
+        /* An unselectable row that still carries an object glyph is an item
+         * shown for information (the reroll menu's starting inventory), not
+         * a section heading: give it its icon.  The glyph already encodes
+         * the otyp, and vulture_object_to_tile() applies the same
+         * unidentified-appearance shuffle the map uses. */
+        if (!i->identifier && i->glyph != NO_GLYPH
+            && glyph_is_object(i->glyph))
+            new objheaderwin(this, i->str,
+                             vulture_object_to_tile(glyph_to_obj(i->glyph),
+                                                    -1, -1, NULL));
+        else if (!i->identifier)
             new objheaderwin(this, i->str);
         else
             new objitemwin(this, &(*i), i->str, i->accelerator,

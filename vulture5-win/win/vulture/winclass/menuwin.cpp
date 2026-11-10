@@ -273,8 +273,13 @@ menuwin::handle_keydown_event(window *target, void *result, int sym, int mod,
             break;
         }
 
-        /* try to match the key to an accelerator */
-        std::vector<window *> targets_found(scrollarea->find_accel(key));
+        /* try to match the key to an accelerator.  key is 0 for every key
+         * that types no character (Shift, numpad, arrows, F-keys), and
+         * find_accel(0) matches every option - their group_accelerator is
+         * '\0' - so a stray Shift toggled every entry, or in a PICK_ONE
+         * menu chose the first one.  Same defect as choicedialog.cpp. */
+        std::vector<window *> targets_found(
+            key ? scrollarea->find_accel(key) : std::vector<window *>());
         for (std::vector<window *>::iterator target = targets_found.begin();
              target != targets_found.end(); ++target) {
             select_option(static_cast<optionwin *>(*target),

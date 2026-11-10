@@ -113,7 +113,15 @@ choicedialog::handle_keydown_event(window *target, void *result, int sym,
         break;
 
     default:
-        if (find_accel((char) unicode).size() > 0) {
+        /* unicode is 0 for every key that does not type a character -
+         * numpad keys, arrows, Shift/Ctrl/Alt, F-keys.  Every child window
+         * has group_accelerator '\0', so find_accel(0) always matched and
+         * such a key "answered" the dialog with '\0'.  The core reads that
+         * as neither 'n' nor 'q': e.g. autounlock's "Check this door for a
+         * trap?" took it as YES and "Unlock it with your key?" as NO, so a
+         * repeating numpad key from walking into the door wrecked both
+         * prompts.  Only real characters may answer. */
+        if (unicode && find_accel((char) unicode).size() > 0) {
             *(char *) result = (char) unicode;
             return V_EVENT_HANDLED_FINAL;
         }

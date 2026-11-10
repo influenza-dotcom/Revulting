@@ -420,7 +420,14 @@ mapdata::set_glyph(int x, int y, int glyph)
             map_furniture = V_TILE_NONE;
             map_back =
                 vulture_tilemap_misc[glyph_to_cmap(back_to_glyph(x, y))];
-            if (map_special == V_TILE_NONE && glyph_to_cmap(glyph) == S_cloud
+            /* Gas-cloud regions.  3.6.6 drew every region as S_cloud; 5.0.0
+             * draws the damaging (stinking/poison) kind as S_poisoncloud and
+             * only harmless vapour as S_cloud (create_gas_cloud() in
+             * region.c).  Checking S_cloud alone meant a stinking cloud never
+             * got this overlay and just looked like unlit floor. */
+            if (map_special == V_TILE_NONE
+                && (glyph_to_cmap(glyph) == S_cloud
+                    || glyph_to_cmap(glyph) == S_poisoncloud)
                 && back_to_glyph(x, y) != glyph)
                 map_special = V_MISC_STINKING_CLOUD;
         }

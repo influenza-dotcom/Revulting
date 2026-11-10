@@ -1178,6 +1178,62 @@ found 1 blocker + 2 real issues; fixes applied before commit:
   Accepted as-is (precedented upstream): amulet fires before the free prompt
   and is consumed; the prefix parser routes degenerate keys like 'no=1'.
 
+## 30. Play-report fixes: clouds, stray keys, grid menus, ghosting (2026-11-09)
+
+All from user play reports; each compiled clean (MSYS2 MINGW64), shipped in
+the 2026-11-09 NetHackV.exe, NOT yet confirmed in play. Previous exe kept as
+VultureNetHack\NetHackV.exe.bak-2026-11-09.
+
+**Stinking clouds drew as unlit floor** (mapdata.cpp). The overlay test
+looked only for S_cloud. 5.0.0's create_gas_cloud() (region.c) uses
+S_poisoncloud for the damaging kind and S_cloud only for harmless vapour,
+so stinking clouds never got misc.STINKING_CLOUD and, since gas blocks
+sight, read as fog of war. Test now accepts both. (Harmless vapour shares
+the art - cosmetic.)
+
+**⭐Non-character keys answered dialogs** (choicedialog.cpp, menuwin.cpp,
+inventory.cpp). vulture_keysym_to_char() returns 0 for numpad, arrows,
+Shift/Ctrl/Alt, F-keys; every child window has group_accelerator '\0', so
+find_accel(0) matched EVERYTHING. In a choicedialog a held/repeating numpad
+key "answered" with '\0', which the core reads as neither 'n' nor 'q':
+autounlock's "Check this door for a trap?" took it as YES (search, no
+unlock) and "Unlock it with your key?" as NO - the user's "pressing no
+boots me out". In menus/grid, a stray Shift toggled every item or picked
+the first in PICK_ONE. All three lookups now ignore key 0 (anykeydialog
+already did). vulture_yn_function() also flushes queued SDL_KEYDOWNs before
+a choice dialog, so map-movement auto-repeat can't answer it. Config side:
+all character rcs now use autounlock:apply-key (untrap dropped) - one
+prompt per locked door/box.
+
+**Blank grid cells** (inventory.cpp). Unselectable rows with empty text are
+spacers (5.0.0's reroll menu adds two); the grid gave each a full empty
+cell. Skipped; layout counts created cells, so nothing else changes.
+
+**Unselectable item rows had no icon** (objheaderwin.{h,cpp},
+inventory.cpp). Every identifier-0 row became a centred heading. Rows that
+carry an object glyph (reroll menu's starting inventory) now draw like an
+item cell - icon via vulture_object_to_tile(glyph_to_obj()), which keeps
+the unidentified-appearance shuffle - but stay unselectable. No BUC
+tint/weight/letter: those need a struct obj, which these rows lack.
+
+**Ghosting / garbled text - BEST GUESS** (window.cpp). ~window() and hide()
+restored the saved background and refreshed it, but never invalidated the
+area, so nothing beneath repainted it. The snapshot is from when the popup
+opened; anything that changed while it was up stayed stale, and the
+translucent message window drew over - and saved as its own background -
+the stale pixels (old text through new). Both now vulture_invalidate_region
+the restored rect. Ruled out first: cursor/tooltip (drawn last, wiped
+before any window draws), levelwin (repaints the whole viewport every pass
+- the else-branch min/max widens the clip; unmapped/off-map diamonds tile
+the 112x44 grid gap-free, verified by simulating the real alpha mask),
+statuswin/toolbar (opaque repaint). If ghosting persists, get an F12
+screenshot - it saves vulture_screen itself.
+
+**Still open** (not touched): S_trapped_door / S_trapped_chest /
+S_vibrating_square / S_lavawall placeholders; vulture_getmsghistory /
+putmsghistory are //TODO stubs (Ctrl+P history lost on restore);
+SCALE_UI_DEFECTS.md inventory layout at render_scale=2; extmenu ignored.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -74,6 +74,15 @@ window::~window()
         && (!parent || parent->visible)) {
         vulture_put_img(abs_x, abs_y, background);
         vulture_refresh_region(abs_x, abs_y, abs_x + w, abs_y + h);
+        /* The saved background is a snapshot from when this window first
+         * drew.  Anything underneath that changed while it was up - new
+         * messages, a map update - is now covered by STALE pixels, and since
+         * nothing was told the area changed, nothing repainted it.  The
+         * translucent message window then drew over (and even saved as its
+         * own background) those stale pixels: old text bleeding through new
+         * text, ghost images left behind popups.  Mark the area invalid so
+         * the windows underneath repaint it on the next draw pass. */
+        vulture_invalidate_region(abs_x, abs_y, w, h);
     }
 
     /* make sure the background gets freed even if it doesn't get restored */
@@ -98,6 +107,9 @@ window::hide()
         vulture_refresh_region(abs_x, abs_y, abs_x + w, abs_y + h);
         SDL_FreeSurface(background);
         background = NULL;
+        /* same stale-snapshot problem as in ~window(): let the windows
+         * underneath repaint what was behind us */
+        vulture_invalidate_region(abs_x, abs_y, w, h);
     }
 
     visible = 0;
