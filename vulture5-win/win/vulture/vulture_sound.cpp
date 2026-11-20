@@ -63,6 +63,7 @@ void vulture_init_sound(void)
 	}
 
 	Mix_AllocateChannels(16); /* s74: footsteps + effects overlap */
+	Mix_ReserveChannels(6);   /* s88: 0 = speech, 1-5 = ambient loops */
 	Mix_VolumeMusic(MIX_MAX_VOLUME * 55 / 100); /* s74: quieter music */
 
 	/* Create the sound cache */
@@ -184,6 +185,11 @@ static void vulture_play_cd_track(std::string cdtrackname)
 }
 
 
+/* s88: stereo position for the next vulture_play_sound() */
+static int vsnd_pos_pending = 0;
+static Sint16 vsnd_ang = 0;
+static Uint8 vsnd_dist = 0;
+
 static void vulture_play_sound(std::string wavefilename)
 {
 	int i;
@@ -218,7 +224,18 @@ static void vulture_play_sound(std::string wavefilename)
 	}
 
 	/* Play sound */
-	Mix_PlayChannel(-1, chunk, 0);
+	{
+		int ch = Mix_PlayChannel(-1, chunk, 0);
+
+		/* s88: stereo position for vulture_sfx_at(); every other sound
+		 * clears any position a previous sound left on this channel */
+		if (ch >= 0) {
+			if (vsnd_pos_pending)
+				Mix_SetPosition(ch, vsnd_ang, vsnd_dist);
+			else
+				Mix_SetPosition(ch, 0, 0);
+		}
+	}
 }
 
 
@@ -379,4 +396,92 @@ extern "C" void vulture_sfx(const char *name)
 		return;
 	snprintf(file, sizeof file, "%s.wav", name);
 	vulture_play_sound(vulture_make_filename(V_SOUND_DIRECTORY, "", file));
+}
+
+/*
+ * IMPLEMENTATION_LOG s88: stereo.  A map offset from the hero (dx, dy) is
+ * turned into an angle the way the map is drawn on screen - isometric, and
+ * through the current view rotation - so "to the left on screen" is heard
+ * on the left.  0 = straight up the screen, 90 = right.  Distance: ~22 per
+ * square, 255 max.
+ */
+extern int vulture_view_rot;
+
+static void vsnd_dir(int dx, int dy, Sint16 *ang, Uint8 *dist)
+{
+	int a = dx, b = dy, r, t;
+	double sx, sy, deg, d;
+
+	for (r = (4 - (vulture_view_rot & 3)) & 3; r > 0; r--) {
+		t = a;
+		a = -b;
+		b = t;
+	}
+	sx = a - b;                 /* screen x per V_MAP_XMOD */
+	sy = (a + b) * 22.0 / 56.0; /* screen y, same units (YMOD/XMOD) */
+	deg = (sx == 0 && sy == 0) ? 0.0 : atan2(sx, -sy) * 180.0 / 3.14159265358979;
+	if (deg < 0)
+		deg += 360.0;
+	*ang = (Sint16) deg;
+	d = sqrt((double) (dx * dx + dy * dy)) * 22.0;
+	*dist = (Uint8) (d > 250.0 ? 250.0 : d);
+}
+
+/* a one-shot effect heard from map offset (dx, dy) relative to the hero */
+extern "C" void vulture_sfx_at(const char *name, int dx, int dy)
+{
+	char file[64];
+
+	if (!vulture_sound_inited || !vulture_opts.play_effects || !name)
+		return;
+	snprintf(file, sizeof file, "%s.wav", name);
+	vsnd_dir(dx, dy, &vsnd_ang, &vsnd_dist);
+	vsnd_pos_pending = 1;
+	vulture_play_sound(vulture_make_filename(V_SOUND_DIRECTORY, "", file));
+	vsnd_pos_pending = 0;
+}
+
+/*
+ * s88: environmental loops on reserved channels 1-5 (lava, water, fountain,
+ * sink, wind).  The game calls this every turn with the nearest known
+ * source of each kind; a loop fades in when one appears, follows it around
+ * the stereo field, and fades out when it's gone.
+ */
+#define VAMB_N 5
+static const char *const vamb_file[VAMB_N] = {
+	"amb_lava.wav", "amb_water.wav", "amb_fountain.wav", "amb_sink.wav",
+	"amb_wind.wav"
+};
+static const int vamb_vol[VAMB_N] = { 80, 55, 60, 50, 45 }; /* of 128 */
+static Mix_Chunk *vamb_chunk[VAMB_N];
+static int vamb_on[VAMB_N];
+
+extern "C" void vulture_ambient(int type, int present, int dx, int dy)
+{
+	int ch = 1 + type;
+	Sint16 ang;
+	Uint8 dist;
+
+	if (type < 0 || type >= VAMB_N || !vulture_sound_inited)
+		return;
+	if (!present || !vulture_opts.play_effects) {
+		if (vamb_on[type]) {
+			Mix_FadeOutChannel(ch, 900);
+			vamb_on[type] = 0;
+		}
+		return;
+	}
+	if (!vamb_chunk[type]) {
+		vamb_chunk[type] = Mix_LoadWAV(
+			vulture_make_filename(V_SOUND_DIRECTORY, "", vamb_file[type]).c_str());
+		if (!vamb_chunk[type])
+			return;
+		Mix_VolumeChunk(vamb_chunk[type], vamb_vol[type]);
+	}
+	vsnd_dir(dx, dy, &ang, &dist);
+	if (!vamb_on[type] || !Mix_Playing(ch)) {
+		Mix_FadeInChannel(ch, vamb_chunk[type], -1, 900);
+		vamb_on[type] = 1;
+	}
+	Mix_SetPosition(ch, ang, dist);
 }

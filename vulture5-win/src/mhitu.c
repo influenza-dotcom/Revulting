@@ -518,6 +518,7 @@ mattacku(struct monst *mtmp)
         extern void vulture_anim_attack(int, int, int, int);
 
         vulture_anim_attack(mtmp->mx, mtmp->my, u.ux, u.uy);
+        vulture_sfx_at("swish", mtmp->mx - u.ux, mtmp->my - u.uy); /* s88 */
     }
     if (Underwater && !is_swimmer(mtmp->data))
         return 0;

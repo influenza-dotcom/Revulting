@@ -2191,6 +2191,25 @@ screenshot, which its global key hook catches first).
   (roomno == NO_ROOM, accessible, seen) and the Plane of Air, as one
   translucent blue diamond per square.
 
+## 88. Stereo sound and environmental loops (2026-11-20)
+
+- Mixer channels: 0 speech (Piper), 1-5 ambient loops - reserved in
+  vulture_init_sound (Piper's own Mix_ReserveChannels(1) removed, it would
+  have undone this).
+- vsnd_dir(): a map offset from the hero -> stereo angle the way the map
+  is drawn (isometric, through vulture_view_rot), distance ~22/square.
+  vulture_sfx_at(name, dx, dy) plays a positioned one-shot; every other
+  sound clears any position left on its channel (Mix_SetPosition(ch,0,0)).
+  Used for: a monster swinging at you (swish, mattacku), a monster's
+  dropped item and a fresh corpse hitting the floor (drop).
+- Environmental loops (synth_amb.py, seamless crossfaded 4 s loops):
+  lava (rumble + thick bubbles), water (lapping), fountain (trickle),
+  sink (drips), wind.  vulture_qol_pass scans the 19x19 around the hero
+  each turn for the nearest SEEN square of each kind (no leaking unseen
+  lava) and calls vulture_ambient(type, present, dx, dy): fade in 0.9 s,
+  follow it in the stereo field, fade out when gone.  Wind: forest levels,
+  outside rooms.  Nothing while Deaf or Underwater.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

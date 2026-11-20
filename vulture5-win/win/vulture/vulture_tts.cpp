@@ -258,7 +258,8 @@ static bool pp_init(void)
 		if (!Mix_QuerySpec(&freq, &fmt, &chans))
 			return false; /* no audio device: nothing to speak with */
 	}
-	Mix_ReserveChannels(1); /* channel 0 is speech from now on */
+	/* channel 0 is speech: reserved (with the ambient loops' 1-5) in
+	   vulture_init_sound(), s88 */
 	InitializeCriticalSection(&pp_lock);
 	pp_wake = CreateEvent(NULL, FALSE, FALSE, NULL);
 	if (!pp_wake || !CreateThread(NULL, 0, pp_worker, NULL, 0, NULL))

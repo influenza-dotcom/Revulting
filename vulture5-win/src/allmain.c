@@ -712,6 +712,37 @@ vulture_qol_pass(void)
     llm_pet_name_pass(); /* s70: LLM name for an unnamed starting pet */
     llm_hero_quip_pass(); /* s76: the hero remarks on things */
 
+    /* s88: environmental loops - the nearest KNOWN (seen) lava, water,
+       fountain and sink within 9 squares, heard from its direction; wind
+       outdoors on forest levels.  Nothing while deaf or underwater. */
+    {
+        int best[4], bx[4], by[4], t, dx, dy;
+        boolean outdoors;
+
+        for (t = 0; t < 4; t++)
+            best[t] = 99, bx[t] = by[t] = 0;
+        if (!Deaf && !Underwater)
+            for (dx = -9; dx <= 9; dx++)
+                for (dy = -9; dy <= 9; dy++) {
+                    coordxy x = u.ux + dx, y = u.uy + dy;
+                    int d = max(abs(dx), abs(dy));
+
+                    if (!isok(x, y) || !levl[x][y].seenv)
+                        continue;
+                    t = is_lava(x, y) ? 0
+                        : is_pool(x, y) ? 1
+                        : IS_FOUNTAIN(levl[x][y].typ) ? 2
+                        : IS_SINK(levl[x][y].typ) ? 3 : -1;
+                    if (t >= 0 && d < best[t])
+                        best[t] = d, bx[t] = dx, by[t] = dy;
+                }
+        for (t = 0; t < 4; t++)
+            vulture_ambient(t, best[t] < 99, bx[t], by[t]);
+        outdoors = (!Deaf && !Underwater && svl.level.flags.arboreal
+                    && levl[u.ux][u.uy].roomno == NO_ROOM);
+        vulture_ambient(4, outdoors, 0, -3);
+    }
+
     /* s74: presentation - shake on damage, vignette refresh, music zone */
     {
         extern void vulture_screen_shake(int);
