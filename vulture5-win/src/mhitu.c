@@ -519,6 +519,9 @@ mattacku(struct monst *mtmp)
 
         vulture_anim_attack(mtmp->mx, mtmp->my, u.ux, u.uy);
         vulture_sfx_at("swish", mtmp->mx - u.ux, mtmp->my - u.uy); /* s88 */
+    } else if (!ranged && foundyou && !u.uswallow && !Deaf) {
+        /* s91: an attacker you can't see is still heard swinging */
+        vulture_sfx_at("swish", mtmp->mx - u.ux, mtmp->my - u.uy);
     }
     if (Underwater && !is_swimmer(mtmp->data))
         return 0;

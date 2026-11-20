@@ -743,6 +743,69 @@ vulture_qol_pass(void)
         vulture_ambient(4, outdoors, 0, -3);
     }
 
+    /* s91: monsters you can't see that moved within 9 squares are heard -
+       soft footsteps, or wingbeats for flyers - from their direction,
+       quieter with distance; the nearest two per turn.  Floaters, ghosts
+       and hidden or immobile monsters make no sound.  This says something
+       is moving nearby and roughly which way, not exactly where. */
+    {
+        static unsigned ids[64];
+        static coordxy px[64], py[64];
+        static int nids = 0;
+        static d_level lev = { -1, -1 };
+        unsigned nid[64];
+        coordxy nx[64], ny[64];
+        int nn = 0, k, heard[2], hd[2], h;
+        struct monst *m;
+
+        if (!on_level(&lev, &u.uz)) {
+            lev = u.uz;
+            nids = 0;
+        }
+        heard[0] = heard[1] = -1;
+        hd[0] = hd[1] = 99;
+        for (m = fmon; m && nn < 64; m = m->nmon) {
+            int d;
+
+            if (DEADMONSTER(m))
+                continue;
+            d = distmin(u.ux, u.uy, m->mx, m->my);
+            if (d > 9)
+                continue;
+            nid[nn] = m->m_id, nx[nn] = m->mx, ny[nn] = m->my;
+            if (!Deaf && !Underwater && !canspotmon(m) && !m->mundetected
+                && !helpless(m) && !is_floater(m->data)
+                && !noncorporeal(m->data))
+                for (k = 0; k < nids; k++)
+                    if (ids[k] == m->m_id
+                        && (px[k] != m->mx || py[k] != m->my)) {
+                        if (d < hd[0]) {
+                            heard[1] = heard[0], hd[1] = hd[0];
+                            heard[0] = nn, hd[0] = d;
+                        } else if (d < hd[1]) {
+                            heard[1] = nn, hd[1] = d;
+                        }
+                        break;
+                    }
+            nn++;
+        }
+        for (h = 0; h < 2; h++)
+            if (heard[h] >= 0) {
+                struct monst *hm = m_at(nx[heard[h]], ny[heard[h]]);
+                static const char *const steps[4] = { "step1", "step2",
+                                                      "step3", "step4" };
+                int vol = 70 - hd[h] * 6;
+
+                vulture_sfx_at_vol(hm && is_flyer(hm->data) ? "flap"
+                                                            : steps[(int) ((svm.moves + nid[heard[h]]) & 3)],
+                                   nx[heard[h]] - u.ux, ny[heard[h]] - u.uy,
+                                   vol < 15 ? 15 : vol);
+            }
+        for (k = 0; k < nn; k++)
+            ids[k] = nid[k], px[k] = nx[k], py[k] = ny[k];
+        nids = nn;
+    }
+
     /* s74: presentation - shake on damage, vignette refresh, music zone */
     {
         extern void vulture_screen_shake(int);

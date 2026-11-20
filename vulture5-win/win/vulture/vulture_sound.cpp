@@ -190,6 +190,8 @@ static void vulture_play_cd_track(std::string cdtrackname)
 static int vsnd_pos_pending = 0;
 static Sint16 vsnd_ang = 0;
 static Uint8 vsnd_dist = 0;
+static int vsnd_vol_pending = -1; /* s91: per-sound channel volume */
+static int vsnd_muted = 0;        /* s91: window unfocused (s64) */
 
 static void vulture_play_sound(std::string wavefilename)
 {
@@ -235,6 +237,11 @@ static void vulture_play_sound(std::string wavefilename)
 				Mix_SetPosition(ch, vsnd_ang, vsnd_dist);
 			else
 				Mix_SetPosition(ch, 0, 0);
+			/* s91: channel volume for this sound (full unless asked),
+			 * kept at 0 while the window is in the background */
+			Mix_Volume(ch, vsnd_muted ? 0
+			               : vsnd_vol_pending >= 0 ? vsnd_vol_pending
+			               : MIX_MAX_VOLUME);
 		}
 	}
 }
@@ -247,7 +254,7 @@ static void vulture_play_sound(std::string wavefilename)
  * music volume across new plays, so nothing else has to know. */
 void vulture_focus_mute(int muted)
 {
-	static int is_muted = 0;
+	int &is_muted = vsnd_muted; /* s91: shared with vulture_play_sound */
 	int freq, chans;
 	Uint16 fmt;
 
@@ -500,4 +507,12 @@ extern "C" void vulture_music_silence(void)
 	Mix_FadeOutMusic(1200);
 	for (ch = 1; ch <= 5; ch++)
 		Mix_FadeOutChannel(ch, 1200);
+}
+
+/* s91: a positioned one-shot at a given volume (0-128) */
+extern "C" void vulture_sfx_at_vol(const char *name, int dx, int dy, int vol)
+{
+	vsnd_vol_pending = vol;
+	vulture_sfx_at(name, dx, dy);
+	vsnd_vol_pending = -1;
 }

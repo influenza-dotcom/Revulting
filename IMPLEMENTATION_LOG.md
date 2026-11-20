@@ -2226,6 +2226,20 @@ square under it; drawn only if that square is cansee() and lit
 (levl[].lit, or within range of a gl.light_base source).  90 motes now,
 since most are culled.
 
+## 91. Hearing monsters you can't see (2026-11-20)
+
+- mattacku: an unseen attacker (adjacent, attacking you, not swallowed,
+  not Deaf) is heard swinging from its direction (positioned swish).
+- vulture_qol_pass: monsters within 9 squares are tracked by m_id between
+  turns; ones you can't see that moved are heard - footsteps (step1-4,
+  picked from the turn number so the game RNG isn't touched) or wingbeats
+  for flyers (new flap.wav) - positioned, volume 70 - 6/square (min 15),
+  the nearest two per turn.  Silent: floaters, noncorporeal, hidden
+  (mundetected), helpless; nothing while Deaf/Underwater.
+- vulture_sfx_at_vol(): per-channel volume for a one-shot; every other
+  sound resets its channel to full volume, and the focus-mute flag is now
+  shared so a sound can't unmute a channel while alt-tabbed.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
