@@ -22,6 +22,7 @@ extern "C" {
 #include "vulture_opt.h"
 #include "vulture_tile.h"
 #include "vulture_win.h"
+#include "vulture_txt.h" /* s85: damage numbers */
 
 static int v_rot_door(int tile); /* s62 */
 
@@ -841,6 +842,425 @@ vanim_draw_death(int j, int i, int x, int y)
              (int) (255 * (1.0 - t * t)));
 }
 
+
+/*
+ * IMPLEMENTATION_LOG s85: Stoneshard-style combat feedback.
+ *  - Damage numbers: any visible monster that loses HP between frames
+ *    gets a number rising off it (white); the hero gets red ones when hurt
+ *    and green ones when healed.  Detected from HP changes, so every
+ *    damage source counts without hooking each one.
+ *  - Blood: a short spurt of particles with gravity on every hit.
+ *  - Swing arc: a pale crescent sweeps across the target during a lunge.
+ *  - Breathing: idle creatures (and the hero) breathe - a slow ~3% scale.
+ * The idle loop keeps these moving (vulture_idle_bob) while the map waits.
+ */
+#include <vector>
+
+struct vfx_ent {
+    int kind;                 /* 1 number, 2 blood */
+    int x, y;                 /* map square */
+    Uint32 t0, dur;
+    char txt[16];
+    Uint8 r, g, b;
+    float vx[10], vy[10];
+};
+static std::vector<vfx_ent> vfx_list;
+static std::map<unsigned, int> vfx_hp;
+static int vfx_hero_hp = -1, vfx_hero_poly = -1;
+static d_level vfx_lev = { -1, -1 };
+
+static void
+vfx_hit(int x, int y, int amount, Uint8 r, Uint8 g, Uint8 b, bool blood)
+{
+    vfx_ent e;
+    int k;
+
+    memset(&e, 0, sizeof e);
+    e.kind = 1, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = 900;
+    snprintf(e.txt, sizeof e.txt, amount < 0 ? "+%d" : "-%d",
+             amount < 0 ? -amount : amount);
+    e.r = r, e.g = g, e.b = b;
+    vfx_list.push_back(e);
+    if (!blood)
+        return;
+    memset(&e, 0, sizeof e);
+    e.kind = 2, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = 500;
+    for (k = 0; k < 10; k++) {
+        e.vx[k] = (float) (rand() % 140 - 70);
+        e.vy[k] = (float) (-(rand() % 110) - 40);
+    }
+    vfx_list.push_back(e);
+}
+
+/* compare HP with last frame; spawn numbers/blood for changes */
+static void
+vfx_scan(void)
+{
+    struct monst *m;
+    int hp = Upolyd ? u.mh : u.uhp, poly = Upolyd ? 1 : 0;
+
+    if (!on_level(&vfx_lev, &u.uz)) {
+        vfx_lev = u.uz;
+        vfx_hp.clear();
+        vfx_list.clear();
+        vfx_hero_hp = -1;
+    }
+    if (vfx_hero_hp >= 0 && poly == vfx_hero_poly && hp != vfx_hero_hp && hp > 0) {
+        if (hp < vfx_hero_hp)
+            vfx_hit(u.ux, u.uy, vfx_hero_hp - hp, 255, 70, 60, true);
+        else
+            vfx_hit(u.ux, u.uy, -(hp - vfx_hero_hp), 90, 230, 90, false);
+    }
+    vfx_hero_hp = hp, vfx_hero_poly = poly;
+    for (m = fmon; m; m = m->nmon) {
+        std::map<unsigned, int>::iterator it;
+
+        if (DEADMONSTER(m) || !canspotmon(m))
+            continue;
+        it = vfx_hp.find(m->m_id);
+        if (it != vfx_hp.end() && m->mhp < it->second)
+            vfx_hit(m->mx, m->my, it->second - m->mhp, 255, 245, 210,
+                    !noncorporeal(m->data));
+        vfx_hp[m->m_id] = m->mhp;
+    }
+}
+
+static bool
+vfx_alive(void)
+{
+    Uint32 now = SDL_GetTicks();
+    size_t i, n = 0;
+
+    for (i = 0; i < vfx_list.size(); i++)
+        if (now - vfx_list[i].t0 < vfx_list[i].dur)
+            vfx_list[n++] = vfx_list[i];
+    vfx_list.resize(n);
+    return n > 0;
+}
+
+static void
+vfx_square_screen(int j, int i, int cx, int cy, int vx, int vy, int *sx, int *sy)
+{
+    int va, vb;
+
+    v_rot(j - vx, i - vy, 4 - vulture_view_rot, &va, &vb);
+    *sx = cx + V_MAP_XMOD * (va - vb);
+    *sy = cy + V_MAP_YMOD * (va + vb);
+}
+
+/* a small filled square, clipped */
+static void
+vfx_dot(int x, int y, int sz, Uint32 col)
+{
+    SDL_Rect r;
+
+    r.x = x - sz / 2, r.y = y - sz / 2, r.w = sz, r.h = sz;
+    SDL_FillRect(vulture_screen, &r, col);
+}
+
+static void
+vfx_draw(int cx, int cy, int vx, int vy)
+{
+    Uint32 now = SDL_GetTicks();
+    size_t i;
+    int k, sx, sy;
+
+    /* swing arc across the target of a lunge */
+    if (vanim_kind == 1 && vanim_t > 0.3 && vanim_t < 0.9) {
+        double u = (vanim_t - 0.3) / 0.6, base, a;
+        int dx, dy;
+
+        vfx_square_screen(vanim_tx, vanim_ty, cx, cy, vx, vy, &sx, &sy);
+        vtw_proj(vanim_tx - vanim_ax, vanim_ty - vanim_ay, &dx, &dy);
+        base = atan2((double) dy, (double) dx);
+        for (k = 0; k <= 14; k++) {
+            double f = k / 14.0;
+
+            if (f > u)
+                break;
+            a = base - 1.1 + 2.2 * f;
+            vfx_dot(sx + (int) (30 * cos(a)), sy - 26 + (int) (18 * sin(a)),
+                    2 + (int) (4 * sin(3.14159265358979 * f) * (1.0 - u * 0.5)),
+                    SDL_MapRGB(vulture_screen->format, 255, 250, 225));
+        }
+    }
+
+    for (i = 0; i < vfx_list.size(); i++) {
+        vfx_ent &e = vfx_list[i];
+        double age = (double) (now - e.t0) / e.dur, ts = (now - e.t0) / 1000.0;
+
+        if (age >= 1.0)
+            continue;
+        vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
+        if (e.kind == 1) {
+            int ty = sy - 62 - (int) (34 * (1.0 - (1.0 - age) * (1.0 - age)));
+            int w = vulture_text_length(V_FONT_LARGE, e.txt);
+            double dim = age < 0.6 ? 1.0 : 1.0 - (age - 0.6) / 0.4;
+
+            vulture_put_text_shadow(V_FONT_LARGE, e.txt, vulture_screen,
+                                    sx - w / 2, ty,
+                                    SDL_MapRGB(vulture_screen->format,
+                                               (Uint8) (e.r * dim), (Uint8) (e.g * dim),
+                                               (Uint8) (e.b * dim)),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        } else if (e.kind == 2) {
+            Uint32 col = SDL_MapRGB(vulture_screen->format, 150, 10, 10);
+
+            for (k = 0; k < 10; k++) {
+                int px = sx + (int) (e.vx[k] * ts);
+                int py = sy - 30 + (int) (e.vy[k] * ts + 0.5 * 420.0 * ts * ts);
+
+                vfx_dot(px, py, age < 0.6 ? 3 : 2, col);
+            }
+        }
+    }
+}
+
+/* idle breathing: ~3% vertical, out of phase per creature */
+static void
+vfx_breathe(int j, int i, double *xs, double *ys)
+{
+    struct monst *m;
+    double ph, s;
+
+    if (u_at(j, i))
+        ph = 0.3;
+    else if ((m = m_at(j, i)) != 0 && canspotmon(m))
+        ph = m->m_id * 0.7;
+    else
+        return;
+    s = sin(SDL_GetTicks() / 1000.0 * 2.4 + ph);
+    *ys *= 1.0 + 0.03 * s;
+    *xs *= 1.0 - 0.015 * s;
+}
+
+
+/*
+ * IMPLEMENTATION_LOG s86: atmosphere (Brogue/Stoneshard-inspired).
+ *  - Light: every active light source the hero can see (lamps, candles,
+ *    glowing monsters, the hero's own light) and every visible lava square
+ *    adds a warm additive glow, sized by the source's range.
+ *  - Night: during real-world night (5.0's night(): the clock NetHack
+ *    already uses for werecreatures) the map is tinted a cool blue.
+ *  - Dust: a few motes drift slowly across the view.
+ *  - Monster panel: hostile monsters in view, nearest first, each with a
+ *    rough condition word.
+ * All drawn over the finished map, under the UI windows.
+ */
+static SDL_Surface *vw_glow = NULL, *vw_night = NULL, *vw_panel = NULL;
+
+static void
+vw_make_glow(void)
+{
+    int x, y, r = 64;
+
+    vw_glow = SDL_CreateRGBSurfaceWithFormat(0, r * 2, r * 2, 32,
+                                             SDL_PIXELFORMAT_ARGB8888);
+    if (!vw_glow)
+        return;
+    SDL_LockSurface(vw_glow);
+    for (y = 0; y < r * 2; y++) {
+        Uint32 *row = (Uint32 *) ((Uint8 *) vw_glow->pixels + y * vw_glow->pitch);
+
+        for (x = 0; x < r * 2; x++) {
+            double dx = (x - r) / (double) r, dy = (y - r) / (double) r;
+            double d = sqrt(dx * dx + dy * dy), a = 1.0 - d;
+
+            if (a < 0)
+                a = 0;
+            a = a * a;
+            row[x] = SDL_MapRGBA(vw_glow->format, (Uint8) (90 * a),
+                                 (Uint8) (55 * a), (Uint8) (18 * a), 255);
+        }
+    }
+    SDL_UnlockSurface(vw_glow);
+    SDL_SetSurfaceBlendMode(vw_glow, SDL_BLENDMODE_ADD);
+}
+
+static void
+vw_glow_at(int sx, int sy, int radius, double strength)
+{
+    SDL_Rect d;
+
+    if (!vw_glow)
+        vw_make_glow();
+    if (!vw_glow || radius <= 0)
+        return;
+    d.x = sx - radius, d.y = sy - radius * 6 / 10;
+    d.w = radius * 2, d.h = radius * 12 / 10; /* flattened: iso floor */
+    SDL_SetSurfaceColorMod(vw_glow, (Uint8) (255 * strength),
+                           (Uint8) (255 * strength), (Uint8) (255 * strength));
+    SDL_BlitScaled(vw_glow, NULL, vulture_screen, &d);
+}
+
+static void
+vw_draw(int cx, int cy, int vx, int vy, int x0, int y0, int w, int h)
+{
+    light_source *ls;
+    int j, i, sx, sy;
+    Uint32 now = SDL_GetTicks();
+
+    /* lava glow (flickers a little) */
+    for (i = 0; i < ROWNO; i++)
+        for (j = 1; j < COLNO; j++)
+            if (is_lava(j, i) && cansee(j, i)) {
+                vfx_square_screen(j, i, cx, cy, vx, vy, &sx, &sy);
+                if (sx < x0 - 80 || sy < y0 - 80 || sx > x0 + w + 80
+                    || sy > y0 + h + 80)
+                    continue;
+                vw_glow_at(sx, sy, 70,
+                           0.55 + 0.15 * sin(now / 300.0 + j * 1.3 + i * 0.7));
+            }
+    /* light sources */
+    for (ls = gl.light_base; ls; ls = ls->next) {
+        if (!isok(ls->x, ls->y) || ls->range <= 0
+            || !(cansee(ls->x, ls->y) || u_at(ls->x, ls->y)))
+            continue;
+        vfx_square_screen(ls->x, ls->y, cx, cy, vx, vy, &sx, &sy);
+        vw_glow_at(sx, sy - 10, 40 + ls->range * 38,
+                   0.75 + 0.08 * sin(now / 180.0 + ls->x));
+    }
+
+    /* night tint */
+    if (night()) {
+        if (!vw_night || vw_night->w != w || vw_night->h != h) {
+            if (vw_night)
+                SDL_FreeSurface(vw_night);
+            vw_night = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32,
+                                                      SDL_PIXELFORMAT_ARGB8888);
+            if (vw_night) {
+                SDL_FillRect(vw_night, NULL,
+                             SDL_MapRGBA(vw_night->format, 10, 20, 60, 255));
+                SDL_SetSurfaceBlendMode(vw_night, SDL_BLENDMODE_BLEND);
+                SDL_SetSurfaceAlphaMod(vw_night, 55);
+            }
+        }
+        if (vw_night) {
+            SDL_Rect d;
+
+            d.x = x0, d.y = y0, d.w = w, d.h = h;
+            SDL_BlitSurface(vw_night, NULL, vulture_screen, &d);
+        }
+    }
+
+    /* dust motes: deterministic drift from the clock, no state to keep */
+    for (i = 0; i < 36; i++) {
+        double t = now / 1000.0, seedx = (i * 7919) % 1000 / 1000.0,
+               seedy = (i * 104729) % 1000 / 1000.0;
+        int px = x0 + (int) (fmod(seedx * w + t * (6 + i % 5) + 30 * sin(t * 0.3 + i), w));
+        int py = y0 + (int) (fmod(seedy * h + t * (3 + i % 3) + 20 * cos(t * 0.25 + i), h));
+
+        vfx_dot(px, py, 1 + (i % 3 == 0),
+                SDL_MapRGB(vulture_screen->format, 120, 115, 100));
+    }
+
+    /* monster panel */
+    {
+        struct monst *m, *list[6];
+        int n = 0, k, row = 18, pw = 230, ph;
+        char line[BUFSZ];
+
+        for (m = fmon; m; m = m->nmon) {
+            if (DEADMONSTER(m) || m->mpeaceful || m->mtame || !canspotmon(m)
+                || !couldsee(m->mx, m->my))
+                continue;
+            if (n < 6) {
+                list[n++] = m;
+            } else {
+                int far = 0;
+
+                for (k = 1; k < 6; k++)
+                    if (distmin(u.ux, u.uy, list[k]->mx, list[k]->my)
+                        > distmin(u.ux, u.uy, list[far]->mx, list[far]->my))
+                        far = k;
+                if (distmin(u.ux, u.uy, m->mx, m->my)
+                    < distmin(u.ux, u.uy, list[far]->mx, list[far]->my))
+                    list[far] = m;
+            }
+        }
+        if (!n)
+            return;
+        ph = 26 + n * row;
+        if (!vw_panel || vw_panel->h != ph) {
+            if (vw_panel)
+                SDL_FreeSurface(vw_panel);
+            vw_panel = SDL_CreateRGBSurfaceWithFormat(0, pw, ph, 32,
+                                                      SDL_PIXELFORMAT_ARGB8888);
+            if (vw_panel) {
+                SDL_FillRect(vw_panel, NULL,
+                             SDL_MapRGBA(vw_panel->format, 0, 0, 0, 255));
+                SDL_SetSurfaceBlendMode(vw_panel, SDL_BLENDMODE_BLEND);
+                SDL_SetSurfaceAlphaMod(vw_panel, 130);
+            }
+        }
+        if (vw_panel) {
+            SDL_Rect d;
+
+            d.x = x0 + 12, d.y = y0 + h / 3, d.w = pw, d.h = ph;
+            SDL_BlitSurface(vw_panel, NULL, vulture_screen, &d);
+            vulture_put_text_shadow(V_FONT_SMALL, "Hostiles in view",
+                                    vulture_screen, d.x + 8, d.y + 5,
+                                    SDL_MapRGB(vulture_screen->format, 230, 200, 120),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+            for (k = 0; k < n; k++) {
+                int mx = list[k]->mhpmax > 0 ? list[k]->mhpmax : 1;
+                int pct = list[k]->mhp * 100 / mx;
+                const char *cond = pct >= 90 ? "unhurt" : pct >= 60 ? "scratched"
+                                   : pct >= 35 ? "wounded"
+                                   : pct >= 15 ? "badly hurt" : "near death";
+                Uint8 r = pct >= 60 ? 200 : pct >= 35 ? 230 : 255;
+                Uint8 g = pct >= 60 ? 220 : pct >= 35 ? 190 : 90;
+
+                snprintf(line, sizeof line, "%s - %s",
+                         pmname(list[k]->data, Mgender(list[k])), cond);
+                vulture_put_text_shadow(V_FONT_SMALL, line, vulture_screen,
+                                        d.x + 10, d.y + 24 + k * row,
+                                        SDL_MapRGB(vulture_screen->format, r, g, 120),
+                                        SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+            }
+        }
+    }
+}
+
+/* s86: F11 photo mode - the map without the interface, saved as a BMP in
+   %USERPROFILE%\Pictures\Revulting */
+#include <direct.h>
+#include <time.h>
+
+static void
+vw_photo(levelwin *lw)
+{
+    char dir[512], path[600];
+    const char *home = getenv("USERPROFILE");
+    SDL_Surface *shot;
+    SDL_Rect r;
+    time_t now = time(NULL);
+    struct tm *tmv = localtime(&now);
+
+    if (!home)
+        return;
+    snprintf(dir, sizeof dir, "%s\\Pictures", home);
+    (void) _mkdir(dir);
+    snprintf(dir, sizeof dir, "%s\\Pictures\\Revulting", home);
+    (void) _mkdir(dir);
+    snprintf(path, sizeof path, "%s\\shot-%04d%02d%02d-%02d%02d%02d.bmp", dir,
+             tmv->tm_year + 1900, tmv->tm_mon + 1, tmv->tm_mday, tmv->tm_hour,
+             tmv->tm_min, tmv->tm_sec);
+    lw->force_redraw();
+    lw->draw(); /* the map alone - the UI windows are drawn afterwards */
+    r.x = lw->abs_x, r.y = lw->abs_y, r.w = lw->w, r.h = lw->h;
+    shot = SDL_CreateRGBSurfaceWithFormat(0, r.w, r.h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (shot) {
+        SDL_BlitSurface(vulture_screen, &r, shot, NULL);
+        if (SDL_SaveBMP(shot, path) == 0)
+            pline("Photo saved: %s", path);
+        else
+            pline("Couldn't save the photo.");
+        SDL_FreeSurface(shot);
+    }
+    lw->force_redraw();
+}
+
 /*
  * IMPLEMENTATION_LOG s82: floating and flying monsters bob.  Floaters
  * (eyes, lights) drift slowly and hover a little above the floor; flyers
@@ -883,26 +1303,34 @@ vbob_wanted(void)
 }
 
 /* wait timeout for the input loop: shorter while something is bobbing */
+static Uint32 vidle_interval = 80; /* s85: grows if frames are slow */
+
 int
 vulture_idle_wait_ms(bool at_map)
 {
-    return (at_map && vbob_wanted()) ? 50 : 100;
+    nhUse(vbob_wanted);
+    return at_map ? 40 : 100;
 }
 
-/* one idle frame for the bobbing (called from the input loop) */
+/* one idle frame for bobbing, breathing and combat effects (called from
+   the input loop while the map waits for a command) */
 void
 vulture_idle_bob(bool at_map)
 {
     static Uint32 last = 0;
-    Uint32 now = SDL_GetTicks();
+    Uint32 now = SDL_GetTicks(), took;
 
-    if (!at_map || vtw_animating || vanim_kind || now - last < 66
-        || !vbob_wanted() || vanim_input_waiting())
+    if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
+        || vanim_kind || now - last < vidle_interval || vanim_input_waiting())
         return;
     last = now;
+    (void) vfx_alive();
     levwin->force_redraw();
     ROOTWIN->draw_windows();
     vulture_refresh_window_region();
+    /* keep idle drawing to about a third of the time at most */
+    took = SDL_GetTicks() - now;
+    vidle_interval = took * 3 > 80 ? (took * 3 > 400 ? 400 : took * 3) : 80;
 }
 
 /* play the in-between frames of a pending tween, then any queued death
@@ -1059,6 +1487,7 @@ levelwin::draw()
 
     /* s75: tween offsets (camera + movers) and facing for this frame */
     vtw_prepare(view_x, view_y);
+    vfx_scan(); /* s85: damage numbers / blood from HP changes */
     map_centre_x += vtw_gx + (int) vpan_px; /* s79: + MMB drag residual */
     map_centre_y += vtw_gy + (int) vpan_py;
 
@@ -1279,6 +1708,8 @@ levelwin::draw()
                             ys = 1.0 - 0.26 * sin(3.14159265358979 * (te - 0.8) / 0.2);
                         xs = 1.0 / pow(ys, 0.7);
                         deg = vtw_face[i][j] * 10.0 * sin(3.14159265358979 * te);
+                    } else {
+                        vfx_breathe(j, i, &xs, &ys); /* s85 */
                     }
                     vanim_xform(j, i, &tx, &ty, &xs, &ys, &deg, &red);
                     vtw_put_tile_x(tx, ty, map_mon, vtw_face[i][j], xs, ys,
@@ -1328,6 +1759,9 @@ levelwin::draw()
             }
         }
     }
+    vw_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
+            this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
+    vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
     vulture_draw_vignette(this->abs_x, this->abs_y, this->w, this->h); /* s74 */
 
     /* Restore drawing region */
@@ -1620,6 +2054,12 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
      * clamp.  Same placement rationale as F7 (level window only, so it cannot
      * fire inside a menu or a text prompt; no userconfig rewrite - persistence
      * stays with the Ctrl+Shift+O menu). */
+    /* s86: F11 photo mode - the map without the interface (F12 is
+     * Vulture's own full-screen screenshot, caught globally) */
+    case SDLK_F11:
+        vw_photo(this);
+        return V_EVENT_HANDLED_REDRAW;
+
     case SDLK_F8:
         vulture_set_render_scale(vulture_opts.render_scale > 1 ? 1 : 2);
         /* w/h are this window's own dimensions, which vulture_win_resize()

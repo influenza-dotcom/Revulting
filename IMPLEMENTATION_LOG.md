@@ -2141,6 +2141,30 @@ are delobj()ed with unblock_point; "This puzzle has already been solved."
 No luck penalty (nothing squeezed or broken); prizes untouched.  Enabled in
 all 9 rc files.
 
+## 85. Stoneshard-style combat feedback; idle breathing (2026-11-20)
+
+levelwin.cpp vfx_*: vfx_scan() compares every visible monster's mhp (and
+the hero's HP) with the last frame and spawns a rising, fading number
+(white for monsters, red/green for the hero) plus a 10-particle blood spurt
+with gravity (not for noncorporeal monsters) - all damage sources count
+without hooking each one.  During a lunge a pale crescent sweeps across the
+target.  Idle creatures and the hero breathe (+-3% height, +-1.5% width,
+phase per m_id).  The idle loop now always animates at the map (40 ms wait,
+frames >= 80 ms apart, interval grows to 3x the frame cost, max 400 ms, and
+never with input queued).
+
+## 86. Light glow, night tint, dust, monster panel, F11 photo mode (2026-11-20)
+
+vw_draw(): additive warm glow (flattened radial gradient, SDL_BLENDMODE_ADD
++ BlitScaled) for each gl.light_base source the hero can see (sized by
+range, slight flicker) and each visible lava square; a cool blue tint
+during real-world night (night()); 36 clock-driven dust motes; a
+"Hostiles in view" panel (nearest 6 hostile, seen monsters with a rough
+condition word: unhurt/scratched/wounded/badly hurt/near death).  F11 =
+photo mode: redraws the map window alone and saves it as a BMP in
+%USERPROFILE%\Pictures\Revulting (F12 stays Vulture's own full-screen
+screenshot, which its global key hook catches first).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
