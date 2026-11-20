@@ -1176,11 +1176,14 @@ extern "C" void vulture_screen_shake(int strength)
 		double k = 1.0 - (double) f / frames;
 		SDL_Rect d;
 
-		d.x = (int) (((rand() % (2 * amp + 1)) - amp) * k);
-		d.y = (int) (((rand() % (2 * amp + 1)) - amp) * k);
-		d.w = d.h = 0;
-		SDL_FillRect(win, NULL, SDL_MapRGB(win->format, 0, 0, 0));
-		SDL_BlitSurface(copy, NULL, win, &d);
+		/* s94: overscan - the frame is drawn amp px bigger on every side,
+		 * so shifting it never uncovers the window (the old black fill
+		 * showed as black bars along two edges on every hit) */
+		d.x = (int) (((rand() % (2 * amp + 1)) - amp) * k) - amp;
+		d.y = (int) (((rand() % (2 * amp + 1)) - amp) * k) - amp;
+		d.w = win->w + 2 * amp;
+		d.h = win->h + 2 * amp;
+		SDL_BlitScaled(copy, NULL, win, &d);
 		if (red) {
 			SDL_SetSurfaceAlphaMod(red, (Uint8) ((40 + 12 * strength) * k));
 			SDL_BlitSurface(red, NULL, win, NULL);

@@ -498,6 +498,12 @@ vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
     if (!src)
         return;
     haskey = (SDL_GetColorKey(src, &key) == 0);
+    /* s94: a sprite with no alpha and no colour key would come out as a
+       black box: treat its pure black as transparent */
+    if (!img->format->Amask && !haskey) {
+        haskey = true;
+        key = SDL_MapRGBA(src->format, 0, 0, 0, 255);
+    }
     w = src->w, h = src->h;
     ax = w / 2.0, ay = (double) h;           /* the feet */
     rad = deg * 3.14159265358979 / 180.0;

@@ -2270,6 +2270,17 @@ audio) reaches the menu without crashing, so it likely needs the real
 display.  An unstripped twin of each build (relink without -s; identical
 .text) is kept as vulture5-win/binary/NetHackV-syms.exe for addr2line.
 
+## 94. Black box when hit (2026-11-20)
+
+User: "there's a black box when you get hit".  vulture_screen_shake()
+filled the window black and blitted the frame shifted, so every hit
+showed black bars of up to 18 px along two edges.  Now each shake frame
+is drawn overscanned (amp px bigger on every side, SDL_BlitScaled), so
+the window is always covered.  Insurance in vtx_blit(): a sprite with no
+alpha mask and no colour key treats pure black as transparent (it would
+otherwise transform into a black box).  No crash events since 10:41
+(old build only).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
