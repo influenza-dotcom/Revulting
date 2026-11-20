@@ -1207,6 +1207,8 @@ doengrave(void)
     de->adding = (de->oep && !de->eow);
     doengrave_ctx_verb(de);
 
+    /* Vulture s95: the sound of it */
+    vulture_sfx(strstri(de->everb, "burn") ? "fire" : "scratch");
     /* Tell adventurer what is going on */
     if (de->otmp != &hands_obj)
         You("%s the %s with %s%s.", de->everb, de->eloc,

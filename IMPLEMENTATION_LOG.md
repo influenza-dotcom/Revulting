@@ -2281,6 +2281,26 @@ alpha mask and no colour key treats pure black as transparent (it would
 otherwise transform into a black box).  No crash events since 10:41
 (old build only).
 
+## 95. MAIN-MENU CRASH FOUND; camera and instrument sounds (2026-11-20)
+
+- Crash 12:08:50 (build 0x6b009a4a), access violation at RVA 0x36d548 ->
+  addr2line on the unstripped twin: mapdata::set_glyph() mapdata.cpp:397,
+  the `!cansee(x, y)` test.  cansee()/couldsee() index gv.viz_array, which
+  is NULL until vision_init() - and windmain.c calls vulture_main_menu()
+  (line ~403) BEFORE vision_init() (~444) with the windows already up, so
+  a map update during the menu dereferenced NULL.  Hero shortcuts skip the
+  menu, which is why they worked.  Fix: mapdata.cpp and levelwin.cpp
+  redefine cansee/couldsee to answer "no" while gv.viz_array is NULL.
+  (Very likely the same bug as the 10:41 crashes on the 00:27 build.)
+- Debugging recipe kept: relink the build's objects without -s
+  (/tmp/relink.sh, from the link line in final.log) -> binary/
+  NetHackV-syms.exe with identical .text; Event Viewer id 1000 "Fault
+  offset" + 0x140000000 -> addr2line -f -C -i.
+- Sounds: camera (flash whine, shutter clacks, pop) from use_camera()
+  after the charge is spent; engraving scratch (or fire when burning)
+  from doengrave; message lines for tin/magic whistle, tooled horn,
+  bugle, drum, guard footsteps, throne-room conversation, snoring snakes.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

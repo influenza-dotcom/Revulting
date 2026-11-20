@@ -90,6 +90,7 @@ use_camera(struct obj *obj)
         return ECMD_TIME;
     }
     consume_obj_charge(obj, TRUE);
+    vulture_sfx("camera"); /* Vulture s95: click, whine, flash */
 
     if (obj->cursed && !rn2(2)) {
         (void) zapyourself(obj, TRUE);

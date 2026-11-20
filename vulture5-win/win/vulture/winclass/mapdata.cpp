@@ -23,6 +23,19 @@ extern "C" {
 
 #include <functional>
 
+
+/* s95: cansee()/couldsee() index gv.viz_array, which doesn't exist until
+ * vision_init() - and the main menu runs BEFORE that (windmain.c), with
+ * the windows already up.  A map update there dereferenced NULL: the
+ * startup crash.  In Vulture's map code they answer "no" until vision is
+ * set up. */
+#undef cansee
+#define cansee(x, y) \
+    (gv.viz_array && (gv.viz_array[y][x] & IN_SIGHT) != 0)
+#undef couldsee
+#define couldsee(x, y) \
+    (gv.viz_array && (gv.viz_array[y][x] & COULD_SEE) != 0)
+
 using namespace std::placeholders;
 
 extern "C" struct permonst *lookat(coordxy, coordxy, char *, char *);
