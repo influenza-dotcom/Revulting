@@ -2402,6 +2402,14 @@ and feel, not GTA mechanics.
 - **Not done:** gh isn't installed, so the GitHub Release isn't created
   yet. The README links to releases/latest.
 
+## 103. "Start with a pet?" when creating a hero (2026-11-20)
+
+vulture_mainmenu.cpp mm_new_hero: after the name (and not when resuming a
+save), it asks yes/no. No sets gp.preferred_pet = 'n'. Yes keeps any
+pettype from the settings, or clears a pettype:none, so the role's usual
+pet comes. Hero shortcuts launched with their own rc skip the menu and keep
+their pettype.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -689,11 +689,20 @@ bool mm_new_hero(void)
      * from the starting kit, stats and role (llm_name_hero, sounds.c) */
     if (name.empty())
         name = "Nameless";
-    if (mm_exists(mm_save_path(name.c_str()))
-        && !mm_yes(name + " already has a saved game. Resume it?"))
+    bool resuming = mm_exists(mm_save_path(name.c_str()));
+
+    if (resuming && !mm_yes(name + " already has a saved game. Resume it?"))
         return false;
     (void) strncpy(svp.plname, name.c_str(), PL_NSIZ - 1);
     svp.plname[PL_NSIZ - 1] = '\0';
+    /* s103: a new hero chooses whether to bring a pet (your role's usual
+       kitten / little dog / pony, or a pettype: from the settings) */
+    if (!resuming) {
+        if (mm_yes("Start with a pet?"))
+            gp.preferred_pet = (gp.preferred_pet == 'n') ? '\0' : gp.preferred_pet;
+        else
+            gp.preferred_pet = 'n';
+    }
     return true;
 }
 
