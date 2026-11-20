@@ -2376,6 +2376,13 @@ through vulture_idle_bob.
 - **Smoke test:** an off-screen test hero ran 10 s in game with no crash.
   The visuals have not been checked on a real display.
 
+## 101. Wanted stars REMOVED (2026-11-20)
+
+User: "you're taking the GTA VI thing way too literally. This is still
+NetHack." vhud_heat and the star surfaces are gone, and the toasts moved
+up into the freed space. "Bring it into 2027 / GTA VI" means modern polish
+and feel, not GTA mechanics.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
