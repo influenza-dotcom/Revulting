@@ -1121,26 +1121,54 @@ vw_draw(int cx, int cy, int vx, int vy, int x0, int y0, int w, int h)
                    0.75 + 0.08 * sin(now / 180.0 + ls->x));
     }
 
-    /* night tint */
-    if (night()) {
-        if (!vw_night || vw_night->w != w || vw_night->h != h) {
-            if (vw_night)
-                SDL_FreeSurface(vw_night);
-            vw_night = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32,
+    /* s87: night tint, OUTDOORS only - squares open to the sky: forest
+       levels (arboreal: several quest homes) outside any room/building,
+       and the Plane of Air.  The rest of the dungeon is underground.  One
+       translucent blue diamond per outdoor floor square. */
+    if (night() && (svl.level.flags.arboreal || Is_airlevel(&u.uz))) {
+        if (!vw_night) {
+            int dw = V_MAP_XMOD * 2, dh = V_MAP_YMOD * 2, xx, yy;
+
+            vw_night = SDL_CreateRGBSurfaceWithFormat(0, dw, dh, 32,
                                                       SDL_PIXELFORMAT_ARGB8888);
             if (vw_night) {
-                SDL_FillRect(vw_night, NULL,
-                             SDL_MapRGBA(vw_night->format, 10, 20, 60, 255));
+                SDL_LockSurface(vw_night);
+                for (yy = 0; yy < dh; yy++) {
+                    Uint32 *row = (Uint32 *) ((Uint8 *) vw_night->pixels
+                                              + yy * vw_night->pitch);
+
+                    for (xx = 0; xx < dw; xx++) {
+                        double fx = fabs((xx + 0.5) - dw / 2.0) / (dw / 2.0);
+                        double fy = fabs((yy + 0.5) - dh / 2.0) / (dh / 2.0);
+
+                        row[xx] = SDL_MapRGBA(vw_night->format, 10, 20, 60,
+                                              fx + fy <= 1.0 ? 255 : 0);
+                    }
+                }
+                SDL_UnlockSurface(vw_night);
                 SDL_SetSurfaceBlendMode(vw_night, SDL_BLENDMODE_BLEND);
-                SDL_SetSurfaceAlphaMod(vw_night, 55);
+                SDL_SetSurfaceAlphaMod(vw_night, 70);
             }
         }
-        if (vw_night) {
-            SDL_Rect d;
+        if (vw_night)
+            for (i = 0; i < ROWNO; i++)
+                for (j = 1; j < COLNO; j++) {
+                    SDL_Rect d;
 
-            d.x = x0, d.y = y0, d.w = w, d.h = h;
-            SDL_BlitSurface(vw_night, NULL, vulture_screen, &d);
-        }
+                    if (!Is_airlevel(&u.uz)
+                        && (levl[j][i].roomno != NO_ROOM
+                            || !ACCESSIBLE(levl[j][i].typ)))
+                        continue; /* inside a building, or not floor */
+                    if (!levl[j][i].seenv)
+                        continue;
+                    vfx_square_screen(j, i, cx, cy, vx, vy, &sx, &sy);
+                    if (sx < x0 - V_MAP_XMOD || sy < y0 - V_MAP_YMOD
+                        || sx > x0 + w + V_MAP_XMOD || sy > y0 + h + V_MAP_YMOD)
+                        continue;
+                    d.x = sx - V_MAP_XMOD, d.y = sy - V_MAP_YMOD;
+                    d.w = V_MAP_XMOD * 2, d.h = V_MAP_YMOD * 2;
+                    SDL_BlitSurface(vw_night, NULL, vulture_screen, &d);
+                }
     }
 
     /* dust motes: deterministic drift from the clock, no state to keep */

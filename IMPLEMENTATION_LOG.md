@@ -2165,6 +2165,32 @@ photo mode: redraws the map window alone and saves it as a BMP in
 %USERPROFILE%\Pictures\Revulting (F12 stays Vulture's own full-screen
 screenshot, which its global key hook catches first).
 
+## 87. Piper voices; outdoor-only night; exe swap by rename (2026-11-20)
+
+- The user was still seeing every line reworded: a relaunch beat the
+  watcher, so the 00:27 exe kept running with llmchat on (= reword all in
+  that build).  Fixed by renaming the running exe aside and copying the
+  new one in - Windows allows renaming a running exe.  finalize_exe.sh now
+  does this itself when the copy fails ("swapped the exe by rename") and
+  deletes stale NetHackV.old*.exe copies once they're not running.
+- Piper (user approved the ~210 MB download): piper_windows_amd64.zip
+  2023.11.14-2 from github.com/rhasspy/piper, voices en_US-ryan-medium,
+  en_US-amy-medium, en_GB-northern_english_male-medium from
+  huggingface.co/rhasspy/piper-voices, installed in VultureNetHack\piper  (not in git).  Ryan/Amy configs are piper 1.5 and list 5 multi-codepoint
+  diphthong keys that the 2023 binary rejects ("is not a single
+  codepoint"); removed (originals in voices\original-configs).
+  vulture_tts.cpp: one persistent piper.exe per voice (--output_dir,
+  --quiet, stderr to NUL), a worker thread feeds a queue (max 6), loads
+  the WAV (retrying ~2 s: piper prints the path before the file is
+  complete), resamples for pitch (factor 1 + pitch*0.025), and plays lines
+  one after another on reserved mixer channel 0.  Female -> Amy, male ->
+  Ryan, pitch <= -6 (gods) -> the gruff northern voice.  SAPI fallback.
+  Tested with SDL's dummy audio driver: line 1 after 1.5 s (incl. model
+  load), line 2 queued behind it.
+- Night tint now only outdoors: arboreal levels outside rooms
+  (roomno == NO_ROOM, accessible, seen) and the Plane of Air, as one
+  translucent blue diamond per square.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

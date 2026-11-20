@@ -24,7 +24,17 @@ echo "=== subsystem check (must be GUI, not console) ==="
 objdump -p "$P/binary/NetHackV.exe" | grep -i "^Subsystem" || \
   objdump -p "$P/binary/NetHackV.exe" | grep -i subsystem
 
-cp "$P/binary/NetHackV.exe" "$OUT/NetHackV.exe" || exit 2
+# IMPLEMENTATION_LOG s87: a running game locks its exe, and a failed copy
+# here used to leave the player on the OLD build without anyone noticing.
+# Windows lets a running exe be RENAMED, so move it aside and copy the new
+# one in - the next launch uses it.  Stale renamed copies are cleaned up
+# once they are no longer running.
+rm -f "$OUT"/NetHackV.old*.exe 2>/dev/null
+if ! cp "$P/binary/NetHackV.exe" "$OUT/NetHackV.exe" 2>/dev/null; then
+  OLD="$OUT/NetHackV.old-$(date +%Y%m%d%H%M%S).exe"
+  echo "  game is running: swapped the exe by rename (next launch is new)"
+  mv "$OUT/NetHackV.exe" "$OLD" && cp "$P/binary/NetHackV.exe" "$OUT/NetHackV.exe" || exit 2
+fi
 ls -la "$OUT/NetHackV.exe" | awk '{print "  NetHackV.exe", $5, "bytes"}'
 
 echo "=== drop the diagnostic builds from the shipped folder ==="

@@ -41,7 +41,12 @@ the same PC; nothing leaves the machine)
 - Pets and peaceful talkers get names; ask your god a question after a
   prayer that brought nothing; `OPTIONS=heroquips` — your hero mutters
   remarks about their situation.
-- `OPTIONS=voices` — text-to-speech for spoken lines (Windows SAPI voices).
+- `OPTIONS=voices` — text-to-speech for spoken lines.  Uses Piper neural
+  voices when `piper/piper.exe` and `piper/voices/en_US-ryan-medium.onnx`,
+  `en_US-amy-medium.onnx`, `en_GB-northern_english_male-medium.onnx` sit in
+  the game folder (Piper 2023.11.14-2 from github.com/rhasspy/piper, voices
+  from huggingface.co/rhasspy/piper-voices; strip multi-character keys from
+  the voices' `phoneme_id_map`), otherwise the Windows SAPI voices.
 
 **New gameplay**
 - Cutting down a tree with an axe yields logs; `#build` turns rocks into
