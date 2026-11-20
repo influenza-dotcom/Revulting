@@ -1721,6 +1721,118 @@ llm_hero_quip_pass(void)
 }
 
 /*
+ * s77: a hero named "Nameless" (blank name on the main menu, or
+ * OPTIONS=name:Nameless) is named by the local model once the starting
+ * kit, stats and pet exist - from those, the role, race and alignment.
+ * The save file is renamed to match (level files keep the lock name taken
+ * at startup, which stays consistent for the session).  Uses the llmchat
+ * model, or llama3.2:3b if none is set; on any failure the hero stays
+ * Nameless.
+ */
+void
+llm_name_hero(void)
+{
+    static const char *const statnm[A_MAX] = { "Strength", "Intelligence",
+        "Wisdom", "Dexterity", "Constitution", "Charisma" };
+    char prompt[3000], resp[128], kit[1200], stats[200], name[PL_NSIZ];
+    char *r, *w;
+    struct obj *o;
+    struct monst *pet;
+    int i, n = 0, best = 0, worst = 0, words = 0;
+    boolean borrowed = FALSE, ok;
+
+    if (strcmpi(svp.plname, "Nameless"))
+        return;
+    if (!*iflags.llmchat) {
+        Strcpy(iflags.llmchat, "llama3.2:3b");
+        borrowed = TRUE;
+    }
+    kit[0] = '\0';
+    for (o = gi.invent; o && n < 12; o = o->nobj) {
+        char item[BUFSZ];
+
+        if (o->oclass == COIN_CLASS)
+            Snprintf(item, sizeof item, "%ld gold", o->quan);
+        else if (o->quan > 1)
+            Snprintf(item, sizeof item, "%ld %s", o->quan,
+                     makeplural(simpleonames(o)));
+        else
+            Strcpy(item, an(simpleonames(o)));
+        if (strlen(kit) + strlen(item) + 3 < sizeof kit)
+            Sprintf(eos(kit), "%s%s", n ? ", " : "", item);
+        n++;
+    }
+    for (i = 0; i < A_MAX; i++) {
+        if (ACURR(i) > ACURR(best))
+            best = i;
+        if (ACURR(i) < ACURR(worst))
+            worst = i;
+    }
+    Snprintf(stats, sizeof stats,
+             "Str %d, Int %d, Wis %d, Dex %d, Con %d, Cha %d",
+             ACURR(A_STR) > 18 ? 18 : ACURR(A_STR), ACURR(A_INT),
+             ACURR(A_WIS), ACURR(A_DEX), ACURR(A_CON), ACURR(A_CHA));
+    pet = svc.context.startingpet_mid
+              ? find_mid(svc.context.startingpet_mid, FM_FMON) : 0;
+    Snprintf(prompt, sizeof prompt,
+             "Name a new adventurer in a dark fantasy dungeon from what they "
+             "start with.\nWho: a %s %s %s, %s.\nStats: %s. Best: %s. Worst: "
+             "%s.\nStarting kit: %s.\n%s%s%s"
+             "Invent ONE fitting name: a first name, optionally with a short "
+             "epithet drawn from the kit, the stats or the role (for example "
+             "\"Brannoc Ironbelly\" or \"Wren the Unlucky\"). At most three "
+             "words, letters only. Output ONLY the name.",
+             flags.female ? "female" : "male", gu.urace.adj,
+             (flags.female && gu.urole.name.f) ? gu.urole.name.f
+                                               : gu.urole.name.m,
+             align_str(u.ualign.type), stats, statnm[best], statnm[worst],
+             *kit ? kit : "nothing at all",
+             pet ? "Pet: a " : "", pet ? pmname(pet->data, Mgender(pet)) : "",
+             pet ? ".\n" : "");
+
+    llm_skip_spoken = TRUE;
+    pline("The Fates are deciding what to call you...");
+    flush_screen(1);
+    llm_timeout_ms = 25000; /* the model may still be loading */
+    ok = llm_call("You name heroes of a dark fantasy roguelike. Names are "
+                  "short, evocative and fit the character.",
+                  prompt, 16, resp, sizeof resp);
+    llm_timeout_ms = 8000;
+    if (borrowed)
+        iflags.llmchat[0] = '\0';
+    if (!ok)
+        return;
+
+    /* letters, apostrophes and single spaces; at most three words */
+    llm_unquote(resp);
+    for (r = resp, w = name; *r && w < name + PL_NSIZ - 1; r++) {
+        if (letter(*r) || (*r == '\'' && w > name && w[-1] != ' ')) {
+            if (w == name || w[-1] == ' ') { /* a new word */
+                if (words >= 3)
+                    break;
+                *w++ = words ? *r : highc(*r);
+                words++;
+            } else {
+                *w++ = *r;
+            }
+        } else if (*r == ' ') {
+            if (w > name && w[-1] != ' ')
+                *w++ = ' ';
+        } else if (w > name) {
+            break; /* stop at punctuation, a newline, an explanation */
+        }
+    }
+    while (w > name && (w[-1] == ' ' || w[-1] == '\''))
+        w--;
+    *w = '\0';
+    if (strlen(name) < 2 || !strcmpi(name, "Nameless"))
+        return;
+    Strcpy(svp.plname, name);
+    set_savefile_name(TRUE);
+    disp.botl = TRUE;
+}
+
+/*
  * s73: after a successful prayer that fixed nothing and granted nothing,
  * you may put one question to your god.  It answers in character -
  * cryptic, archaic - and never with game facts.

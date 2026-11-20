@@ -2023,6 +2023,27 @@ NOT yet seen/heard in a game.
 Full rebuild (stale-o6).  Not exercised against a live Discord bot or in
 a game yet.
 
+## 77. The Fates name your hero from their kit (2026-11-20)
+
+User: name the character from their starting items, stats and class.
+A hero named "Nameless" - a blank name on the main menu's "Create a new
+hero" (mm_new_hero now maps blank -> Nameless instead of cancelling), or
+OPTIONS=name:Nameless in an rc - is named by llm_name_hero() (sounds.c),
+called in newgame() right after u_init_skills_discoveries(), i.e. once the
+kit is final (after any reroll), stats are rolled and the starting pet
+exists.  Prompt: gender/race/role/alignment, stat line with best and worst
+stat, the kit (up to 12 items via simpleonames, gold as a sum), the pet;
+asks for a first name with an optional epithet from the kit/stats/role.
+Sanitised to letters/apostrophes/spaces, at most 3 words, PL_NSIZ.  Then
+svp.plname is replaced and set_savefile_name(TRUE) renames the save; the
+level files keep the lock name taken at getlock() (consistent for the
+session).  Uses the llmchat model, or borrows llama3.2:3b when none is set
+(the main menu's new hero uses the near-stock default rc); 25 s timeout for
+a cold model; on failure the hero simply stays Nameless.  Tested: orc
+Wizard -> "Korvok Darkstrike" / "Gorthok Blind" (blindfold), Tourist ->
+"Kaili Snap" (camera), dwarf Valkyrie -> "Kragnok Steelshield".
+NOT yet seen in a game.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -973,6 +973,8 @@ newgame(void)
         bot();
     }
     u_init_skills_discoveries();
+    llm_name_hero(); /* Vulture s77: a "Nameless" hero gets a name from
+                        their kit, stats and role */
 
     if (wizard) {
         read_wizkit();
