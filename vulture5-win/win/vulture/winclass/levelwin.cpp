@@ -753,6 +753,70 @@ vanim_draw_death(int j, int i, int x, int y)
              (int) (255 * (1.0 - t * t)));
 }
 
+/*
+ * IMPLEMENTATION_LOG s82: floating and flying monsters bob.  Floaters
+ * (eyes, lights) drift slowly and hover a little above the floor; flyers
+ * flutter faster.  Each has its own phase (from m_id) so a flock doesn't
+ * move in step.  The offset comes from the clock, so it stays smooth
+ * through tweens; vulture_idle_bob() keeps it moving while the game waits
+ * for input - only when such a monster is in view, ~15 fps, and never
+ * when a key or click is already queued.
+ */
+static int
+vbob_offset(int j, int i)
+{
+    struct monst *m = m_at(j, i);
+    double t, ph;
+
+    if (!m || DEADMONSTER(m) || !canspotmon(m))
+        return 0;
+    t = SDL_GetTicks() / 1000.0;
+    ph = m->m_id * 1.618;
+    if (is_floater(m->data))
+        return (int) (-6.0 - 5.0 * sin(t * 2.6 + ph));
+    if (is_flyer(m->data))
+        return (int) (-5.0 - 4.0 * sin(t * 7.0 + ph));
+    return 0;
+}
+
+static bool
+vbob_wanted(void)
+{
+    struct monst *m;
+
+    if (!levwin || vulture_windows_inited != TRUE)
+        return false;
+    for (m = fmon; m; m = m->nmon)
+        if (!DEADMONSTER(m) && canspotmon(m)
+            && (is_floater(m->data) || is_flyer(m->data))
+            && distmin(m->mx, m->my, vtw_last_vx, vtw_last_vy) <= 18)
+            return true;
+    return false;
+}
+
+/* wait timeout for the input loop: shorter while something is bobbing */
+int
+vulture_idle_wait_ms(bool at_map)
+{
+    return (at_map && vbob_wanted()) ? 50 : 100;
+}
+
+/* one idle frame for the bobbing (called from the input loop) */
+void
+vulture_idle_bob(bool at_map)
+{
+    static Uint32 last = 0;
+    Uint32 now = SDL_GetTicks();
+
+    if (!at_map || vtw_animating || vanim_kind || now - last < 66
+        || !vbob_wanted() || vanim_input_waiting())
+        return;
+    last = now;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    vulture_refresh_window_region();
+}
+
 /* play the in-between frames of a pending tween, then any queued death
    animations (vulture_win.cpp calls this after each refresh; re-entry is
    blocked while animating) */
@@ -1110,7 +1174,8 @@ levelwin::draw()
                 /* 5. Monsters */
                 if ((cur_tile = vulture_get_tile(map_mon)) != NULL) {
                     /* s75: slide between squares, face the way it went */
-                    int tx = x + vtw_ox[i][j], ty = y + vtw_oy[i][j];
+                    int tx = x + vtw_ox[i][j],
+                        ty = y + vtw_oy[i][j] + vbob_offset(j, i); /* s82 */
                     double xs = 1.0, ys = 1.0, deg = 0.0;
                     bool red = false;
 

@@ -201,10 +201,17 @@ void vulture_event_dispatcher(void * result, int resulttype, window * topwin)
 
 	while (event_result != V_EVENT_HANDLED_FINAL)
 	{
-		/* Get next event OR wait 100ms */
-		vulture_wait_event(&event, 100);
+		/* s82: the map is waiting for a command - idle animation allowed */
+		extern int vulture_idle_wait_ms(bool at_map);
+		extern void vulture_idle_bob(bool at_map);
+		bool at_map = (resulttype == V_RESPOND_POSKEY && topwin == ROOTWIN);
+
+		/* Get next event OR wait 100ms (50 while something bobs) */
+		vulture_wait_event(&event, vulture_idle_wait_ms(at_map));
 
 		event_result = vulture_event_dispatcher_core(&event, result, topwin);
+		if (event_result != V_EVENT_HANDLED_FINAL)
+			vulture_idle_bob(at_map);
 
 #ifdef __EMSCRIPTEN__
 		emscripten_sleep(1);

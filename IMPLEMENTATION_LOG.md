@@ -2111,6 +2111,18 @@ is queued, drop to fewer frames when a frame takes > 25 ms, cap at
 auto-exploring/repeating; the per-sound "Playing file" debug log line is
 gone (20,000+ file opens in one session's log).
 
+## 82. Floating and flying monsters bob (2026-11-20)
+
+vbob_offset() (levelwin.cpp): floaters (is_floater: eyes, lights) hover
+6 px up and drift +-5 px on a ~2.4 s cycle; flyers (is_flyer) flutter
++-4 px on a ~0.9 s cycle; phase from m_id.  Clock-driven, added to the
+monster's draw offset, so it composes with tweens/lunges.  Idle motion:
+the input loop (vulture_event_dispatcher) waits 50 ms instead of 100 while
+such a monster is within 18 squares of the view and calls
+vulture_idle_bob() after each non-final event - only while the map is
+waiting for a command (V_RESPOND_POSKEY, topwin == ROOTWIN), at most every
+66 ms, never during another animation or with input queued.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
