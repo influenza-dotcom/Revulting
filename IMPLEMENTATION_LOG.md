@@ -2341,6 +2341,15 @@ Suspect: getlock() refusing when the same hero is already running.
 Blood: spurt particles were square dots ("red boxes") - now soft round
 alpha droplets (vfx_droplet, 3 sizes); stain blobs feathered at the edge.
 
+## 99. No light or blood while blind (2026-11-20)
+
+User: light effects still show when blind.  vw_draw counted a light
+source on the hero's own square as visible (cansee || u_at) - now no glow
+at all while Blind and only cansee() sources; lava glow also gated on
+!Blind.  Monster damage numbers/blood (vfx_scan) and the death fade +
+its bloodstain (mondead hook) used canspotmon (true via telepathy) - now
+canseemon.  The hero's own damage numbers stay (you know your HP).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

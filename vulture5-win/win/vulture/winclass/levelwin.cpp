@@ -1060,7 +1060,8 @@ vfx_scan(void)
     for (m = fmon; m; m = m->nmon) {
         std::map<unsigned, int>::iterator it;
 
-        if (DEADMONSTER(m) || !canspotmon(m))
+        /* s99: seen, not merely sensed (telepathy doesn't show blood) */
+        if (DEADMONSTER(m) || !canseemon(m))
             continue;
         it = vfx_hp.find(m->m_id);
         if (it != vfx_hp.end() && m->mhp < it->second)
@@ -1282,7 +1283,7 @@ vw_draw(int cx, int cy, int vx, int vy, int x0, int y0, int w, int h)
     /* lava glow (flickers a little) */
     for (i = 0; i < ROWNO; i++)
         for (j = 1; j < COLNO; j++)
-            if (is_lava(j, i) && cansee(j, i)) {
+            if (!Blind && is_lava(j, i) && cansee(j, i)) {
                 vfx_square_screen(j, i, cx, cy, vx, vy, &sx, &sy);
                 if (sx < x0 - 80 || sy < y0 - 80 || sx > x0 + w + 80
                     || sy > y0 + h + 80)
@@ -1290,10 +1291,10 @@ vw_draw(int cx, int cy, int vx, int vy, int x0, int y0, int w, int h)
                 vw_glow_at(sx, sy, 70,
                            0.55 + 0.15 * sin(now / 300.0 + j * 1.3 + i * 0.7));
             }
-    /* light sources */
-    for (ls = gl.light_base; ls; ls = ls->next) {
-        if (!isok(ls->x, ls->y) || ls->range <= 0
-            || !(cansee(ls->x, ls->y) || u_at(ls->x, ls->y)))
+    /* light sources - s99: a blind hero sees no light at all, and only
+       sources actually in sight glow (the hero's own lamp included) */
+    for (ls = gl.light_base; ls && !Blind; ls = ls->next) {
+        if (!isok(ls->x, ls->y) || ls->range <= 0 || !cansee(ls->x, ls->y))
             continue;
         vfx_square_screen(ls->x, ls->y, cx, cy, vx, vy, &sx, &sy);
         vw_glow_at(sx, sy - 10, 40 + ls->range * 38,

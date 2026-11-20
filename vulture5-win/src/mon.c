@@ -3091,8 +3091,9 @@ mondead(struct monst *mtmp)
     /* potential pet message; always clear global flag */
     be_sad = iflags.sad_feeling;
     iflags.sad_feeling = FALSE;
-    /* Vulture s78: queue the sink-and-fade while it's still on the map */
-    if (canspotmon(mtmp)) {
+    /* Vulture s78: queue the sink-and-fade while it's still on the map
+       (s99: seen, not just sensed - no fade or blood while blind) */
+    if (canseemon(mtmp)) {
         extern void vulture_anim_death(int, int);
 
         vulture_anim_death(mtmp->mx, mtmp->my);
