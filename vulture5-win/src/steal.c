@@ -818,6 +818,9 @@ mdrop_obj(
 {
     coordxy omx = mon->mx, omy = mon->my;
     long unwornmask = obj->owornmask;
+
+    if (cansee(omx, omy)) /* Vulture s83: the item falls */
+        vulture_anim_drop(omx, omy);
     /* call distant_name() for its possible side-effects even if the result
        might not be printed, and do it before extracting obj from minvent */
     char *obj_name = distant_name(obj, doname);

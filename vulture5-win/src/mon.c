@@ -937,6 +937,8 @@ make_corpse(struct monst *mtmp, unsigned int corpseflags)
        the monster was (not expected to happen) */
     if (obj->ox != x || obj->oy != y)
         newsym(obj->ox, obj->oy);
+    if (cansee(obj->ox, obj->oy)) /* Vulture s83: the corpse thuds down */
+        vulture_anim_drop(obj->ox, obj->oy);
     return obj;
 }
 

@@ -261,6 +261,7 @@ struct instance_flags {
     boolean llmtalk;       /* local: #chat lets you type to monsters */
     boolean heroquips;     /* local: the hero remarks on things */
     boolean llmreword;     /* local: llmchat rewords EVERY message */
+    boolean autosokoban;   /* local: Sokoban puzzles come pre-solved */
     boolean autoid;        /* local: name items from shop prices, sink
                             * rings and wand engraving (shk.c, do.c,
                             * engrave.c; autoid_call() in do_name.c) */

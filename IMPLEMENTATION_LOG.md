@@ -2123,6 +2123,24 @@ vulture_idle_bob() after each non-final event - only while the map is
 waiting for a command (V_RESPOND_POSKEY, topwin == ROOTWIN), at most every
 66 ms, never during another animation or with input queued.
 
+## 83. Dropped items fall and bounce (2026-11-20)
+
+vulture_anim_drop(x,y) from dropx() (do.c), mdrop_obj() (steal.c, when the
+spot is in view) and make_corpse() (mon.c).  Queued squares play together
+after the refresh that shows an object there (after any death fade): fall
+30 px with gravity and speed-stretch, impact squash, one 9 px bounce,
+settling squash.  levelwin's object layer goes through vanim_draw_object().
+
+## 84. autosokoban option (2026-11-20)
+
+User hates Sokoban.  OPTIONS=autosokoban (iflags): goto_level() ends with
+vulture_autosokoban() (do.c) - on an unsolved Sokoban level (Sokoban flag
+still set) the level's own pits/holes are deltrap()ed (which runs
+maybe_finish_sokoban: rules lifted, completion livelogged) and all boulders
+are delobj()ed with unblock_point; "This puzzle has already been solved."
+No luck penalty (nothing squeezed or broken); prizes untouched.  Enabled in
+all 9 rc files.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

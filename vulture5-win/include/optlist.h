@@ -195,6 +195,11 @@ static int optfn_##a(int, int, boolean, char *, char *);
     NHOPTB(autoquiver, Behavior, 0, opt_in, set_in_game,
            Off, Yes, No, No, NoAlias, &flags.autoquiver, Term_False,
            "fill empty quiver automatically when firing")
+    /* local addition (IMPLEMENTATION_LOG s84): arriving on an unsolved
+       Sokoban level finishes its puzzle for you (do.c) */
+    NHOPTB(autosokoban, Behavior, 0, opt_in, set_in_game,
+           Off, Yes, No, No, NoAlias, &iflags.autosokoban, Term_False,
+           "Sokoban puzzles are solved for you when you arrive")
     NHOPTC(autounlock, Behavior, 80, opt_out, set_in_game,
                 Yes, Yes, No, Yes, NoAlias,
                 "action to take when encountering locked door or chest")

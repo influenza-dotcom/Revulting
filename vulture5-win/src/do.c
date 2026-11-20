@@ -801,6 +801,7 @@ void
 dropx(struct obj *obj)
 {
     vulture_sfx("drop"); /* Vulture s80: action sound */
+    vulture_anim_drop(u.ux, u.uy); /* Vulture s83: it falls */
     freeinv(obj);
     if (!u.uswallow) {
         if (ship_object(obj, u.ux, u.uy, FALSE))
@@ -1491,6 +1492,51 @@ familiar_level_msg(void)
         pline1(mesg);
 }
 
+/*
+ * Vulture s84: OPTIONS=autosokoban.  Arriving on a Sokoban level whose
+ * puzzle isn't solved yet finishes it: the level's own pits and holes are
+ * removed - deltrap() runs maybe_finish_sokoban(), which lifts the Sokoban
+ * rules and logs the level as completed - and the puzzle's boulders are
+ * cleared away.  No boulder is squeezed past or broken, so no luck
+ * penalty.  Prizes, monsters and items are untouched.
+ */
+staticfn void
+vulture_autosokoban(void)
+{
+    struct trap *t, *tnext;
+    struct obj *o, *onext;
+    int n = 0;
+
+    if (!iflags.autosokoban || !In_sokoban(&u.uz) || !Sokoban)
+        return;
+    for (t = gf.ftrap; t; t = tnext) {
+        tnext = t->ntrap;
+        if (!t->madeby_u && (t->ttyp == PIT || t->ttyp == HOLE)) {
+            coordxy x = t->tx, y = t->ty;
+
+            deltrap(t);
+            newsym(x, y);
+            n++;
+        }
+    }
+    for (o = fobj; o; o = onext) {
+        onext = o->nobj;
+        if (o->otyp == BOULDER) {
+            coordxy x = o->ox, y = o->oy;
+
+            delobj(o);
+            if (!sobj_at(BOULDER, x, y))
+                unblock_point(x, y);
+            newsym(x, y);
+            n++;
+        }
+    }
+    if (n) {
+        gv.vision_full_recalc = 1;
+        pline("This puzzle has already been solved.");
+    }
+}
+
 void
 goto_level(
     d_level *newlevel, /* destination */
@@ -2013,6 +2059,7 @@ goto_level(
         losehp(dmg, "falling down a mine shaft", KILLED_BY);
     }
 
+    vulture_autosokoban(); /* Vulture s84 */
     (void) pickup(1);
     return;
 }

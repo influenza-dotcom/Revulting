@@ -653,7 +653,8 @@ vanim_frames(int kind, int frames, int delay_ms)
     vulture_refresh_window_region();
     vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
                       "anim %s: %d frames in %u ms\n",
-                      kind == 1 ? "lunge" : "death", frames,
+                      kind == 1 ? "lunge" : kind == 2 ? "death" : "drop",
+                      frames,
                       (unsigned) (SDL_GetTicks() - t0));
 }
 
@@ -682,6 +683,93 @@ vulture_anim_death(int x, int y)
     vanim_deaths[vanim_ndeaths].y = y;
     vanim_deaths[vanim_ndeaths].tile = tile;
     vanim_ndeaths++;
+}
+
+/*
+ * IMPLEMENTATION_LOG s83: dropped items fall.  vulture_anim_drop(x,y)
+ * queues a square (your drops, monster drops, fresh corpses); after the
+ * next refresh that shows an object there, every queued square plays at
+ * once: the item falls ~30 px with gravity, squashes on impact, bounces
+ * once and settles with a smaller squash.
+ */
+static int vanim_drops[8][2];
+static int vanim_ndrops = 0;
+static bool vanim_drop_on[ROWNO][COLNO];
+
+extern "C" void
+vulture_anim_drop(int x, int y)
+{
+    int i;
+
+    if (!levwin || vulture_windows_inited != TRUE || !isok(x, y))
+        return;
+    for (i = 0; i < vanim_ndrops; i++)
+        if (vanim_drops[i][0] == x && vanim_drops[i][1] == y)
+            return;
+    if (vanim_ndrops < 8) {
+        vanim_drops[vanim_ndrops][0] = x;
+        vanim_drops[vanim_ndrops][1] = y;
+        vanim_ndrops++;
+    }
+}
+
+static void
+vanim_play_drops(void)
+{
+    int i, n = vanim_ndrops, shown = 0;
+
+    vanim_ndrops = 0;
+    memset(vanim_drop_on, 0, sizeof vanim_drop_on);
+    for (i = 0; i < n; i++) {
+        int x = vanim_drops[i][0], y = vanim_drops[i][1];
+
+        if (map_data->get_glyph(MAP_OBJ, x, y) != V_TILE_NONE) {
+            vanim_drop_on[y][x] = true;
+            shown++;
+        }
+    }
+    if (shown)
+        vanim_frames(3, 10, 12);
+    memset(vanim_drop_on, 0, sizeof vanim_drop_on);
+}
+
+/* draw the object on (j,i): falling/bouncing while a drop plays there */
+static void
+vanim_draw_object(int j, int i, int x, int y, int tile_id)
+{
+    vulture_tile *tile;
+    double t = vanim_t, oy, sx = 1.0, sy = 1.0;
+
+    if (vanim_kind != 3 || !vanim_drop_on[i][j]
+        || !(tile = vulture_get_tile(tile_id)) || !tile->graphic) {
+        vulture_put_tile(x, y, tile_id);
+        return;
+    }
+    if (t < 0.5) {                       /* fall, accelerating */
+        double u = t / 0.5;
+
+        oy = -30.0 * (1.0 - u * u);
+        sy = 1.0 + 0.12 * u;             /* stretched by speed */
+        sx = 1.0 / sy;
+    } else if (t < 0.65) {               /* impact squash */
+        double k = sin(3.14159265358979 * (t - 0.5) / 0.15);
+
+        oy = 0.0;
+        sy = 1.0 - 0.32 * k;
+        sx = 1.0 + 0.30 * k;
+    } else if (t < 0.9) {                /* one bounce */
+        double u = (t - 0.65) / 0.25;
+
+        oy = -9.0 * sin(3.14159265358979 * u);
+    } else {                             /* settle */
+        double k = sin(3.14159265358979 * (t - 0.9) / 0.1);
+
+        oy = 0.0;
+        sy = 1.0 - 0.12 * k;
+        sx = 1.0 + 0.10 * k;
+    }
+    vtx_blit(tile->graphic, x + tile->xmod, y + tile->ymod + (int) oy,
+             sx, sy, 0.0, false, 255);
 }
 
 /* play queued deaths whose monster is gone from the map */
@@ -870,6 +958,8 @@ vulture_tween_run(void)
     }
     if (vanim_ndeaths)
         vanim_play_deaths();
+    if (vanim_ndrops)
+        vanim_play_drops(); /* s83: after deaths, so corpses land last */
 }
 
 #include <math.h>
@@ -1168,8 +1258,8 @@ levelwin::draw()
                 /* 3. Traps */
                 vulture_put_tile(x, y, map_data->get_glyph(MAP_TRAP, j, i));
 
-                /* 4. Objects */
-                vulture_put_tile(x, y, map_obj);
+                /* 4. Objects (s83: falling while a drop plays) */
+                vanim_draw_object(j, i, x, y, map_obj);
 
                 /* 5. Monsters */
                 if ((cur_tile = vulture_get_tile(map_mon)) != NULL) {
