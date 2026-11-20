@@ -14,6 +14,30 @@
 #define V_MAP_XMOD 56
 #define V_MAP_YMOD 22
 
+/*
+ * View rotation (IMPLEMENTATION_LOG §62).  vulture_view_rot (vulture_gen.cpp)
+ * is 0-3 quarter turns, changed with PageUp/PageDown on the map.  Everything
+ * on screen is laid out in VIEW coordinates; the map is read through
+ *     map offset = v_rot(view offset, rot)      (view -> map)
+ *     view offset = v_rot(map offset, 4 - rot)  (map -> view)
+ * where one step is (a, b) -> (-b, a).  Neighbour lookups for walls, shading
+ * and water edges go through the same function, so "west wall" always means
+ * the wall on the screen's west side.  Rotation 0 is stock Vulture exactly.
+ */
+static inline void
+v_rot(int a, int b, int r, int *oa, int *ob)
+{
+    int t;
+
+    for (r &= 3; r > 0; r--) {
+        t = a;
+        a = -b;
+        b = t;
+    }
+    *oa = a;
+    *ob = b;
+}
+
 #define V_FILENAME_TOOLBAR1 "tb1"
 #define V_FILENAME_TOOLBAR2 "tb2"
 

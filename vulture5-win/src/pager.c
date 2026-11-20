@@ -1928,6 +1928,19 @@ do_look(int mode, coord *click_cc)
         if (found) {
             /* use putmixed() because there may be an encoded glyph present */
             putmixed(WIN_MESSAGE, 0, out_str);
+
+            /* Vulture mod (IMPLEMENTATION_LOG §47): folklore about a
+               monster the hero really sees (not a mimic's disguise, not a
+               hallucination, not a remembered glyph) */
+            if (isok(cc.x, cc.y) && !u_at(cc.x, cc.y) && !Hallucination) {
+                struct monst *lmon = m_at(cc.x, cc.y);
+                char lore[BUFSZ];
+
+                if (lmon && canspotmon(lmon)
+                    && M_AP_TYPE(lmon) == M_AP_NOTHING
+                    && monster_lore(lmon->data, lore))
+                    pline("You recall: %s.", lore);
+            }
 #ifdef DUMPLOG_CORE
             {
                 char dmpbuf[BUFSZ];
@@ -1967,6 +1980,121 @@ do_look(int mode, coord *click_cc)
 
     flags.verbose = save_verbose;
     return ECMD_OK;
+}
+
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §47): what an adventurer would have heard
+ * about a monster - its dangers, built from its real attack table and flags
+ * so every monster is covered without a hand-written list.  Fills `buf`
+ * with ", "-separated phrases (at most a handful) and returns their count.
+ */
+staticfn void
+lore_add(char *buf, int *n, const char *phrase)
+{
+    if (*n >= 6 || strstri(buf, phrase))
+        return;
+    if (strlen(buf) + strlen(phrase) + 3 >= BUFSZ)
+        return;
+    if (*n)
+        Strcat(buf, ", ");
+    Strcat(buf, phrase);
+    (*n)++;
+}
+
+int
+monster_lore(struct permonst *ptr, char *buf)
+{
+    int i, n = 0;
+
+    buf[0] = '\0';
+    if (touch_petrifies(ptr))
+        lore_add(buf, &n, "touching or eating it turns you to stone");
+
+    for (i = 0; i < NATTK; i++) {
+        int at = ptr->mattk[i].aatyp, ad = ptr->mattk[i].adtyp;
+
+        if (at == AT_NONE && ad == AD_PHYS && !ptr->mattk[i].damn)
+            continue; /* empty attack slot */
+        if (at == AT_BOOM) {
+            lore_add(buf, &n, "explodes when killed");
+            continue;
+        }
+        if (at == AT_NONE) { /* passive: hurts whoever hits it */
+            switch (ad) {
+            case AD_PLYS: lore_add(buf, &n, "hitting it can paralyze you");
+                          break;
+            case AD_ACID: lore_add(buf, &n,
+                              "acidic - hitting it can corrode your weapon");
+                          break;
+            case AD_RUST: lore_add(buf, &n, "rusts weapons that hit it");
+                          break;
+            case AD_CORR: lore_add(buf, &n, "corrodes weapons that hit it");
+                          break;
+            case AD_ENCH: lore_add(buf, &n, "drains weapons that hit it");
+                          break;
+            case AD_ELEC: lore_add(buf, &n, "shocks whoever hits it"); break;
+            case AD_FIRE: lore_add(buf, &n, "burns whoever hits it"); break;
+            case AD_COLD: lore_add(buf, &n, "freezes whoever hits it"); break;
+            case AD_STUN: lore_add(buf, &n, "hitting it can stun you"); break;
+            default: break;
+            }
+            continue;
+        }
+        if (at == AT_ENGL)
+            lore_add(buf, &n, (ad == AD_DGST) ? "can swallow and digest you"
+                                              : "can engulf you");
+        else if (at == AT_BREA)
+            lore_add(buf, &n, "has a breath weapon");
+        else if (at == AT_GAZE)
+            lore_add(buf, &n, (ad == AD_STON) ? "its gaze turns you to stone"
+                                              : "has a dangerous gaze");
+        else if (at == AT_MAGC)
+            lore_add(buf, &n, "casts spells");
+
+        switch (ad) {
+        case AD_DRLI: lore_add(buf, &n, "drains experience levels"); break;
+        case AD_STON: lore_add(buf, &n, "can turn you to stone"); break;
+        case AD_SLIM: lore_add(buf, &n, "can turn you into slime"); break;
+        case AD_DISE: lore_add(buf, &n, "spreads deadly illness"); break;
+        case AD_SEDU: case AD_SSEX: case AD_SITM:
+                      lore_add(buf, &n, "steals your things"); break;
+        case AD_SGLD: lore_add(buf, &n, "steals gold"); break;
+        case AD_SAMU: lore_add(buf, &n, "steals the Amulet"); break;
+        case AD_RUST: lore_add(buf, &n, "rusts your armor"); break;
+        case AD_CORR: lore_add(buf, &n, "corrodes your armor"); break;
+        case AD_DCAY: lore_add(buf, &n, "rots leather and wood"); break;
+        case AD_ENCH: lore_add(buf, &n, "disenchants your gear"); break;
+        case AD_TLPT: lore_add(buf, &n, "can teleport you away"); break;
+        case AD_DREN: lore_add(buf, &n, "drains magic energy"); break;
+        case AD_WERE: lore_add(buf, &n, "spreads lycanthropy"); break;
+        case AD_PLYS: lore_add(buf, &n, "can paralyze you"); break;
+        case AD_SLEE: lore_add(buf, &n, "can put you to sleep"); break;
+        case AD_DRIN: lore_add(buf, &n, "eats brains (drains Intelligence)");
+                      break;
+        case AD_POLY: lore_add(buf, &n, "can polymorph you"); break;
+        case AD_STCK: lore_add(buf, &n, "sticks to you"); break;
+        case AD_DETH: lore_add(buf, &n, "its touch can kill outright"); break;
+        case AD_DISN: lore_add(buf, &n, "can disintegrate you"); break;
+        case AD_CURS: lore_add(buf, &n, "curses your items"); break;
+        case AD_SLOW: lore_add(buf, &n, "can slow you down"); break;
+        case AD_BLND: lore_add(buf, &n, "can blind you"); break;
+        case AD_DRST: case AD_DRDX: case AD_DRCO:
+                      lore_add(buf, &n, "poisonous attack"); break;
+        case AD_WRAP:
+            if (ptr->mlet == S_EEL)
+                lore_add(buf, &n, "can drown you");
+            break;
+        default: break;
+        }
+    }
+
+    if (acidic(ptr))
+        lore_add(buf, &n, "acidic to eat");
+    if (poisonous(ptr))
+        lore_add(buf, &n, "poisonous to eat");
+    if (regenerates(ptr))
+        lore_add(buf, &n, "regenerates");
+    return n;
 }
 
 staticfn void

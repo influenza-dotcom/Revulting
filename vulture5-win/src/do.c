@@ -511,6 +511,8 @@ dosinkring(struct obj *obj)
         pline_The("ring is regurgitated!");
  giveback:
         obj->in_use = FALSE;
+        if (!Blind && !Hallucination) /* local 'autoid' option */
+            autoid_call(obj->otyp, OBJ_NAME(objects[obj->otyp]), "the sink");
         dropx(obj);
         trycall(obj);
         return;
@@ -640,8 +642,21 @@ dosinkring(struct obj *obj)
             break;
         }
     }
+    /* local 'autoid' option.  With eyes, every ring type gets its own
+       message - hunger's is silence when nothing on the sink vanishes,
+       and no other ring is silent - except one: "The sink vanishes." is
+       teleportation (sink moved) or polymorph (sink became plain floor).
+       Hallucination can recolour protection/warning, so it is skipped. */
+    if (ideed && !Blind && !Hallucination) {
+        if ((obj->otyp == RIN_TELEPORTATION && nosink)
+            || (obj->otyp == RIN_POLYMORPH
+                && levl[u.ux][u.uy].typ == ROOM))
+            autoid_call(obj->otyp, "teleportation or polymorph", "the sink");
+        else
+            autoid_call(obj->otyp, OBJ_NAME(objects[obj->otyp]), "the sink");
+    }
     if (ideed) {
-        trycall(obj);
+        trycall(obj); /* no prompt once autoid has named it */
     } else if (!nosink) {
         Soundeffect(se_ring_in_drain, 50);
         You_hear("the ring bouncing down the drainpipe.");

@@ -75,11 +75,13 @@ static NEARDATA const char kebabable[] = {
 staticfn void
 give_may_advance_msg(int skill)
 {
-    You_feel("more confident in your %sskills.",
-             (skill == P_NONE) ? ""
-                 : (skill <= P_LAST_WEAPON) ? "weapon "
-                     : (skill <= P_LAST_SPELL) ? "spell casting "
-                         : "fighting ");
+    /* Vulture mod (IMPLEMENTATION_LOG §39): name the skill that became
+       ready and say how to spend it, instead of the vague "weapon skills" */
+    if (skill == P_NONE)
+        You_feel("more confident in your skills.  (#enhance to advance)");
+    else
+        You_feel("more confident in your %s skill.  (#enhance to advance)",
+                 P_NAME(skill));
     (void) handle_tip(TIP_ENHANCE);
 }
 
@@ -1332,7 +1334,7 @@ enhance_weapon_skill(void)
     char buf[BUFSZ];
     menu_item *selected;
     winid win;
-    boolean speedy = FALSE;
+    boolean speedy = FALSE, reshow;
 
     /* player knows about #enhance, don't show tip anymore */
     svc.context.tips |= (1 << TIP_ENHANCE);
@@ -1341,6 +1343,7 @@ enhance_weapon_skill(void)
         speedy = TRUE;
 
     do {
+        reshow = FALSE;
         /* count advanceable skills */
         to_advance = eventually_advance = maxxed_cnt = 0;
         for (i = 0; i < P_NUM_SKILLS; i++) {
@@ -1391,6 +1394,22 @@ enhance_weapon_skill(void)
         if (n > 0) {
             n = selected[0].item.a_int - 1; /* get item selected */
             free((genericptr_t) selected);
+
+            /* Vulture mod (IMPLEMENTATION_LOG §39): skill slots can't be
+               refunded, so a misclick is permanent - confirm first, and
+               go back to the menu on "no" */
+            if (!speedy) {
+                char qbuf[QBUFSZ];
+                int cost = slots_required(n);
+
+                Snprintf(qbuf, sizeof qbuf,
+                         "Spend %d skill slot%s on %s?  (Can't be undone.)",
+                         cost, plur(cost), P_NAME(n));
+                if (y_n(qbuf) != 'y') {
+                    reshow = TRUE;
+                    continue;
+                }
+            }
             skill_advance(n);
             /* check for more skills able to advance; if so, then... */
             for (n = i = 0; i < P_NUM_SKILLS; i++) {
@@ -1402,7 +1421,7 @@ enhance_weapon_skill(void)
                 }
             }
         }
-    } while (speedy && n > 0);
+    } while ((speedy && n > 0) || reshow);
     return ECMD_OK;
 }
 

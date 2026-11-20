@@ -4209,6 +4209,36 @@ apply_ok(struct obj *obj)
     return GETOBJ_EXCLUDE_SELECTABLE;
 }
 
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §51): #photograph, Ctrl+S.  A Tourist's
+ * camera is applied over and over, and every shot was 'a' + pick the camera
+ * + direction.  This queues 'a' + the camera's letter on CQ_CANNED, so the
+ * only question left is the direction; everything else (charges, blinding,
+ * the photo album record) is the stock apply path.  Returning ECMD_OK with
+ * a queue is the same pattern dofire() uses for its weapon swap.
+ */
+int
+dophotograph(void)
+{
+    struct obj *cam = carrying(EXPENSIVE_CAMERA);
+
+    if (!cam) {
+        You("don't have a camera.");
+        return ECMD_OK;
+    }
+    cmdq_add_ec(CQ_CANNED, doapply);
+    cmdq_add_key(CQ_CANNED, cam->invlet);
+    /* §56: aim it too - nearest hostile in a straight line, preferring a
+       species not in the photo album yet; with none, ask as before */
+    {
+        schar dx, dy;
+
+        if (vq_line_target(TRUE, &dx, &dy))
+            cmdq_add_dir(CQ_CANNED, dx, dy, 0);
+    }
+    return ECMD_OK;
+}
+
 /* the #apply command, 'a' */
 int
 doapply(void)

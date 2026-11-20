@@ -1893,6 +1893,28 @@ optfn_hilite_status(
     return optn_ok;
 }
 
+/* §69: llmchat:<ollama model>, e.g. llmchat:llama3.2:3b */
+staticfn int
+optfn_llmchat(
+    int optidx UNUSED,
+    int req, boolean negated,
+    char *opts, char *op)
+{
+    if (req == do_init) {
+        ;
+    } else if (req == do_set) {
+        if (op == empty_optstr && !negated)
+            return optn_err;
+        if (negated || !strcmp(op, "none"))
+            op = empty_optstr;
+        nmcpy(iflags.llmchat, op, (int) sizeof iflags.llmchat);
+    } else if (req == get_val || req == get_cnf_val) {
+        Sprintf(opts, "%s", *iflags.llmchat ? iflags.llmchat
+                            : (req == get_cnf_val) ? "none" : none);
+    }
+    return optn_ok;
+}
+
 staticfn int
 optfn_horsename(
     int optidx,

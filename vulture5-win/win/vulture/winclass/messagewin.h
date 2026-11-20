@@ -5,6 +5,9 @@
 
 #include "window.h"
 
+#include <string>
+#include <vector>
+
 /* Message shading: old messages grow darker */
 #define V_MAX_MESSAGE_COLORS 16
 
@@ -29,6 +32,11 @@ class messagewin : public window
     int getshown(void);
     std::string get_message(int offset, int *age);
     void view_all(void);
+
+    /* Vulture mod (IMPLEMENTATION_LOG §43): Ctrl+P history survives
+       save/restore via vulture_get/putmsghistory */
+    std::vector<std::string> history(size_t maxcount);
+    void clear_history(void);
 
   private:
     SDL_Surface *bg_img;

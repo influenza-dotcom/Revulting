@@ -673,6 +673,1141 @@ mon_is_gecko(struct monst *mon)
     return (boolean) (glyph_to_mon(glyph) == PM_GECKO);
 }
 
+/*
+ * Vulture mod (IMPLEMENTATION_LOG s69-70): local-LLM dialogue.
+ *
+ * With OPTIONS=llmchat:<ollama model>, a model running on THIS machine
+ * (Ollama, 127.0.0.1:11434; transport in win/vulture/vulture_llm.cpp)
+ * writes fresh wording for the game's lines.  Design rules:
+ *  - The stock line is always computed as before and handed to the model as
+ *    the meaning to keep, so whatever it tells the player still gets across.
+ *    Action barks keep the stock verb verbatim; the model only adds a clause.
+ *  - The model sees only what the hero can see (displayed species/name and
+ *    attitude, the hero as seen, branch and depth) and is told to add no
+ *    hints, places, items or mechanics.
+ *  - Any failure (no server, timeout, junk) prints the stock line.
+ * s69: #chat barks.  s70: EVERY spoken line (verbalize) is rewritten too,
+ * except lines with digits (prices, amounts) - cached per run, so a line is
+ * stable within a session and different next time; llmtalk lets you type
+ * to monsters; the starting pet and peaceful talkers get LLM names.
+ */
+extern int vulture_llm_post(int, const char *, const char *, char *, int,
+                            int);
+
+#define LLM_MEMO_SLOTS 12
+static struct llm_memo {
+    unsigned m_id;
+    char said[2][128];
+    char heard[128]; /* what the player last typed to it */
+} llm_memo[LLM_MEMO_SLOTS];
+static int llm_memo_next = 0;
+static unsigned llm_speaker_mid = 0; /* set_voice(): who speaks next */
+static long llm_speaker_moves = -1L;
+static boolean llm_skip_spoken = FALSE; /* line already LLM-written */
+static int llm_timeout_ms = 8000;        /* s75: per-call timeout */
+static unsigned llm_tts_mid = 0;         /* s75: speaker for TTS */
+static long llm_tts_moves = -1L;
+static boolean llm_tts_deity = FALSE;
+
+staticfn struct llm_memo *
+llm_memo_for(unsigned m_id, boolean create)
+{
+    int i;
+
+    for (i = 0; i < LLM_MEMO_SLOTS; i++)
+        if (llm_memo[i].m_id == m_id)
+            return &llm_memo[i];
+    if (!create)
+        return (struct llm_memo *) 0;
+    i = llm_memo_next;
+    llm_memo_next = (llm_memo_next + 1) % LLM_MEMO_SLOTS;
+    (void) memset((genericptr_t) &llm_memo[i], 0, sizeof llm_memo[i]);
+    llm_memo[i].m_id = m_id;
+    return &llm_memo[i];
+}
+
+/* append s to dst as JSON string content */
+staticfn void
+llm_json_cat(char *dst, size_t dstsz, const char *s)
+{
+    size_t n = strlen(dst);
+
+    for (; *s && n + 8 < dstsz; s++) {
+        unsigned char c = (unsigned char) *s;
+
+        if (c == '"' || c == '\\')
+            dst[n++] = '\\', dst[n++] = (char) c;
+        else if (c == '\n')
+            dst[n++] = '\\', dst[n++] = 'n';
+        else if (c >= 32 && c < 127)
+            dst[n++] = (char) c;
+    }
+    dst[n] = '\0';
+}
+
+/* pull the "response" string out of Ollama's JSON reply; ASCII only */
+staticfn boolean
+llm_json_response(const char *body, char *out, size_t outsz)
+{
+    const char *p = strstr(body, "\"response\":\"");
+    size_t n = 0;
+
+    if (!p)
+        return FALSE;
+    for (p += 12; *p && *p != '"' && n + 1 < outsz; p++) {
+        if (*p == '\\' && p[1]) {
+            p++;
+            if (*p == 'n' || *p == 't' || *p == 'r')
+                out[n++] = ' ';
+            else if (*p == 'u') {
+                unsigned v = 0;
+                int k;
+
+                for (k = 1; k <= 4 && p[k]; k++)
+                    v = v * 16 + (unsigned) (isdigit((uchar) p[k]) ? p[k] - '0'
+                                       : (lowc(p[k]) - 'a' + 10) & 15);
+                p += 4;
+                if (v == 0x2019 || v == 0x2018)
+                    out[n++] = '\'';
+                else if (v == 0x2014 || v == 0x2013)
+                    out[n++] = '-';
+                else if (v >= 32 && v < 127)
+                    out[n++] = (char) v;
+            } else
+                out[n++] = *p;
+        } else if ((uchar) *p >= 32 && (uchar) *p < 127)
+            out[n++] = *p;
+    }
+    out[n] = '\0';
+    return (boolean) (n > 0);
+}
+
+/* trim, collapse spaces, drop wrapping quotes */
+staticfn void
+llm_tidy(char *s)
+{
+    char *r = s, *w = s;
+    boolean sp = TRUE;
+
+    for (; *r; r++) {
+        if (*r == ' ') {
+            if (!sp)
+                *w++ = ' ';
+            sp = TRUE;
+        } else
+            *w++ = *r, sp = FALSE;
+    }
+    while (w > s && (w[-1] == ' '))
+        w--;
+    *w = '\0';
+    while (*s == '"' || *s == '\'') /* leading quote */
+        (void) memmove(s, s + 1, strlen(s));
+    w = eos(s);
+    while (w > s && (w[-1] == '"'))
+        *--w = '\0';
+}
+
+/* speech: if narration surrounds a quote, keep only the quoted words */
+staticfn void
+llm_unquote(char *resp)
+{
+    char *q1 = strchr(resp, '"'), *q2 = q1 ? strchr(q1 + 1, '"') : 0;
+
+    if (q1 && q2 && q2 - q1 > 4) {
+        *q2 = '\0';
+        (void) memmove(resp, q1 + 1, strlen(q1 + 1) + 1);
+    }
+    llm_tidy(resp);
+}
+
+#define LLM_RULES \
+    "You write lines for the fantasy roguelike NetHack. Plain text, no " \
+    "emoji. Add NO new facts: no directions, places, items, warnings, " \
+    "hints, prices, identifications, advice or game mechanics."
+
+/* one round trip; resp gets the model's text (untidied) */
+staticfn boolean
+llm_call(const char *sys, const char *prompt, int num_predict,
+         char *resp, size_t respsz)
+{
+    static char body[4096], reply[8192];
+
+    body[0] = '\0';
+    Strcat(body, "{\"model\":\"");
+    llm_json_cat(body, sizeof body, iflags.llmchat);
+    Strcat(body, "\",\"system\":\"");
+    llm_json_cat(body, sizeof body, sys);
+    Strcat(body, "\",\"prompt\":\"");
+    llm_json_cat(body, sizeof body, prompt);
+    Sprintf(eos(body), "\",\"stream\":false,\"keep_alive\":\"30m\","
+                       "\"options\":{\"num_predict\":%d,\"temperature\":0.9,"
+                       "\"stop\":[\"\\n\"]}}", num_predict);
+    if (!vulture_llm_post(11434, "/api/generate", body, reply,
+                          (int) sizeof reply, llm_timeout_ms))
+        return FALSE;
+    return llm_json_response(reply, resp, respsz);
+}
+
+/* the hero as a monster sees them, and where they are */
+staticfn void
+llm_scene(char *hero, size_t herosz, char *place, size_t placesz)
+{
+    if (Upolyd)
+        Snprintf(hero, herosz, "a %s",
+                 pmname(gy.youmonst.data, flags.female ? FEMALE : MALE));
+    else
+        Snprintf(hero, herosz, "a %s %s %s",
+                 flags.female ? "female" : "male", gu.urace.adj,
+                 (flags.female && gu.urole.name.f) ? gu.urole.name.f
+                                                   : gu.urole.name.m);
+    if (uwep) {
+        (void) strncat(hero, " wielding ", herosz - strlen(hero) - 1);
+        (void) strncat(hero, an(simpleonames(uwep)),
+                       herosz - strlen(hero) - 1);
+    }
+    if (inside_shop(u.ux, u.uy))
+        Strcpy(place, "inside a shop");
+    else if (in_town(u.ux, u.uy))
+        Strcpy(place, "a small mining town deep underground");
+    else if (In_mines(&u.uz))
+        Strcpy(place, "the Gnomish Mines");
+    else if (In_sokoban(&u.uz))
+        Strcpy(place, "Sokoban, a puzzle of boulders");
+    else if (Inhell)
+        Strcpy(place, "Gehennom, the underworld");
+    else
+        Snprintf(place, placesz, "the Dungeons of Doom, level %d",
+                 depth(&u.uz));
+}
+
+/* "a hill orc named Grub (peaceful)" */
+staticfn void
+llm_who(struct monst *mtmp, char *who, size_t whosz)
+{
+    const char *species = pmname(mtmp->data, Mgender(mtmp));
+    const char *attitude = mtmp->mtame ? "the player's pet"
+                           : mtmp->mpeaceful ? "peaceful" : "hostile";
+
+    if (has_mgivenname(mtmp))
+        Snprintf(who, whosz, "a %s named %s (%s)", species,
+                 MGIVENNAME(mtmp), attitude);
+    else
+        Snprintf(who, whosz, "a %s (%s)", species, attitude);
+}
+
+/* does this monster talk in words? */
+staticfn boolean
+llm_speaks(struct monst *mtmp)
+{
+    int ms = mtmp->data->msound;
+
+    if (ms == MS_ORC)
+        return (boolean) (same_race(mtmp->data, gy.youmonst.data)
+                          || same_race(mtmp->data, &mons[Race_switch]));
+    return (boolean) ((ms >= MS_HUMANOID && ms != MS_GROAN)
+                      || ms == MS_WERE);
+}
+
+/* a short name from the model: letters, spaces, apostrophes; 2-20 chars */
+staticfn boolean
+llm_make_name(const char *what, char *name, size_t namesz)
+{
+    char prompt[512], resp[128], hero[BUFSZ], place[BUFSZ], *r, *w;
+
+    llm_scene(hero, sizeof hero, place, sizeof place);
+    Snprintf(prompt, sizeof prompt,
+             "Invent one fitting first name for %s. The player is %s, in "
+             "%s. Output ONLY the name - one or two words, no punctuation, "
+             "no explanation.", what, hero, place);
+    if (!llm_call("You name characters in a dark fantasy dungeon. Names are "
+                  "short and evocative.", prompt, 12, resp, sizeof resp))
+        return FALSE;
+    for (r = w = resp; *r; r++)
+        if (letter(*r) || *r == '\'' || (*r == ' ' && w > resp))
+            *w++ = *r;
+        else if (w > resp && *r != '"' && *r != '*')
+            break; /* stop at the first "." or ":" etc. */
+    *w = '\0';
+    llm_tidy(resp);
+    if (strlen(resp) < 2 || strlen(resp) > 20 || !letter(*resp))
+        return FALSE;
+    resp[0] = highc(resp[0]);
+    Strcpy(name, resp);
+    nhUse(namesz);
+    return TRUE;
+}
+
+/* s70: a peaceful that talks gets a name the first time it speaks */
+staticfn void
+llm_maybe_name_peaceful(struct monst *mtmp)
+{
+    char what[BUFSZ], name[64];
+
+    if (!mtmp->mpeaceful || mtmp->mtame || has_mgivenname(mtmp)
+        || mtmp->isshk || mtmp->ispriest || mtmp->isgd || mtmp->isminion
+        || unique_corpstat(mtmp->data) || !llm_speaks(mtmp))
+        return;
+    Snprintf(what, sizeof what, "a %s",
+             pmname(mtmp->data, Mgender(mtmp)));
+    if (llm_make_name(what, name, sizeof name))
+        (void) christen_monst(mtmp, name);
+}
+
+/* s69: rewrite a #chat line.  speech: stock is words; else an action */
+staticfn boolean
+llm_rewrite(struct monst *mtmp, const char *stock, boolean speech,
+            char *out, size_t outsz)
+{
+    char prompt[2048], resp[512], who[BUFSZ], hero[BUFSZ], place[BUFSZ];
+    const char *species = pmname(mtmp->data, Mgender(mtmp));
+    struct llm_memo *memo;
+    boolean newname = FALSE;
+    char *p;
+
+    if (speech && !has_mgivenname(mtmp)) {
+        llm_maybe_name_peaceful(mtmp);
+        newname = has_mgivenname(mtmp);
+    }
+    memo = llm_memo_for(mtmp->m_id, FALSE);
+    llm_who(mtmp, who, sizeof who);
+    llm_scene(hero, sizeof hero, place, sizeof place);
+
+    if (speech)
+        Snprintf(prompt, sizeof prompt,
+                 "Monster: %s.\nPlayer character, as the monster sees "
+                 "them: %s.\nLocation: %s.\n%s%s%s%s"
+                 "Stock line: the %s says \"%s\"\n"
+                 "Keep its meaning and attitude, with fresh wording and "
+                 "personality, at most 20 words.%s\n"
+                 "Output ONLY the words the %s says aloud - no quotation "
+                 "marks, no narration.",
+                 who, hero, place,
+                 (memo && *memo->said[0]) ? "It said earlier: \"" : "",
+                 (memo && *memo->said[0]) ? memo->said[0] : "",
+                 (memo && *memo->said[0]) ? "\"\n" : "",
+                 (memo && *memo->said[1]) ? "(Do not repeat itself.)\n" : "",
+                 species, stock,
+                 newname ? " It introduces itself by name." : "", species);
+    else
+        Snprintf(prompt, sizeof prompt,
+                 "Monster: %s.\nPlayer character, as the monster sees "
+                 "them: %s.\nLocation: %s.\n"
+                 "Sentence so far: \"The %s %s\"\n"
+                 "Output ONLY a short continuation of that sentence (at most "
+                 "12 words) describing HOW it does it, starting with a comma. "
+                 "It does not speak words.",
+                 who, hero, place, species, stock);
+
+    if (!llm_call(LLM_RULES, prompt, 48, resp, sizeof resp))
+        return FALSE;
+
+    if (speech) {
+        llm_unquote(resp);
+        if (strlen(resp) < 3 || strlen(resp) > 160)
+            return FALSE;
+        Strcpy(out, resp);
+        memo = llm_memo_for(mtmp->m_id, TRUE);
+        Strcpy(memo->said[1], memo->said[0]);
+        (void) strncpy(memo->said[0], resp, sizeof memo->said[0] - 1);
+    } else {
+        char base[BUFSZ], end = '.';
+        size_t bl;
+
+        llm_tidy(resp);
+        /* stock verb kept verbatim; its own '!' or '.' ends the line */
+        Strcpy(base, stock);
+        bl = strlen(base);
+        if (bl && (base[bl - 1] == '.' || base[bl - 1] == '!'))
+            end = base[--bl], base[bl] = '\0';
+        /* the model may echo "The jackal growls" - skip past the verb */
+        if ((p = strstri(resp, base)) != 0)
+            (void) memmove(resp, p + strlen(base),
+                           strlen(p + strlen(base)) + 1);
+        llm_tidy(resp);
+        p = eos(resp);
+        while (p > resp && strchr(".!?", p[-1]))
+            *--p = '\0';
+        if (strlen(resp) < 3 || strlen(resp) > 120)
+            return FALSE;
+        if (*resp != ',')
+            Snprintf(out, outsz, "%s %s, %s%c", Monnam(mtmp), base,
+                     resp, end);
+        else
+            Snprintf(out, outsz, "%s %s%s%c", Monnam(mtmp), base, resp,
+                     end);
+    }
+    return TRUE;
+}
+
+/* is this #chat line safe to hand to the model? */
+staticfn boolean
+llm_chat_ok(struct monst *mtmp, int msound)
+{
+    if (!*iflags.llmchat || Hallucination || !canspotmon(mtmp))
+        return FALSE;
+    if (mtmp->data == &mons[PM_DEATH])
+        return FALSE;
+    switch (msound) {
+    case MS_NURSE:  /* tells you what to take off */
+    case MS_GUARD:  /* vault instructions */
+    case MS_RIDER:
+    case MS_SPELL:  /* deliberately vague in stock */
+    case MS_SELL:
+    case MS_PRIEST:
+    case MS_ORACLE:
+    case MS_LEADER:
+    case MS_NEMESIS:
+    case MS_GUARDIAN:
+        return FALSE;
+    default:
+        return TRUE;
+    }
+}
+
+/* s70: set_voice() calls this - remember who the next spoken line is from */
+void
+llm_note_speaker(struct monst *mtmp, int moreinfo)
+{
+    llm_speaker_mid = mtmp ? mtmp->m_id : 0;
+    llm_speaker_moves = svm.moves;
+    llm_tts_mid = llm_speaker_mid; /* s75: kept for text-to-speech */
+    llm_tts_moves = svm.moves;
+    llm_tts_deity = (moreinfo & voice_deity) != 0;
+}
+
+/*
+ * s75: EVERY message line is reworded (not only speech), and never the
+ * same way twice - no cache: variety is the point.  The meaning must
+ * survive, so a rewrite is thrown away (stock text shown) unless:
+ *  - every number in the line is still there (same numbers, any order);
+ *  - every proper name (capitalised word that doesn't start a sentence:
+ *    names, scroll labels) is still there;
+ *  - every GAME NOUN is still there - each word of every object name,
+ *    object appearance and monster name (so "bubbly potion" can't become
+ *    "fizzy potion", nor "jackal" become "wolf");
+ *  - it isn't much longer than the original.
+ * Skipped: no-repeat / history-suppressed / cursor messages (getpos
+ * autodescribe), inventory lines ("a - ..."), prompts with [brackets],
+ * hallucination, very short lines.  A slow server backs off for a minute.
+ */
+static char **llm_vocab = 0;
+static int llm_nvocab = 0;
+static long llm_backoff_until = 0L;
+
+staticfn int
+llm_vcmp(const void *a, const void *b)
+{
+    return strcmp(*(char *const *) a, *(char *const *) b);
+}
+
+staticfn boolean
+llm_stopword(const char *w)
+{
+    static const char *const stop[] = {
+        "the", "and", "with", "from", "for", "you", "your", "this", "that",
+        "are", "has", "have", "was", "but", "not", "its", "his", "her",
+        "who", "out", "off", 0
+    };
+    int i;
+
+    for (i = 0; stop[i]; i++)
+        if (!strcmp(w, stop[i]))
+            return TRUE;
+    return FALSE;
+}
+
+staticfn void
+llm_vocab_add(const char *s, int *cap)
+{
+    char w[64];
+    int k;
+
+    if (!s)
+        return;
+    while (*s) {
+        while (*s && !letter(*s))
+            s++;
+        for (k = 0; *s && letter(*s) && k < 63; s++)
+            w[k++] = lowc(*s);
+        w[k] = '\0';
+        if (k < 3 || llm_stopword(w))
+            continue;
+        if (llm_nvocab >= *cap) {
+            char **nv;
+
+            *cap = *cap ? *cap * 2 : 1024;
+            nv = (char **) alloc((unsigned) (*cap * sizeof (char *)));
+            if (llm_vocab) {
+                (void) memcpy((genericptr_t) nv, (genericptr_t) llm_vocab,
+                              llm_nvocab * sizeof (char *));
+                free((genericptr_t) llm_vocab);
+            }
+            llm_vocab = nv;
+        }
+        llm_vocab[llm_nvocab++] = dupstr(w);
+    }
+}
+
+staticfn void
+llm_vocab_build(void)
+{
+    int i, g, cap = 0, n = 0;
+
+    for (i = 0; i < NUM_OBJECTS; i++) {
+        llm_vocab_add(OBJ_NAME(objects[i]), &cap);
+        llm_vocab_add(OBJ_DESCR(objects[i]), &cap);
+    }
+    for (i = LOW_PM; i < NUMMONS; i++)
+        for (g = 0; g < NUM_MGENDERS; g++)
+            llm_vocab_add(mons[i].pmnames[g], &cap);
+    llm_vocab_add("gold zorkmid", &cap);
+    qsort((genericptr_t) llm_vocab, llm_nvocab, sizeof (char *), llm_vcmp);
+    for (i = 0; i < llm_nvocab; i++) /* dedupe */
+        if (!n || strcmp(llm_vocab[n - 1], llm_vocab[i]))
+            llm_vocab[n++] = llm_vocab[i];
+        else
+            free((genericptr_t) llm_vocab[i]);
+    llm_nvocab = n;
+}
+
+staticfn boolean
+llm_vocab_has(const char *w)
+{
+    const char *key = w;
+
+    return (boolean) (bsearch((genericptr_t) &key, (genericptr_t) llm_vocab,
+                              llm_nvocab, sizeof (char *), llm_vcmp) != 0);
+}
+
+/* s75: words whose loss changes what a message tells you (hunger and
+   encumbrance states, conditions, BUC, directions) - kept like nouns */
+staticfn boolean
+llm_protected(const char *lw)
+{
+    static const char *const prot[] = {
+        "hungry", "weak", "faint", "fainting", "fainted", "satiated",
+        "burdened", "stressed", "strained", "overtaxed", "overloaded",
+        "blind", "blinded", "stunned", "confused", "deaf", "hallucinating",
+        "sick", "ill", "slimy", "stiffening", "stoned", "strangled",
+        "levitating", "cursed", "blessed", "uncursed",
+        "north", "south", "east", "west", "locked", "unlocked", "broken",
+        "empty", "invisible", "peaceful", "hostile", "tame", 0
+    };
+    int i;
+
+    for (i = 0; prot[i]; i++)
+        if (!strcmp(lw, prot[i]))
+            return TRUE;
+    return FALSE;
+}
+
+/* does `fresh` keep every game noun, number and proper name of `stock`,
+   and add none of its own? */
+staticfn boolean
+llm_meaning_kept(const char *stock, const char *fresh)
+{
+    char w[64], nums_a[BUFSZ], nums_b[BUFSZ];
+    const char *s, *prev = 0;
+    int k;
+
+    /* numbers: same digit strings, compared as sorted lists */
+    {
+        const char *src[2];
+        char *dst[2];
+        int t;
+
+        src[0] = stock, src[1] = fresh, dst[0] = nums_a, dst[1] = nums_b;
+        for (t = 0; t < 2; t++) {
+            char list[32][16];
+            int nn = 0, a, b;
+
+            for (s = src[t]; *s;) {
+                if (digit(*s)) {
+                    for (k = 0; digit(*s) && k < 15; s++)
+                        list[nn][k++] = *s;
+                    list[nn][k] = '\0';
+                    if (nn < 31)
+                        nn++;
+                } else
+                    s++;
+            }
+            for (a = 0; a < nn; a++) /* tiny sort */
+                for (b = a + 1; b < nn; b++)
+                    if (strcmp(list[a], list[b]) > 0) {
+                        char tmp[16];
+
+                        Strcpy(tmp, list[a]), Strcpy(list[a], list[b]),
+                            Strcpy(list[b], tmp);
+                    }
+            *dst[t] = '\0';
+            for (a = 0; a < nn; a++)
+                Strcat(dst[t], list[a]), Strcat(dst[t], ",");
+        }
+        if (strcmp(nums_a, nums_b))
+            return FALSE;
+    }
+
+    for (s = stock; *s;) {
+        boolean cap_mid;
+
+        while (*s && !letter(*s)) {
+            if (*s != ' ')
+                prev = s;
+            s++;
+        }
+        if (!*s)
+            break;
+        cap_mid = (isupper((uchar) *s) && prev && !strchr(".!?", *prev));
+        for (k = 0; *s && (letter(*s) || *s == '\'') && k < 63; s++)
+            w[k++] = *s;
+        w[k] = '\0';
+        prev = s - 1;
+        if (k < 2)
+            continue;
+        /* proper names and labels */
+        if (cap_mid) {
+            char nm[64];
+            int j;
+
+            for (j = 0; w[j] && w[j] != '\''; j++)
+                nm[j] = w[j];
+            nm[j] = '\0';
+            if (j >= 2 && !strstri(fresh, nm))
+                return FALSE;
+        }
+        /* game nouns, with a plural 's'/'es' allowed */
+        {
+            char lw[64], root[64];
+            int j, L;
+
+            for (j = 0; w[j] && w[j] != '\''; j++)
+                lw[j] = lowc(w[j]);
+            lw[j] = '\0';
+            L = j;
+            if (llm_protected(lw)) {
+                char pw[64];
+                const char *f = fresh;
+                boolean found = FALSE;
+
+                /* whole-word search, case-insensitive */
+                while ((f = strstri(f, lw)) != 0) {
+                    if ((f == fresh || !letter(f[-1]))
+                        && !letter(f[L])) {
+                        found = TRUE;
+                        break;
+                    }
+                    f++;
+                }
+                nhUse(pw);
+                if (!found)
+                    return FALSE;
+                continue;
+            }
+            if (L < 3 || llm_stopword(lw))
+                continue;
+            Strcpy(root, lw);
+            if (!llm_vocab_has(root) && L > 3 && root[L - 1] == 's') {
+                root[L - 1] = '\0';
+                if (!llm_vocab_has(root) && L > 4 && root[L - 2] == 'e')
+                    root[L - 2] = '\0';
+            }
+            if (llm_vocab_has(root) && !strstri(fresh, root))
+                return FALSE;
+        }
+    }
+
+    /* reverse pass: the rewrite may not bring in game nouns or
+       capitalised names the original didn't have (an invented
+       "warhammer", a made-up translation of a scroll label) */
+    prev = 0;
+    for (s = fresh; *s;) {
+        boolean cap_mid;
+        char lw[64], root[64];
+        int L;
+
+        while (*s && !letter(*s)) {
+            if (*s != ' ')
+                prev = s;
+            s++;
+        }
+        if (!*s)
+            break;
+        cap_mid = (isupper((uchar) *s) && prev && !strchr(".!?:\"", *prev));
+        for (k = 0; *s && letter(*s) && k < 63; s++)
+            w[k++] = *s;
+        w[k] = '\0';
+        prev = s - 1;
+        if (k < 3)
+            continue;
+        if (cap_mid && !strstri(stock, w))
+            return FALSE;
+        for (L = 0; w[L]; L++)
+            lw[L] = lowc(w[L]);
+        lw[L] = '\0';
+        if (llm_stopword(lw))
+            continue;
+        Strcpy(root, lw);
+        if (!llm_vocab_has(root) && L > 3 && root[L - 1] == 's') {
+            root[L - 1] = '\0';
+            if (!llm_vocab_has(root) && L > 4 && root[L - 2] == 'e')
+                root[L - 2] = '\0';
+        }
+        if (llm_vocab_has(root) && !strstri(stock, root))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+boolean
+llm_rewrite_line(const char *line, char *out, size_t outsz, boolean spoken)
+{
+    char stock[BUFSZ], prompt[2048], resp[512], who[BUFSZ];
+    struct monst *spk = 0;
+    const char *p;
+    size_t len;
+    long t0;
+    boolean ok;
+
+    if (llm_skip_spoken) {
+        llm_skip_spoken = FALSE;
+        return FALSE;
+    }
+    if (!*iflags.llmchat || Hallucination)
+        return FALSE;
+    if (llm_backoff_until && (long) getnow() < llm_backoff_until)
+        return FALSE;
+    len = strlen(line);
+    if (len < 8 || len >= sizeof stock - 4)
+        return FALSE;
+    if (strchr(line, '[') || strstr(line, "--"))
+        return FALSE; /* prompts, key hints */
+    if (len > 4 && line[1] == ' ' && line[2] == '-' && line[3] == ' ')
+        return FALSE; /* "a - a +1 long sword (weapon in hand)." */
+    if (spoken) {
+        if (line[0] != '"' || line[len - 1] != '"')
+            return FALSE;
+        Strcpy(stock, line + 1);
+        stock[len - 2] = '\0';
+    } else {
+        Strcpy(stock, line);
+    }
+    if (!llm_vocab)
+        llm_vocab_build();
+
+    if (spoken) {
+        if (llm_speaker_mid && llm_speaker_moves == svm.moves)
+            spk = find_mid(llm_speaker_mid, FM_FMON);
+        llm_speaker_mid = 0;
+        if (spk && canspotmon(spk))
+            Snprintf(who, sizeof who, "a %s",
+                     pmname(spk->data, Mgender(spk)));
+        else
+            Strcpy(who, "someone");
+        /* a bare few-shot rephrase: with the scene in the prompt the 3B
+           model echoed it back and added facts */
+        Snprintf(prompt, sizeof prompt,
+                 "Line: \"Get out of my sight, worm!\"\nSpeaker: an ogre\n"
+                 "Rephrased: Begone from my eyes, you crawling worm!\n\n"
+                 "Line: \"Welcome, Fred, to the temple!\"\nSpeaker: a priest\n"
+                 "Rephrased: Fred, be welcome in this temple!\n\n"
+                 "Line: \"%s\"\nSpeaker: %s\nRephrased:", stock, who);
+    } else {
+        Snprintf(prompt, sizeof prompt,
+                 "Message: You hit the jackal!\n"
+                 "Reworded: Your strike lands on the jackal!\n\n"
+                 "Message: The kobold misses you.\n"
+                 "Reworded: The kobold's attack goes wide of you.\n\n"
+                 "Message: You see here a bubbly potion.\n"
+                 "Reworded: A bubbly potion lies here at your feet.\n\n"
+                 "Message: %s\nReworded:", stock);
+    }
+
+    t0 = (long) getnow();
+    llm_timeout_ms = 2500;
+    ok = llm_call(spoken
+                    ? "You rephrase lines of dialogue from a fantasy game. "
+                      "Keep the exact meaning, tone, every name and every "
+                      "instruction. Similar length. Never add information. "
+                      "Output only the rephrased line."
+                    : "You reword messages from a fantasy roguelike so they "
+                      "read fresh every time. Keep the exact meaning and "
+                      "every name, number, item, monster and place word. "
+                      "Keep who does what to whom. Similar length. Never "
+                      "add or drop information: mention no weapon, item, "
+                      "creature, place or meaning that is not in the "
+                      "message, and never translate or explain text. "
+                      "Output only the reworded message.",
+                  prompt, 64, resp, sizeof resp);
+    llm_timeout_ms = 8000;
+    if (!ok) {
+        if ((long) getnow() - t0 >= 2) /* slow, not refused: back off */
+            llm_backoff_until = (long) getnow() + 60L;
+        return FALSE;
+    }
+    {
+        static const char *const lbl[] = { "Message:", "Reworded:",
+                                           "Rephrased:", "Line:", 0 };
+        int li;
+
+        for (li = 0; lbl[li]; li++)
+            if (!strncmpi(resp, lbl[li], strlen(lbl[li])))
+                (void) memmove(resp, resp + strlen(lbl[li]),
+                               strlen(resp + strlen(lbl[li])) + 1);
+    }
+    llm_unquote(resp);
+    if (strlen(resp) < 2 || strlen(resp) > 2 * strlen(stock) + 30)
+        return FALSE;
+    /* the 3B model sometimes parrots a few-shot example */
+    if (strstri(resp, "the jackal!") || strstri(resp, "the kobold")
+        || strstri(resp, "bubbly potion lies") || strstri(resp, "worm!")
+        || strstri(resp, "Fred"))
+        if (!strstri(stock, "jackal") && !strstri(stock, "kobold")
+            && !strstri(stock, "bubbly") && !strstri(stock, "worm")
+            && !strstri(stock, "Fred"))
+            return FALSE;
+    for (p = resp; *p; p++)
+        if ((uchar) *p < ' ')
+            return FALSE;
+    if (!llm_meaning_kept(stock, resp))
+        return FALSE;
+    if (spoken)
+        Snprintf(out, outsz, "\"%s\"", resp);
+    else
+        Snprintf(out, outsz, "%s", resp);
+    return TRUE;
+}
+
+/* s75: speak a verbalized line (text-to-speech, iflags.voices).  Voice
+   from the speaker set_voice() named this turn: gender picks the voice,
+   the monster's id gives it a stable pitch and pace; gods are deep. */
+void
+llm_tts_line(const char *line)
+{
+    extern void vulture_tts_speak(const char *, int, int, int);
+    char buf[BUFSZ];
+    size_t len = strlen(line);
+    int female = 0, pitch = 0, rate = 0;
+    struct monst *spk = 0;
+
+    if (len < 3 || len >= sizeof buf)
+        return;
+    Strcpy(buf, line);
+    if (buf[0] == '"' && buf[len - 1] == '"') {
+        buf[len - 1] = '\0';
+        (void) memmove(buf, buf + 1, len - 1);
+    }
+    if (llm_tts_deity && llm_tts_moves == svm.moves) {
+        pitch = -9, rate = -3;
+    } else {
+        if (llm_tts_mid && llm_tts_moves == svm.moves)
+            spk = find_mid(llm_tts_mid, FM_FMON);
+        if (spk) {
+            female = spk->female ? 1 : 0;
+            pitch = (int) ((spk->m_id * 7) % 13) - 6;
+            rate = (int) ((spk->m_id * 3) % 5) - 2;
+            if (verysmall(spk->data))
+                pitch += 4;
+            else if (bigmonst(spk->data))
+                pitch -= 4;
+        }
+    }
+    vulture_tts_speak(buf, female, pitch, rate);
+}
+
+/*
+ * s70 llmtalk: #chat asks "Say what?" and the monster answers what you
+ * typed.  Blank or Esc falls back to the ordinary chat.  Shopkeepers,
+ * priests, the Oracle and quest characters keep their stock behaviour.
+ */
+boolean
+llm_free_talk(struct monst *mtmp)
+{
+    char said[BUFSZ], prompt[2048], resp[512], who[BUFSZ], hero[BUFSZ],
+        place[BUFSZ], out[BUFSZ];
+    struct llm_memo *memo;
+    boolean speaks;
+    int ms = mtmp->data->msound;
+
+    if (!iflags.llmtalk || !*iflags.llmchat || Hallucination
+        || !canspotmon(mtmp) || is_silent(mtmp->data))
+        return FALSE;
+    if (mtmp->isshk || mtmp->ispriest || mtmp->isgd || ms == MS_ORACLE
+        || ms == MS_LEADER || ms == MS_NEMESIS || ms == MS_GUARDIAN
+        || ms == MS_RIDER || mtmp->m_id == svq.quest_status.leader_m_id)
+        return FALSE;
+
+    getlin("Say what? (blank for the usual chat)", said);
+    mungspaces(said);
+    if (!*said || *said == '\033')
+        return FALSE;
+
+    speaks = llm_speaks(mtmp);
+    if (speaks)
+        llm_maybe_name_peaceful(mtmp);
+    memo = llm_memo_for(mtmp->m_id, TRUE);
+    llm_who(mtmp, who, sizeof who);
+    llm_scene(hero, sizeof hero, place, sizeof place);
+    Snprintf(prompt, sizeof prompt,
+             "Monster: %s.\nPlayer character, as the monster sees them: %s."
+             "\nLocation: %s.\n%s%s%s%s%s%s"
+             "The player now says to it: \"%s\"\n%s",
+             who, hero, place,
+             *memo->heard ? "Earlier the player said: \"" : "",
+             memo->heard, *memo->heard ? "\"\n" : "",
+             *memo->said[0] ? "And it answered: \"" : "", memo->said[0],
+             *memo->said[0] ? "\"\n" : "", said,
+             speaks
+               ? "Reply in character, at most 25 words. Deflect any "
+                 "request for hints, directions, item locations or advice "
+                 "in character. Output ONLY its spoken words - no "
+                 "quotation marks, no narration."
+               : "It does not understand words. Describe its reaction in "
+                 "at most 15 words, third person, starting with a verb, "
+                 "without naming it.");
+    if (!llm_call(LLM_RULES, prompt, 64, resp, sizeof resp)) {
+        pline("%s doesn't seem to be listening.", Monnam(mtmp));
+        return TRUE;
+    }
+    (void) strncpy(memo->heard, said, sizeof memo->heard - 1);
+    if (speaks) {
+        llm_unquote(resp);
+        if (strlen(resp) < 2) {
+            pline("%s says nothing.", Monnam(mtmp));
+            return TRUE;
+        }
+        (void) strncpy(memo->said[0], resp, sizeof memo->said[0] - 1);
+        SetVoice(mtmp, 0, 80, 0);
+        llm_skip_spoken = TRUE;
+        verbalize1(resp);
+    } else {
+        char *e;
+
+        llm_tidy(resp);
+        e = eos(resp);
+        while (e > resp && strchr(".!?", e[-1]))
+            *--e = '\0';
+        if (strlen(resp) < 2) {
+            pline("%s ignores you.", Monnam(mtmp));
+            return TRUE;
+        }
+        resp[0] = lowc(resp[0]);
+        Snprintf(out, sizeof out, "%s %s.", Monnam(mtmp), resp);
+        pline1(out);
+    }
+    return TRUE;
+}
+
+/*
+ * s76: now and then - and on arriving somewhere new, getting hungry or
+ * getting badly hurt - the hero mutters a remark about their situation.
+ * The model sees only what the hero knows (role, place, rough health,
+ * hunger, burden, what's in sight, the last message) and the remark may
+ * not name any game thing that isn't in that context.
+ */
+staticfn boolean
+llm_no_new_nouns(const char *ctx, const char *fresh)
+{
+    const char *s = fresh;
+    char w[64], root[64];
+    int k, L;
+
+    while (*s) {
+        while (*s && !letter(*s))
+            s++;
+        for (k = 0; *s && letter(*s) && k < 63; s++)
+            w[k++] = lowc(*s);
+        w[k] = '\0';
+        if (k < 3 || llm_stopword(w))
+            continue;
+        Strcpy(root, w);
+        L = k;
+        if (!llm_vocab_has(root) && L > 3 && root[L - 1] == 's') {
+            root[L - 1] = '\0';
+            if (!llm_vocab_has(root) && L > 4 && root[L - 2] == 'e')
+                root[L - 2] = '\0';
+        }
+        if (llm_vocab_has(root) && !strstri(ctx, root))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+void
+llm_hero_quip_pass(void)
+{
+    extern void vulture_tts_speak(const char *, int, int, int);
+    static long next_quip = -1L, last_quip = -1000L;
+    static d_level last_lev = { -1, -1 };
+    static int last_hs = -1;
+    static boolean low_said = FALSE;
+    int hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax;
+    boolean trigger = FALSE;
+    const char *why = "", *health, *hunger;
+    char hero[BUFSZ], place[BUFSZ], seen[BUFSZ], ctx[2048], prompt[2600],
+        resp[256], last[BUFSZ];
+    struct monst *m;
+    int nseen = 0;
+
+    if (!on_level(&last_lev, &u.uz)) {
+        if (last_lev.dnum >= 0 && !rn2(3))
+            trigger = TRUE, why = "You have just arrived somewhere new. ";
+        last_lev = u.uz;
+    }
+    if (u.uhs != last_hs) {
+        if (last_hs >= 0 && u.uhs >= HUNGRY && u.uhs > last_hs)
+            trigger = TRUE, why = "Your stomach is complaining. ";
+        last_hs = u.uhs;
+    }
+    if (hpmax > 0 && hp > 0 && hp * 3 < hpmax) {
+        if (!low_said)
+            trigger = TRUE, why = "You are badly hurt. ", low_said = TRUE;
+    } else if (hp * 2 > hpmax) {
+        low_said = FALSE;
+    }
+    if (next_quip < 0)
+        next_quip = svm.moves + rn1(250, 150);
+    if (svm.moves >= next_quip)
+        trigger = TRUE;
+    if (!iflags.heroquips || !*iflags.llmchat || Hallucination
+        || u.uswallow || !trigger || svm.moves - last_quip < 60)
+        return;
+    last_quip = svm.moves;
+    next_quip = svm.moves + rn1(300, 200);
+    if (!llm_vocab)
+        llm_vocab_build();
+
+    llm_scene(hero, sizeof hero, place, sizeof place);
+    health = (hp * 3 < hpmax) ? "badly hurt" : (hp * 2 < hpmax) ? "wounded"
+             : "in good health";
+    hunger = (u.uhs >= FAINTING) ? ", fainting from hunger"
+             : (u.uhs == WEAK) ? ", weak with hunger"
+             : (u.uhs == HUNGRY) ? ", hungry"
+             : (u.uhs == SATIATED) ? ", very full" : "";
+    seen[0] = '\0';
+    for (m = fmon; m && nseen < 3; m = m->nmon)
+        if (!DEADMONSTER(m) && canspotmon(m) && couldsee(m->mx, m->my)
+            && !m->mtame) {
+            Snprintf(eos(seen), sizeof seen - strlen(seen), "%s%s %s",
+                     nseen ? ", " : "", m->mpeaceful ? "a peaceful" : "a",
+                     pmname(m->data, Mgender(m)));
+            nseen++;
+        }
+    Strcpy(last, gt.toplines);
+    Snprintf(ctx, sizeof ctx,
+             "You are %s named %s, in %s. You are %s%s%s. %s%s%s"
+             "The last thing that happened: \"%s\".",
+             hero, svp.plname, place, health, hunger,
+             near_capacity() > UNENCUMBERED ? ", weighed down by your gear"
+                                            : "",
+             why, *seen ? "You can see " : "", *seen ? seen : "", last);
+    if (*seen)
+        Strcat(ctx, " ");
+    Snprintf(prompt, sizeof prompt,
+             "%s\nSay one short, wry remark to yourself about your situation"
+             " - first person, at most 14 words, in character for your "
+             "role. No advice, no hints, nothing you could not know. "
+             "Output ONLY the remark, no quotation marks.", ctx);
+    if (!llm_call("You voice the muttered inner thoughts of a fantasy "
+                  "dungeon adventurer. Dry wit; never useful facts.",
+                  prompt, 40, resp, sizeof resp))
+        return;
+    llm_unquote(resp);
+    if (strlen(resp) < 3 || strlen(resp) > 140 || !llm_no_new_nouns(ctx, resp))
+        return;
+    llm_skip_spoken = TRUE; /* already model-written */
+    pline("You mutter, \"%s\"", resp);
+    if (iflags.voices)
+        vulture_tts_speak(resp, flags.female ? 1 : 0, 1, 0);
+}
+
+/*
+ * s73: after a successful prayer that fixed nothing and granted nothing,
+ * you may put one question to your god.  It answers in character -
+ * cryptic, archaic - and never with game facts.
+ */
+void
+llm_ask_god(aligntyp g_align)
+{
+    char q[BUFSZ], ask[BUFSZ], prompt[2048], resp[512], hero[BUFSZ],
+        place[BUFSZ];
+    const char *god = align_gname(g_align);
+
+    if (!*iflags.llmchat || Hallucination)
+        return;
+    Snprintf(ask, sizeof ask,
+             "You sense %s listening.  Ask a question? (blank to stay silent)",
+             god);
+    getlin(ask, q);
+    mungspaces(q);
+    if (!*q || *q == '\033')
+        return;
+    llm_scene(hero, sizeof hero, place, sizeof place);
+    Snprintf(prompt, sizeof prompt,
+             "You are %s, a %s god. A mortal who worships you - %s, in %s "
+             "- has just prayed to you in good standing, and asks: \"%s\"\n"
+             "Answer in character in at most 30 words: lofty, cryptic, "
+             "archaic. Never reveal facts about their world: no item "
+             "identities, locations, directions, dangers, the future or "
+             "how anything works - turn such questions into moral or "
+             "mystical counsel. Output ONLY your spoken words, no quotation "
+             "marks.",
+             god, align_str(g_align), hero, place, q);
+    if (!llm_call("You voice the gods of a dark fantasy world. You are "
+                  "ancient, terse and never give practical help.",
+                  prompt, 80, resp, sizeof resp)) {
+        pline("%s is silent.", god);
+        return;
+    }
+    llm_unquote(resp);
+    if (strlen(resp) < 2) {
+        pline("%s is silent.", god);
+        return;
+    }
+    pline("The voice of %s %s:", god,
+          Deaf ? "fills your mind" : "booms out");
+    llm_skip_spoken = TRUE;
+    verbalize1(resp);
+}
+
+/*
+ * s70: name the starting pet (if the rc gave it no name) once the model is
+ * up.  Called once per input from vulture_qol_pass(); a few tries, spaced
+ * out, then gives up for this run.
+ */
+void
+llm_pet_name_pass(void)
+{
+    static long next_try = 5L;
+    static int tries = 0;
+    struct monst *pet;
+    char what[BUFSZ], name[64];
+
+    if (!*iflags.llmchat || tries >= 4 || svm.moves < next_try
+        || !svc.context.startingpet_mid || Hallucination)
+        return;
+    pet = find_mid(svc.context.startingpet_mid, FM_FMON);
+    if (!pet || !pet->mtame || has_mgivenname(pet)) {
+        tries = 4;
+        return;
+    }
+    if (!canspotmon(pet)) {
+        next_try = svm.moves + 5L;
+        return;
+    }
+    tries++;
+    next_try = svm.moves + 25L;
+    Snprintf(what, sizeof what, "a %s that is the player's loyal pet",
+             pmname(pet->data, Mgender(pet)));
+    if (llm_make_name(what, name, sizeof name)) {
+        char species[BUFSZ];
+
+        Strcpy(species, pmname(pet->data, Mgender(pet)));
+        (void) christen_monst(pet, name);
+        You("decide to call your %s %s.", species, name);
+        tries = 4;
+    }
+}
+
 DISABLE_WARNING_FORMAT_NONLITERAL
 
 int /* check calls to this */
@@ -1219,6 +2354,24 @@ domonnoise(struct monst *mtmp)
     } /* case MS_RIDER */
     } /* switch */
 
+    /* §69: local-LLM rewrite of the flavour line (stock on any failure) */
+    if (llm_chat_ok(mtmp, msound)
+        && !(mtmp->mcan && verbl_msg_mcan) && (pline_msg || verbl_msg)) {
+        char llmbuf[BUFSZ];
+
+        if (llm_rewrite(mtmp, pline_msg ? pline_msg : verbl_msg,
+                        !pline_msg, llmbuf, sizeof llmbuf)) {
+            if (pline_msg) {
+                pline1(llmbuf);
+            } else {
+                SetVoice(mtmp, 0, 80, 0);
+                llm_skip_spoken = TRUE; /* already model-written */
+                verbalize1(llmbuf);
+            }
+            return ECMD_TIME;
+        }
+    }
+
     if (pline_msg) {
         pline("%s %s", Monnam(mtmp), pline_msg);
     } else if (mtmp->mcan && verbl_msg_mcan) {
@@ -1405,6 +2558,9 @@ dochat(void)
               xresponse);
         return ECMD_OK;
     }
+    /* s70: llmtalk - type what you say */
+    if (llm_free_talk(mtmp))
+        return ECMD_TIME;
     return domonnoise(mtmp);
 }
 
@@ -2164,6 +3320,7 @@ set_voice(
     int32_t volume SPEECHONLY,
     int32_t moreinfo SPEECHONLY)
 {
+    llm_note_speaker(mtmp, (int) moreinfo); /* s70/s75: next speaker */
 #ifdef SND_SPEECH
     int32_t gender = (mtmp && mtmp->female) ? FEMALE : MALE;
 

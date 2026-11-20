@@ -50,6 +50,7 @@ staticfn void wornarm_destroyed(struct obj *);
 staticfn void count_worn_stuff(struct obj **, boolean);
 staticfn int armor_or_accessory_off(struct obj *);
 staticfn int accessory_or_armor_on(struct obj *);
+staticfn struct obj *wear_swap_blocker(struct obj *);
 staticfn void already_wearing(const char *);
 staticfn void already_wearing2(const char *, const char *);
 staticfn int equip_ok(struct obj *, boolean, boolean);
@@ -2213,6 +2214,62 @@ canwearobj(struct obj *otmp, long *mask, boolean noisy)
     return !err;
 }
 
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §36): one-step armor swap.
+ *
+ * Returns the worn piece that is the ONLY thing stopping `otmp` from being
+ * worn - the piece already in the same slot - or NULL.  Same slot only:
+ * a suit under a cloak, or a shirt under a suit/cloak, still needs the
+ * outer layer off first (stock message), because chaining several delayed
+ * takeoffs through the command queue does not work: every armoroff() with
+ * a delay calls nomul(), and nomul() clears CQ_CANNED.
+ *
+ * "Only thing" is checked by emptying the slot for one quiet canwearobj()
+ * call and putting it straight back, so every other refusal (two-handed
+ * weapon vs shield, welded weapon vs gloves, horns vs helmet, trapped feet
+ * vs boots, polyform) still wins and still gets its own message.
+ */
+/* Vulture mod (§41): the cloak a cloak+suit swap took off, so the new
+   suit's donning can queue it back on.  Not saved: a save mid-swap just
+   leaves the cloak off.  The turn stamp keeps a stale record (swap
+   interrupted) from re-wearing the cloak on some unrelated suit later. */
+static unsigned swap_cloak_oid = 0;
+static long swap_cloak_turn = 0L;
+
+staticfn struct obj *
+wear_swap_blocker(struct obj *otmp)
+{
+    struct obj **slot = (struct obj **) 0, *old;
+    long dummymask = 0L;
+    boolean ok;
+
+    if (!otmp || otmp->oclass != ARMOR_CLASS || (otmp->owornmask & W_ARMOR))
+        return (struct obj *) 0;
+
+    if (is_helmet(otmp))
+        slot = &uarmh;
+    else if (is_shield(otmp))
+        slot = &uarms;
+    else if (is_boots(otmp))
+        slot = &uarmf;
+    else if (is_gloves(otmp))
+        slot = &uarmg;
+    else if (is_cloak(otmp))
+        slot = &uarmc;
+    else if (is_suit(otmp))
+        slot = uarmc ? (struct obj **) 0 : &uarm;
+    else if (is_shirt(otmp))
+        slot = (uarmc || uarm) ? (struct obj **) 0 : &uarmu;
+
+    if (!slot || !(old = *slot) || old == uskin)
+        return (struct obj *) 0;
+
+    *slot = (struct obj *) 0;
+    ok = canwearobj(otmp, &dummymask, FALSE);
+    *slot = old;
+    return ok ? old : (struct obj *) 0;
+}
+
 staticfn int
 accessory_or_armor_on(struct obj *obj)
 {
@@ -2230,6 +2287,51 @@ accessory_or_armor_on(struct obj *obj)
                || obj->otyp == LENSES);
     /* checks which are performed prior to actually touching the item */
     if (armor) {
+        struct obj *old = wear_swap_blocker(obj);
+
+        /* Vulture mod (§36): the slot is taken by another piece, so take
+           that one off through the normal #takeoff path (cursed check,
+           cockatrice-corpse glove prompt, delay and messages all stock),
+           then queue 'W' + this item to run as the next command.  Same
+           turn cost as doing it by hand.  The queue is added AFTER the
+           takeoff starts because armoroff()'s nomul() clears it; anything
+           that interrupts in between (stop_occupation, teleport) clears
+           it too, leaving the old piece off and the new one unworn. */
+        if (old) {
+            int res = armor_or_accessory_off(old);
+
+            if ((res & ECMD_TIME) != 0) {
+                cmdq_add_ec(CQ_CANNED, dowear);
+                cmdq_add_key(CQ_CANNED, obj->invlet);
+            }
+            return res;
+        }
+
+        /* Vulture mod (§41): a suit blocked only by the cloak over it.
+           Take the cloak off, remember it, and queue 'W' + the suit; that
+           re-entry swaps out any old suit (the block above), and the suit's
+           own donning queues the cloak back on (end of this function). */
+        if (is_suit(obj) && uarmc) {
+            struct obj *cloak = uarmc;
+            boolean fits;
+            long dummymask = 0L;
+
+            uarmc = (struct obj *) 0;
+            fits = canwearobj(obj, &dummymask, FALSE)
+                   || wear_swap_blocker(obj) != 0;
+            uarmc = cloak;
+            if (fits) {
+                int res = armor_or_accessory_off(cloak);
+
+                if ((res & ECMD_TIME) != 0) {
+                    swap_cloak_oid = cloak->o_id;
+                    swap_cloak_turn = svm.moves;
+                    cmdq_add_ec(CQ_CANNED, dowear);
+                    cmdq_add_key(CQ_CANNED, obj->invlet);
+                }
+                return res;
+            }
+        }
         if (!canwearobj(obj, &mask, TRUE))
             return ECMD_OK;
 
@@ -2412,6 +2514,24 @@ accessory_or_armor_on(struct obj *obj)
         svc.context.takeoff.mask = svc.context.takeoff.what = 0L;
         /* gw.wasinwater = 0U; // can't clear this yet; Boots_on() needs it
          * and gets called via afternmv() after this routine has returned */
+
+        /* Vulture mod (§41): a cloak+suit swap took the cloak off first;
+           now that the new suit is going on, queue the cloak back on.
+           Must come AFTER the nomul() above, which clears CQ_CANNED. */
+        if (obj == uarm && swap_cloak_oid) {
+            struct obj *cloak = (svm.moves - swap_cloak_turn < 100L)
+                                    ? o_on(swap_cloak_oid, gi.invent)
+                                    : (struct obj *) 0;
+
+            swap_cloak_oid = 0;
+            /* o_on() also searches containers; only a carried cloak has a
+               usable invlet */
+            if (cloak && cloak->where == OBJ_INVENT && !cloak->owornmask
+                && !uarmc) {
+                cmdq_add_ec(CQ_CANNED, dowear);
+                cmdq_add_key(CQ_CANNED, cloak->invlet);
+            }
+        }
     } else { /* not armor */
         if (ring) {
             /* Ring_on() expects ring to already be worn as uleft or uright */
@@ -2449,9 +2569,20 @@ dowear(void)
     }
     if (uarm && uarmu && uarmc && uarmh && uarms && uarmg && uarmf
         && uleft && uright && uamul && ublindf) {
-        /* 'W' message doesn't mention accessories */
-        You("are already wearing a full complement of armor.");
-        return ECMD_OK;
+        /* Vulture mod (§36): fully dressed is no longer a dead end while
+           something unworn could swap into its slot */
+        boolean can_swap = FALSE;
+
+        for (otmp = gi.invent; otmp; otmp = otmp->nobj)
+            if (wear_swap_blocker(otmp)) {
+                can_swap = TRUE;
+                break;
+            }
+        if (!can_swap) {
+            /* 'W' message doesn't mention accessories */
+            You("are already wearing a full complement of armor.");
+            return ECMD_OK;
+        }
     }
     otmp = getobj("wear", wear_ok, GETOBJ_NOFLAGS);
     return otmp ? accessory_or_armor_on(otmp) : ECMD_CANCEL;
@@ -3441,7 +3572,9 @@ equip_ok(struct obj *obj, boolean removing, boolean accessory)
     /* armor we can't wear, e.g. from polyform */
     if (obj->oclass == ARMOR_CLASS && !removing
         && !canwearobj(obj, &dummymask, FALSE))
-        return GETOBJ_DOWNPLAY;
+        /* Vulture mod (§36): a piece that would swap with the one in its
+           slot is a real choice for 'W', so list it */
+        return wear_swap_blocker(obj) ? GETOBJ_SUGGEST : GETOBJ_DOWNPLAY;
 
     /* Possible extension: downplay items (both accessories and armor) which
      * can't be worn because the slot is filled with something else. */

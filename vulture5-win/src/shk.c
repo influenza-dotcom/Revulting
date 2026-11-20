@@ -447,6 +447,238 @@ record_price_quote(int otyp, unsigned long price, boolean buyprice) {
     }
 }
 
+/*
+ * Local 'autoid' option: shop price identification.
+ *
+ * Only the lowest and highest buy and sell quote per object type are kept
+ * (record_price_quote above), so the question is: which still-unknown
+ * types in this item's appearance group (obj_shuffle_range) could a
+ * shopkeeper have quoted ALL of those numbers for, dealing with the hero
+ * as the hero is now?  The arithmetic mirrors get_cost() and set_cost()
+ * exactly, including their rounding:
+ *   buy  = base x [4/3 unidentified surcharge, per item] x [4/3 dunce or
+ *          tourist] x charisma, rounded; +1/3 if the shopkeeper is angry
+ *   sell = (base x qty) / 3 (dunce or tourist) or / 2, x [3/4 for some
+ *          shopkeepers], rounded; x 9/10 when taken as credit; recorded
+ *          per unit with integer division (hence "sell 16-17" for 50)
+ * Quotes made under a different charisma or touristy look can stop
+ * fitting; then nothing is shown rather than a wrong answer.
+ */
+
+staticfn long
+priceid_scale(long tmp, long mul, long div)
+{
+    tmp *= mul;
+    if (div > 1L) { /* get_cost()/set_cost() roundoff */
+        tmp *= 10L;
+        tmp /= div;
+        tmp += 5L;
+        tmp /= 10L;
+    }
+    return tmp;
+}
+
+/* Vulture mod (IMPLEMENTATION_LOG s60): a Tourist whose photo album holds
+   50+ species is a known professional - shopkeepers drop the low-level
+   Tourist surcharge (a visible Hawaiian shirt is still charged).  Used by
+   get_cost(), set_cost() and the autoid price mirror alike, so price-ID
+   stays exact. */
+boolean
+famous_photographer(void)
+{
+    return (boolean) (Role_if(PM_TOURIST)
+                      && svc.context.lifelist.total_photographed >= 50L);
+}
+
+staticfn boolean
+priceid_touristy(void)
+{
+    return (boolean) ((Role_if(PM_TOURIST) && u.ulevel < (MAXULEV / 2)
+                           && !famous_photographer())
+                      || (uarmu && !uarm && !uarmc));
+}
+
+/* could get_cost() have quoted 'v' for an item with base price 'base'? */
+staticfn boolean
+priceid_buy_fits(long base, unsigned long v)
+{
+    long mul = 1L, div = 1L, cha = (long) ACURR(A_CHA), tmp, t;
+    int sucker, angry;
+
+    if ((uarmh && uarmh->otyp == DUNCE_CAP) || priceid_touristy())
+        mul *= 4L, div *= 3L;
+    if (cha > 18)
+        div *= 2L;
+    else if (cha == 18)
+        mul *= 2L, div *= 3L;
+    else if (cha >= 16)
+        mul *= 3L, div *= 4L;
+    else if (cha <= 5)
+        mul *= 2L;
+    else if (cha <= 7)
+        mul *= 3L, div *= 2L;
+    else if (cha <= 10)
+        mul *= 4L, div *= 3L;
+    if (!base)
+        base = 5L;
+    for (sucker = 0; sucker <= 1; sucker++) {
+        tmp = priceid_scale(base, sucker ? mul * 4L : mul,
+                            sucker ? div * 3L : div);
+        if (tmp <= 0L)
+            tmp = 1L;
+        for (angry = 0; angry <= 1; angry++) {
+            t = angry ? tmp + (tmp + 2L) / 3L : tmp;
+            if ((unsigned long) t == v)
+                return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* could set_cost() (or its 9/10 credit offer) have given 'v' per unit? */
+staticfn boolean
+priceid_sell_fits(long base, unsigned long v)
+{
+    long div = ((uarmh && uarmh->otyp == DUNCE_CAP) || priceid_touristy())
+                   ? 3L : 2L,
+         q, tmp, t;
+    int cheap, credit;
+
+    if (base <= 0L)
+        return FALSE;
+    for (q = 1L; q <= 40L; q++) /* the stack size is not recorded */
+        for (cheap = 0; cheap <= 1; cheap++) {
+            tmp = priceid_scale(q * base, cheap ? 3L : 1L,
+                                cheap ? div * 4L : div);
+            if (tmp < 1L)
+                tmp = 1L;
+            for (credit = 0; credit <= 1; credit++) {
+                t = credit ? (tmp * 9L) / 10L + (tmp <= 1L) : tmp;
+                if ((unsigned long) (t / q) == v)
+                    return TRUE;
+            }
+        }
+    return FALSE;
+}
+
+/* still-unknown types that fit every quote seen for 'otyp'; returns how
+   many, filling cand[] (0: nothing to say) */
+int
+priceid_candidates(int otyp, int *cand, int maxc)
+{
+    struct objclass *oc = &objects[otyp];
+    boolean hasbuy = (oc->oc_buy_minseen <= oc->oc_buy_maxseen),
+            hassell = (oc->oc_sell_minseen <= oc->oc_sell_maxseen), ok;
+    int lo, hi, i, k, n, pass, kmax;
+    long base;
+
+    if (!hasbuy && !hassell)
+        return 0;
+    obj_shuffle_range(otyp, &lo, &hi);
+    if (lo == hi)
+        return 0;
+    /* enchanted armor costs 10 more per point */
+    kmax = (oc->oc_class == ARMOR_CLASS) ? 7 : 0;
+    /* pass 0: every quote; pass 1: ignore the LOW sell quote (a shopkeeper
+       short of cash offers less); pass 2: buy quotes only */
+    for (pass = 0; pass <= 2; pass++) {
+        if (pass == 2 && !hasbuy)
+            break;
+        n = 0;
+        for (i = lo; i <= hi; i++) {
+            if (!OBJ_NAME(objects[i]) || objects[i].oc_name_known)
+                continue;
+            ok = FALSE;
+            for (k = 0; k <= kmax && !ok; k++) {
+                base = (long) objects[i].oc_cost + 10L * k;
+                ok = TRUE;
+                if (hasbuy)
+                    ok = priceid_buy_fits(base, oc->oc_buy_minseen)
+                         && priceid_buy_fits(base, oc->oc_buy_maxseen);
+                if (ok && hassell && pass < 2)
+                    ok = priceid_sell_fits(base, oc->oc_sell_maxseen)
+                         && (pass == 1
+                             || priceid_sell_fits(base,
+                                                  oc->oc_sell_minseen));
+            }
+            if (ok && n < maxc)
+                cand[n++] = i;
+        }
+        if (n > 0)
+            return n;
+    }
+    return 0;
+}
+
+/* append " [light]", " [enchant armor/remove curse]" or " [100: 7 kinds]"
+   at *eosp, if it fits before 'end' (the last usable byte) */
+void
+append_priceid_note(char *end, char **eosp, int otyp)
+{
+    int cand[64], n, i;
+    char note[BUFSZ];
+    boolean samebase = TRUE;
+    size_t len;
+
+    n = priceid_candidates(otyp, cand, SIZE(cand));
+    if (!n)
+        return;
+    if (n == 1) {
+        /* already called by that name: nothing to add */
+        if (objects[otyp].oc_uname
+            && !strcmp(objects[otyp].oc_uname, OBJ_NAME(objects[cand[0]])))
+            return;
+        Snprintf(note, sizeof note, " [%s]", OBJ_NAME(objects[cand[0]]));
+    } else if (n <= 3) {
+        Strcpy(note, " [");
+        for (i = 0; i < n; i++) {
+            if (i)
+                Strcat(note, "/");
+            Strcat(note, OBJ_NAME(objects[cand[i]]));
+        }
+        Strcat(note, "]");
+    } else {
+        for (i = 1; i < n; i++)
+            if (objects[cand[i]].oc_cost != objects[cand[0]].oc_cost)
+                samebase = FALSE;
+        if (samebase && objects[otyp].oc_class != ARMOR_CLASS)
+            Snprintf(note, sizeof note, " [%d: %d kinds]",
+                     (int) objects[cand[0]].oc_cost, n);
+        else
+            Snprintf(note, sizeof note, " [%d kinds]", n);
+    }
+    len = strlen(note);
+    if (*eosp + len <= end) {
+        Strcpy(*eosp, note);
+        *eosp += len;
+    }
+}
+
+/* once per player input (allmain.c): name every type that the quotes
+   now pin down to a single possibility.  Runs every time, not just after
+   a new quote, because identifying anything else can narrow a group.
+   Cheap: only types with recorded quotes get past the first test. */
+void
+autoid_price_pass(void)
+{
+    int otyp, cand[64];
+    struct objclass *oc;
+
+    if (!iflags.autoid)
+        return;
+    for (otyp = 1; otyp < NUM_OBJECTS; otyp++) {
+        oc = &objects[otyp];
+        /* encountered: the hero has seen this appearance, so naming it
+           cannot leak a type that was only quoted while blind */
+        if (oc->oc_name_known || !oc->oc_encountered
+            || (oc->oc_buy_minseen > oc->oc_buy_maxseen
+                && oc->oc_sell_minseen > oc->oc_sell_maxseen))
+            continue;
+        if (priceid_candidates(otyp, cand, SIZE(cand)) == 1)
+            autoid_call(otyp, OBJ_NAME(objects[cand[0]]), "the prices");
+    }
+}
+
 /* Appends price-quote information to the given buffer, updating the
    given end of string position. *eos mut be buf + strlen(buf). If the
    update would make bug longer than BUFSZ, instead does nothing. */
@@ -2946,7 +3178,8 @@ get_cost(
     }
     if (uarmh && uarmh->otyp == DUNCE_CAP)
         multiplier *= 4L, divisor *= 3L;
-    else if ((Role_if(PM_TOURIST) && u.ulevel < (MAXULEV / 2))
+    else if ((Role_if(PM_TOURIST) && u.ulevel < (MAXULEV / 2)
+                           && !famous_photographer())
              || (uarmu && !uarm && !uarmc)) /* touristy shirt visible */
         multiplier *= 4L, divisor *= 3L;
 
@@ -3153,7 +3386,8 @@ set_cost(struct obj *obj, struct monst *shkp)
 
     if (uarmh && uarmh->otyp == DUNCE_CAP)
         divisor *= 3L;
-    else if ((Role_if(PM_TOURIST) && u.ulevel < (MAXULEV / 2))
+    else if ((Role_if(PM_TOURIST) && u.ulevel < (MAXULEV / 2)
+                           && !famous_photographer())
              || (uarmu && !uarm && !uarmc)) /* touristy shirt visible */
         divisor *= 3L;
     else

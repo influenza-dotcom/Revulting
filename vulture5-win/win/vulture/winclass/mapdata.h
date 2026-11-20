@@ -64,7 +64,9 @@ typedef enum {
     V_ACTION_CHAT,
     V_ACTION_FIGHT,
     V_ACTION_FIRE,
-    V_ACTION_NAMEMON
+    V_ACTION_NAMEMON,
+    /* s72: entries from 5.0's own context menu, V_ACTION_NHMENU + index */
+    V_ACTION_NHMENU = 1000
 } map_action;
 
 class mapviewer

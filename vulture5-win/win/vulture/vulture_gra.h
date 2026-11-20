@@ -24,6 +24,8 @@ extern void vulture_draw_raised_frame(int x1, int y1, int x2, int y2);
 extern void vulture_draw_lowered_frame(int x1, int y1, int x2, int y2);
 
 extern SDL_PixelFormat * vulture_px_format;
+/* s65: title-screen image levelwin paints while no map exists (main menu) */
+extern SDL_Surface *vulture_backdrop;
 
 
 #define DEF_AMASK 0xff000000

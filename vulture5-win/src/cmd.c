@@ -1676,10 +1676,20 @@ struct ext_func_tab extcmdlist[] = {
               donamelevel, IFBURIED | AUTOCOMPLETE | GENERALCMD | CMD_M_PREFIX, NULL },
     { 'a',    "apply", "apply (use) a tool (pick-axe, key, lamp...)",
               doapply, CMD_M_PREFIX, NULL },
+    /* Vulture mod (IMPLEMENTATION_LOG s56) */
+    { M('k'), "attacknearest", "walk to or attack the nearest enemy",
+              doattacknearest, AUTOCOMPLETE, NULL },
     { C('x'), "attributes", "show your attributes",
               doattributes, IFBURIED | GENERALCMD, NULL },
+    /* Vulture mod (IMPLEMENTATION_LOG §49): auto-explore, on the unused
+       apostrophe key */
+    { '\'',   "autoexplore", "walk to the nearest unexplored area",
+              doautoexplore, AUTOCOMPLETE, NULL },
     { '@',    "autopickup", "toggle the 'autopickup' option on/off",
               dotogglepickup, IFBURIED | GENERALCMD, NULL },
+    /* Vulture mod (IMPLEMENTATION_LOG s71) */
+    { '\0',   "build", "build a wall from rocks or a door from logs",
+              dobuild, 0, NULL },
 #ifdef CRASHREPORT
     { '\0',   "bugreport", "file a bug report",
               dobugreport, GENERALCMD | NOFUZZERCMD, NULL },
@@ -1711,6 +1721,9 @@ struct ext_func_tab extcmdlist[] = {
               doddrop, 0, NULL },
     { 'e',    "eat", "eat something",
               doeat, CMD_M_PREFIX, NULL },
+    /* Vulture mod (s56): Elbereth in the dust, one key */
+    { M('h'), "elbereth", "engrave Elbereth in the dust",
+              doelbereth, AUTOCOMPLETE, NULL },
     { 'E',    "engrave", "engrave writing on the floor",
               doengrave, 0, NULL },
     { M('e'), "enhance", "advance or check weapon and spell skills",
@@ -1723,6 +1736,9 @@ struct ext_func_tab extcmdlist[] = {
               do_fight, PREFIXCMD, NULL },
     { 'f',    "fire", "fire ammunition from quiver",
               dofire, 0, NULL },
+    /* Vulture mod (s56): fire at the nearest enemy in a straight line */
+    { M('q'), "firenearest", "fire your quiver at the nearest enemy",
+              dofirenearest, AUTOCOMPLETE, NULL },
     { M('f'), "force", "force a lock",
               doforce, AUTOCOMPLETE, NULL },
     { M('g'), "genocided",
@@ -1796,6 +1812,12 @@ struct ext_func_tab extcmdlist[] = {
               dopay, CMD_M_PREFIX, NULL },
     { '|',    "perminv", "scroll persistent inventory display",
               doperminv, IFBURIED | GENERALCMD | NOFUZZERCMD, NULL },
+    /* Vulture mod (IMPLEMENTATION_LOG §51): one-key camera shot */
+    { C('s'), "photograph", "take a picture with your camera",
+              dophotograph, AUTOCOMPLETE, NULL },
+    /* Vulture mod (IMPLEMENTATION_LOG §37): Tourist photo album */
+    { '\0',   "photos", "list the monster species you have photographed",
+              dophotos, IFBURIED | AUTOCOMPLETE | GENERALCMD, NULL },
     { ',',    "pickup", "pick up things at the current location",
               dopickup, CMD_M_PREFIX, NULL },
     { '\0',   "polyself", "polymorph self",
@@ -1828,6 +1850,9 @@ struct ext_func_tab extcmdlist[] = {
        the start of the text here */
     { 'm',    "reqmenu", "prefix: request menu or modify command",
               do_reqmenu, PREFIXCMD, NULL },
+    /* Vulture mod (s56): search until healed */
+    { M('z'), "rest", "rest until healed or interrupted",
+              dorest, AUTOCOMPLETE, NULL },
     { C('_'), "retravel", "travel to previously selected travel location",
               dotravel_target, 0, NULL },
     { M('R'), "ride", "mount or dismount a saddled steed",
@@ -1873,6 +1898,16 @@ struct ext_func_tab extcmdlist[] = {
               doidtrap, IFBURIED | GENERALCMD, NULL },
     { M('s'), "sit", "sit down",
               dosit, AUTOCOMPLETE, NULL },
+    /* Vulture mod (IMPLEMENTATION_LOG §56, §63): Ctrl+> / Alt+> (Vulture
+       sends M('>') for both) walks to the known down stairs and descends;
+       plain '>' is stock "down" */
+    { M('>'), "smartdown", "walk to the down stairs you've seen and descend",
+              dodown_smart, AUTOCOMPLETE, NULL },
+    { M('<'), "smartup", "walk to the up stairs you've seen and climb",
+              doup_smart, AUTOCOMPLETE, NULL },
+    /* Vulture mod (IMPLEMENTATION_LOG §42): stash notes in #overview */
+    { '\0',   "stash", "note what you left here in this level's notes",
+              dostash, IFBURIED | AUTOCOMPLETE | GENERALCMD, NULL },
     { '\0',   "stats", "show memory statistics",
               wiz_show_stats, IFBURIED | AUTOCOMPLETE | WIZMODECMD, NULL },
     { C('z'), "suspend", "push game to background ('fg' to come back)",
@@ -3634,6 +3669,7 @@ rhack(int key)
 
     iflags.menu_requested = FALSE;
     svc.context.nopick = 0;
+    travel_pickup_thrown = FALSE; /* §52: only travel turns it on */
  got_prefix_input:
 #ifdef SAFERHANGUP
     if (program_state.done_hup)
@@ -4417,11 +4453,32 @@ enum menucmd {
     MCMD_TRAVEL,
 };
 
+/* Vulture s72: while set, mcmd_addmenu() records entries instead of
+   adding them to a window - vulture_collect_cmd_menu() uses this to put
+   5.0's own context actions into Vulture's right-click popup */
+static boolean vmenu_capturing = FALSE;
+static int vmenu_n = 0;
+static int vmenu_acts[32];
+static char vmenu_txt[32][80];
+/* set when Vulture already queued the clicked action: readchar_core()
+   then skips click_to_cmd() for that click */
+boolean vulture_click_consumed = FALSE;
+
 staticfn void
 mcmd_addmenu(winid win, int act, const char *txt)
 {
     anything any;
     int clr = NO_COLOR;
+
+    if (vmenu_capturing) {
+        if (vmenu_n < 32) {
+            vmenu_acts[vmenu_n] = act;
+            (void) strncpy(vmenu_txt[vmenu_n], txt, 79);
+            vmenu_txt[vmenu_n][79] = '\0';
+            vmenu_n++;
+        }
+        return;
+    }
 
     /* TODO: fixed letters for the menu entries? */
     any = cg.zeroany;
@@ -4902,6 +4959,41 @@ here_cmd_menu(void)
     return '\0';
 }
 
+/* Vulture s72: the entries there_cmd_menu() would offer for <x,y>,
+   without showing a menu.  Returns how many were stored. */
+int
+vulture_collect_cmd_menu(coordxy x, coordxy y, int *acts, char (*txt)[80],
+                         int max)
+{
+    int act = MCMD_NOTHING, i;
+
+    if (!isok(x, y))
+        return 0;
+    vmenu_capturing = TRUE;
+    vmenu_n = 0;
+    if (u_at(x, y))
+        (void) there_cmd_menu_self(WIN_ERR, x, y, &act);
+    else if (next2u(x, y))
+        (void) there_cmd_menu_next2u(WIN_ERR, x, y, CLICK_1, &act);
+    else
+        (void) there_cmd_menu_far(WIN_ERR, x, y, CLICK_1);
+    (void) there_cmd_menu_common(WIN_ERR, x, y, CLICK_1, &act);
+    vmenu_capturing = FALSE;
+    for (i = 0; i < vmenu_n && i < max; i++) {
+        acts[i] = vmenu_acts[i];
+        Strcpy(txt[i], vmenu_txt[i]);
+    }
+    return i;
+}
+
+/* Vulture s72: perform an entry picked from Vulture's popup */
+void
+vulture_do_cmd_menu_act(coordxy x, coordxy y, int act)
+{
+    act_on_act(act, x - u.ux, y - u.uy);
+    vulture_click_consumed = TRUE;
+}
+
 void
 click_to_cmd(coordxy x, coordxy y, int mod)
 {
@@ -5261,7 +5353,10 @@ readchar_core(coordxy *x, coordxy *y, int *mod)
     } else if (sym == 0) {
         /* click event */
         gc.clicklook_cc.x = gc.clicklook_cc.y = -1;
-        click_to_cmd(*x, *y, *mod);
+        if (vulture_click_consumed) /* s72: action already queued */
+            vulture_click_consumed = FALSE;
+        else
+            click_to_cmd(*x, *y, *mod);
     }
 
  readchar_done:
@@ -5365,6 +5460,7 @@ dotravel_target(void)
     svc.context.travel1 = 1;
     svc.context.run = 8;
     svc.context.nopick = 1;
+    travel_pickup_thrown = TRUE; /* §52 */
     gd.domove_attempting |= DOMOVE_RUSH;
 
     if (!gm.multi)
@@ -5374,6 +5470,522 @@ dotravel_target(void)
 
     domove();
     return ECMD_TIME;
+}
+
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §49): auto-explore.
+ *
+ * One press: breadth-first search from the hero over squares the hero KNOWS
+ * are walkable - the same neighbour rule findtravelpath() uses (test_move
+ * TEST_TRAV, square seen or in sight, no known trap, no boulder) - to the
+ * nearest one that touches a never-seen square (GLYPH_UNEXPLORED).  Then
+ * travel there with dotravel_target(), so the walk, door opening and every
+ * interruption ("You see a jackal") are stock travel behaviour.
+ *
+ * Chaining: vulture_qol_pass() (allmain.c, once per input) re-queues this
+ * command when a leg ends with the hero standing on its target and nothing
+ * hostile in view; any interruption leaves the hero short of the target and
+ * ends the chain.  State is static (not saved): restoring stops exploring.
+ */
+/* Vulture mod (IMPLEMENTATION_LOG §52): travel sets context.nopick, so
+   clicking to walk (Vulture's click-to-move IS travel) never picked up the
+   darts you threw.  dotravel_target() sets this; pickup() then lets travel
+   autopick thrown missiles - and nothing else - while nopick stays set.
+   Cleared at the start of every command in rhack(), so an 'm'-prefixed
+   move (also nopick) never inherits it. */
+boolean travel_pickup_thrown = FALSE;
+
+boolean autoexplore_active = FALSE;
+coord autoexplore_target = { 0, 0 };
+static int autoexplore_legs = 0;
+
+#define AUTOEXPLORE_MAX_LEGS 200
+
+/* any visible, hostile monster in line of sight? */
+boolean
+autoexplore_hostile_in_view(void)
+{
+    struct monst *mtmp;
+
+    for (mtmp = fmon; mtmp; mtmp = mtmp->nmon) {
+        if (DEADMONSTER(mtmp) || mtmp->mpeaceful || mtmp->mtame)
+            continue;
+        if (canspotmon(mtmp) && couldsee(mtmp->mx, mtmp->my))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+staticfn boolean
+autoexplore_frontier(coordxy x, coordxy y)
+{
+    int dx, dy;
+
+    for (dx = -1; dx <= 1; dx++)
+        for (dy = -1; dy <= 1; dy++)
+            if ((dx || dy) && isok(x + dx, y + dy)
+                && glyph_is_unexplored(levl[x + dx][y + dy].glyph))
+                return TRUE;
+    return FALSE;
+}
+
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §55): smarter auto-explore.
+ *  - Squares the hero has stood on are remembered (per level, not saved), so
+ *    a remembered object on a square never stood on is a target too, and the
+ *    chain STOPS there ("stops at items worth a look"): not corpses, not
+ *    boulders, not shop stock.
+ *  - When nothing is left, it walks to the nearest corridor dead end it has
+ *    not searched yet and searches there (AUTOEXPLORE_SEARCH turns), then
+ *    explores again - so hidden corridors get found without help.
+ */
+#define AUTOEXPLORE_SEARCH 15
+int autoexplore_mode = AEX_FRONTIER;
+static boolean aex_stood[COLNO][ROWNO], aex_searched[COLNO][ROWNO];
+/* §67: closed doors auto-explore tried and found locked (the hero saw
+   "This door is locked", so this is knowledge the hero has) */
+static boolean aex_locked[COLNO][ROWNO];
+boolean autoexplore_reroute = FALSE; /* last leg hit a locked door */
+static d_level aex_level = { -1, -1 };
+
+staticfn void
+aex_check_level(void)
+{
+    if (!on_level(&aex_level, &u.uz)) {
+        (void) memset((genericptr_t) aex_stood, 0, sizeof aex_stood);
+        (void) memset((genericptr_t) aex_searched, 0, sizeof aex_searched);
+        (void) memset((genericptr_t) aex_locked, 0, sizeof aex_locked);
+        aex_level = u.uz;
+    }
+}
+
+/* called once per input by vulture_qol_pass(): remember where we stood */
+void
+autoexplore_note_position(void)
+{
+    aex_check_level();
+    if (isok(u.ux, u.uy))
+        aex_stood[u.ux][u.uy] = TRUE;
+}
+
+/* §67: called from test_move() when an auto-explore door opening finds the
+   door locked */
+void
+autoexplore_door_locked(coordxy x, coordxy y)
+{
+    aex_check_level();
+    if (isok(x, y))
+        aex_locked[x][y] = TRUE;
+    autoexplore_reroute = TRUE;
+}
+
+/* a remembered object worth walking over to look at */
+staticfn boolean
+aex_item_here(coordxy x, coordxy y)
+{
+    int glyph = levl[x][y].glyph;
+
+    if (aex_stood[x][y] || !glyph_is_object(glyph) || glyph_is_body(glyph))
+        return FALSE;
+    if (glyph_to_obj(glyph) == BOULDER || costly_spot(x, y))
+        return FALSE;
+    return TRUE;
+}
+
+/* a known corridor square with at most one known walkable neighbour */
+staticfn boolean
+aex_dead_end(coordxy x, coordxy y)
+{
+    int dx, dy, open = 0;
+
+    if (aex_searched[x][y] || levl[x][y].typ != CORR)
+        return FALSE;
+    for (dx = -1; dx <= 1; dx++)
+        for (dy = -1; dy <= 1; dy++) {
+            coordxy nx = x + dx, ny = y + dy;
+
+            if ((!dx && !dy) || !isok(nx, ny))
+                continue;
+            if (levl[nx][ny].seenv && ACCESSIBLE(levl[nx][ny].typ))
+                open++;
+        }
+    return open <= 1;
+}
+
+/* BFS over known walkable squares.  Nearest frontier or unvisited item
+   wins; failing both, the nearest unsearched dead end.  *mode says which. */
+staticfn boolean
+autoexplore_find(coord *cc, int *mode)
+{
+    static coordxy qx[COLNO * ROWNO], qy[COLNO * ROWNO];
+    static boolean seen[COLNO][ROWNO];
+    int head = 0, tail = 0, dx, dy;
+    boolean have_dead = FALSE;
+    coord dead = { 0, 0 };
+
+    aex_check_level();
+    (void) memset((genericptr_t) seen, 0, sizeof seen);
+    qx[tail] = u.ux, qy[tail++] = u.uy;
+    seen[u.ux][u.uy] = TRUE;
+
+    while (head < tail) {
+        coordxy x = qx[head], y = qy[head++];
+
+        if (!u_at(x, y)) {
+            if (autoexplore_frontier(x, y)) {
+                cc->x = x, cc->y = y, *mode = AEX_FRONTIER;
+                return TRUE;
+            }
+            if (aex_item_here(x, y)) {
+                cc->x = x, cc->y = y, *mode = AEX_ITEM;
+                return TRUE;
+            }
+        }
+        if (!have_dead && aex_dead_end(x, y)) {
+            have_dead = TRUE;
+            dead.x = x, dead.y = y;
+        }
+        for (dx = -1; dx <= 1; dx++)
+            for (dy = -1; dy <= 1; dy++) {
+                coordxy nx = x + dx, ny = y + dy;
+
+                if ((!dx && !dy) || !isok(nx, ny) || seen[nx][ny])
+                    continue;
+                if (!test_move(x, y, dx, dy, TEST_TRAV)
+                    || !(levl[nx][ny].seenv || (!Blind && couldsee(nx, ny)))
+                    || test_move(x, y, dx, dy, TEST_TRAP)
+                    || sobj_at(BOULDER, nx, ny)
+                    || (aex_locked[nx][ny] && closed_door(nx, ny)))
+                    continue;
+                seen[nx][ny] = TRUE;
+                qx[tail] = nx, qy[tail++] = ny;
+            }
+    }
+    if (have_dead) {
+        *cc = dead, *mode = AEX_DEADEND;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* searching occupation shared by the dead-end search and #rest */
+static int vq_search_left = 0;
+static boolean vq_resting = FALSE;
+static int vq_rest_turns = 0;
+
+staticfn int
+vq_search_occ(void)
+{
+    if (vq_search_left-- <= 0)
+        return 0;
+    (void) dosearch0(0);
+    return 1;
+}
+
+/* the hero reached a dead end: mark it and search there */
+void
+autoexplore_start_search(void)
+{
+    aex_check_level();
+    aex_searched[u.ux][u.uy] = TRUE;
+    vq_search_left = AUTOEXPLORE_SEARCH;
+    autoexplore_mode = AEX_SEARCHING;
+    You("search the dead end.");
+    set_occupation(vq_search_occ, "searching", 0);
+}
+
+int
+doautoexplore(void)
+{
+    coord cc;
+    int mode = AEX_FRONTIER;
+
+    /* a press by the player (not the chain) starts a fresh run */
+    if (!autoexplore_active)
+        autoexplore_legs = 0;
+    autoexplore_active = FALSE;
+
+    if (Blind) {
+        You_cant("explore without being able to see.");
+        return ECMD_OK;
+    }
+    if (u.uswallow || u.utrap) {
+        You_cant("explore right now.");
+        return ECMD_OK;
+    }
+    if (autoexplore_hostile_in_view()) {
+        pline("Not with enemies in sight.");
+        return ECMD_OK;
+    }
+    if (++autoexplore_legs > AUTOEXPLORE_MAX_LEGS) {
+        pline("You pause your exploring.");
+        return ECMD_OK;
+    }
+    if (!autoexplore_find(&cc, &mode)) {
+        pline("There's nothing left here you can reach to explore.");
+        return ECMD_OK;
+    }
+
+    autoexplore_target = cc;
+    autoexplore_mode = mode;
+    autoexplore_active = TRUE;
+    if (u_at(cc.x, cc.y))
+        return ECMD_OK; /* already on the dead end: the chain searches */
+    iflags.travelcc.x = cc.x, iflags.travelcc.y = cc.y;
+    u.tx = cc.x, u.ty = cc.y;
+    return dotravel_target();
+}
+
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §56): targeting helpers and one-key
+ * commands - fire at nearest (Alt+Q), walk/attack nearest (Alt+K), rest
+ * (Alt+Z), Elbereth (Alt+H), #smartdown (Ctrl+>).
+ */
+
+/* a hostile the hero can actually see and target */
+staticfn boolean
+vq_valid_target(struct monst *mtmp)
+{
+    return (mtmp && !DEADMONSTER(mtmp) && !mtmp->mpeaceful && !mtmp->mtame
+            && canspotmon(mtmp) && couldsee(mtmp->mx, mtmp->my));
+}
+
+/*
+ * Nearest visible hostile along one of the 8 straight lines, within throwing
+ * range, with nothing in between (walls, closed doors and ANY monster - a
+ * pet or peaceful in the way blocks the line rather than getting hit).
+ * prefer_unphotographed: a species missing from the photo album beats a
+ * nearer one already in it (the camera key).
+ */
+boolean
+vq_line_target(boolean prefer_unphotographed, schar *rdx, schar *rdy)
+{
+    int dir, k, best = 99, bestnew = 99;
+    schar bdx = 0, bdy = 0, ndx = 0, ndy = 0;
+
+    for (dir = 0; dir < N_DIRS; dir++) {
+        schar dx = xdir[dir], dy = ydir[dir];
+
+        for (k = 1; k <= BOLT_LIM; k++) {
+            coordxy x = u.ux + k * dx, y = u.uy + k * dy;
+            struct monst *mtmp;
+
+            if (!isok(x, y) || !ZAP_POS(levl[x][y].typ) || closed_door(x, y))
+                break;
+            if ((mtmp = m_at(x, y)) == 0)
+                continue;
+            if (vq_valid_target(mtmp)) {
+                if (k < best)
+                    best = k, bdx = dx, bdy = dy;
+                if (prefer_unphotographed && k < bestnew
+                    && !svm.mvitals[monsndx(mtmp->data)].photographed)
+                    bestnew = k, ndx = dx, ndy = dy;
+            }
+            break; /* first monster on the line blocks the rest */
+        }
+    }
+    if (prefer_unphotographed && bestnew < 99) {
+        *rdx = ndx, *rdy = ndy;
+        return TRUE;
+    }
+    if (best < 99) {
+        *rdx = bdx, *rdy = bdy;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* Alt+Q: fire the quiver at the nearest hostile in a straight line */
+int
+dofirenearest(void)
+{
+    schar dx, dy;
+
+    if (!vq_line_target(FALSE, &dx, &dy)) {
+        pline("No target in a straight line.");
+        return ECMD_OK;
+    }
+    cmdq_add_ec(CQ_CANNED, dofire);
+    cmdq_add_dir(CQ_CANNED, dx, dy, 0);
+    return ECMD_OK;
+}
+
+/* Alt+K: attack the nearest adjacent hostile, else walk toward the nearest
+   visible one (travel, so it stops when anything new shows up) */
+int
+doattacknearest(void)
+{
+    struct monst *mtmp, *best = 0;
+    int bd = 9999;
+
+    for (mtmp = fmon; mtmp; mtmp = mtmp->nmon) {
+        int d;
+
+        if (!vq_valid_target(mtmp))
+            continue;
+        d = distmin(u.ux, u.uy, mtmp->mx, mtmp->my);
+        if (d < bd)
+            bd = d, best = mtmp;
+    }
+    if (!best) {
+        pline("No enemy in sight.");
+        return ECMD_OK;
+    }
+    if (bd == 1) {
+        int dir = xytodir(best->mx - u.ux, best->my - u.uy);
+
+        if (dir == DIR_ERR)
+            return ECMD_OK;
+        cmdq_add_ec(CQ_CANNED, move_funcs[dir][MV_WALK]);
+        return ECMD_OK;
+    }
+    iflags.travelcc.x = u.tx = best->mx;
+    iflags.travelcc.y = u.ty = best->my;
+    return dotravel_target();
+}
+
+/* Alt+Z: search in place until HP (and energy) are full; any monster
+   coming into view interrupts it like every occupation */
+staticfn int
+vq_rest_occ(void)
+{
+    int hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax;
+
+    if (hp >= hpmax && u.uen >= u.uenmax) {
+        You("feel rested.");
+        vq_resting = FALSE;
+        return 0;
+    }
+    if (++vq_rest_turns > 2000 || u.uhs >= WEAK) {
+        You("stop resting.");
+        vq_resting = FALSE;
+        return 0;
+    }
+    (void) dosearch0(0);
+    return 1;
+}
+
+int
+dorest(void)
+{
+    int hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax;
+
+    if (hp >= hpmax && u.uen >= u.uenmax) {
+        You("are already fully rested.");
+        return ECMD_OK;
+    }
+    if (autoexplore_hostile_in_view()) {
+        pline("Not with enemies in sight.");
+        return ECMD_OK;
+    }
+    if (u.uhs >= WEAK) {
+        You("are too hungry to rest.");
+        return ECMD_OK;
+    }
+    vq_resting = TRUE;
+    vq_rest_turns = 0;
+    You("settle down to rest.");
+    set_occupation(vq_rest_occ, "resting", 0);
+    return ECMD_OK;
+}
+
+/* Alt+H: engrave Elbereth in the dust with a finger.  doengrave() takes the
+   text from vq_engrave_preset instead of asking (engrave.c), stamped with the
+   turn so a queue that never ran can't hijack a later manual E. */
+char vq_engrave_preset[BUFSZ] = "";
+long vq_engrave_preset_turn = -1L;
+
+int
+doelbereth(void)
+{
+    struct engr *ep = engr_at(u.ux, u.uy);
+
+    Strcpy(vq_engrave_preset, "Elbereth");
+    vq_engrave_preset_turn = svm.moves;
+    cmdq_add_ec(CQ_CANNED, doengrave);
+    cmdq_add_key(CQ_CANNED, '-'); /* write with your finger */
+    /* doengrave() only asks "add to the current engraving?" for a same-type
+       (dust) engraving you can see; answer no = overwrite, since Elbereth
+       only counts as the whole text.  Never queue the 'n' otherwise - it
+       would be read as the next command (a move). */
+    if (ep && ep->engr_type == DUST && !Blind)
+        cmdq_add_key(CQ_CANNED, 'n');
+    return ECMD_OK;
+}
+
+/* #smartdown (Ctrl+> / Alt+>, §63; was plain '>' in §56): on stairs, a
+   ladder or a hole - stock dodown().  Anywhere else,
+   walk to the nearest down staircase/ladder you have seen, then go down
+   (vulture_qol_pass queues dodown() on arrival). */
+boolean descend_pending = FALSE;
+boolean descend_is_up = FALSE; /* §63: #smartup shares the chain */
+coord descend_target = { 0, 0 };
+
+staticfn int smart_stairs(boolean);
+
+int
+dodown_smart(void)
+{
+    return smart_stairs(FALSE);
+}
+
+/* #smartup (Ctrl+< / Alt+<, §63): the same for the way up */
+int
+doup_smart(void)
+{
+    return smart_stairs(TRUE);
+}
+
+staticfn int
+smart_stairs(boolean up)
+{
+    stairway *s = stairway_at(u.ux, u.uy);
+    coordxy x, y;
+    int bd = 99999;
+    coord best = { 0, 0 };
+
+    descend_pending = FALSE;
+    if ((s && s->up == up) || (!up && t_at(u.ux, u.uy)) || Levitation
+        || u.uswallow || u.utrap || Blind)
+        return up ? doup() : dodown();
+
+    for (x = 1; x < COLNO; x++)
+        for (y = 0; y < ROWNO; y++) {
+            int glyph = levl[x][y].glyph, d;
+
+            if (!glyph_is_cmap(glyph))
+                continue;
+            switch (glyph_to_cmap(glyph)) {
+            case S_dnstair: case S_dnladder:
+            case S_brdnstair: case S_brdnladder:
+                if (up)
+                    break;
+                d = dist2(u.ux, u.uy, x, y);
+                if (d < bd)
+                    bd = d, best.x = x, best.y = y;
+                break;
+            case S_upstair: case S_upladder:
+            case S_brupstair: case S_brupladder:
+                if (!up)
+                    break;
+                d = dist2(u.ux, u.uy, x, y);
+                if (d < bd)
+                    bd = d, best.x = x, best.y = y;
+                break;
+            default:
+                break;
+            }
+        }
+    if (bd == 99999) /* stock "You can't go down/up here." */
+        return up ? doup() : dodown();
+
+    You("head for the way %s.", up ? "up" : "down");
+    descend_pending = TRUE;
+    descend_is_up = up;
+    descend_target = best;
+    iflags.travelcc.x = u.tx = best.x;
+    iflags.travelcc.y = u.ty = best.y;
+    return dotravel_target();
 }
 
 /* mouse click look command */

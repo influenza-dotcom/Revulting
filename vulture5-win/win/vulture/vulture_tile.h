@@ -225,6 +225,15 @@ enum misctiles {
 	 * vulture_monster_to_tile(), like the aligned-priest tiles above. */
 	V_MISC_SUCCUBUS,
 	V_MISC_INCUBUS,
+	/* 5.0.0 engraving (S_engroom/S_engrcorr): a flat decal drawn on the trap
+	 * layer OVER the floor, so the cobblestone/corridor still shows. */
+	V_MISC_ENGRAVING,
+	/* 5.0.0 S_trapped_door / S_trapped_chest: the "^" that trap detection
+	 * or a search paints over a trapped door or box.  No struct trap
+	 * exists, so these are a warning marker on the effects layer, drawn
+	 * over the door/box itself. */
+	V_MISC_TRAPPED_DOOR,
+	V_MISC_TRAPPED_CHEST,
 #ifdef VULTURE_SLASHEM
 	V_MISC_TOILET,
 #endif

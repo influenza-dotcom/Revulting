@@ -1234,6 +1234,795 @@ S_vibrating_square / S_lavawall placeholders; vulture_getmsghistory /
 putmsghistory are //TODO stubs (Ctrl+P history lost on restore);
 SCALE_UI_DEFECTS.md inventory layout at render_scale=2; extmenu ignored.
 
+## 31. Engraving decal (2026-11-10)
+
+User report: 5.0.0 draws engravings (S_engroom/S_engrcorr) but Vulture showed
+plain floor - §D6 had bound both symbols to the floor tiles for 3.6.6 parity,
+so the cmap_gap audit counted them "bound" and never flagged them.
+
+- New misc tile `V_MISC_ENGRAVING` / conf `misc.ENGRAVING` (tiles/misc.engraving.png,
+  65x28, offset -32 -14): three carved runes + scratch, projected onto the
+  109x44 floor diamond. Added to BOTH gamedata/ and the shipped VultureNetHack/
+  config + tiles.
+- Drawn on the TRAP layer (pass 3: over furniture, under objects), never in
+  map_back, so the cobblestone/corridor stays visible. Traps outrank
+  engravings in the core's display.c, and a seen trap still wins here.
+- Seen squares: `vulture_engraving_tile()` mirrors display.c -
+  `engr_at() && erevealed && !covers_traps()`. Remembered squares: taken from
+  the memory glyph's cmap, so it matches what the core remembers (a wiped
+  engraving stays until re-seen, as in tty).
+- S_engroom/S_engrcorr stay mapped to the floor tiles: that is the map_back.
+- The enum insert shifts every tile id after V_MISC_INCUBUS; verified all 35
+  objects that include vulture_tile.h rebuilt (the 12 that did not have no
+  dependency on it). verify_all_bindings: PASS-WITH-PLACEHOLDERS, unchanged.
+- Not ported to VultureNetHack-Crafting (separate build).
+
+## 32. Trapped door / trapped chest marker (2026-11-10)
+
+S_trapped_door / S_trapped_chest (open since §30) rendered the magenta X.
+They are DUMMY traps (TRAPPED_DOOR/TRAPPED_CHEST in detect.c): trap
+detection, the crystal ball and searching call sense_trap(), which paints
+the "^" glyph, but t_at() finds nothing - the glyph is the only record.
+
+- Remembered squares: the glyph_is_trap arm drew vulture_tilemap_misc[cmap]
+  = V_MISC_ERROR. Now: no floor trap; keep any remembered box (map_obj);
+  redraw a door we have actually seen (seenv, from back_to_glyph, the same
+  as the restore fix-up does); put the marker on the effects layer.
+- Seen squares: the seen arm resolved traps only via t_at(), so a trapped
+  door found by searching right next to you showed NO warning at all.
+  Now the marker goes on map_special (after the monster block, so a stale
+  monster is never kept under it). As in tty, it lasts until the core
+  redraws the square (newsym() puts the plain door/box back).
+- Art: tiles/misc.trapped_marker.png, 21x19 orange (CLR_ORANGE) warning
+  triangle. Two conf entries share it at different offsets, so it sits
+  on the door face (-10 -52) or the box face (-10 -32).
+- Both cmap entries bound (no table lookup can reach ERROR). cmap_gap now
+  lists only S_lavawall, S_vibrating_square, S_goodpos (+ the sw/expl
+  runs, which never index this table). verify_all_bindings unchanged.
+- Also cast the §31 engraving ternary to int (-Wenum-compare).
+
+## 33. `bestroll` option: best-possible Tourist start (2026-11-10)
+
+User request: always start with the best Tourist kit and stats. New
+boolean option `bestroll` (optlist.h, set_in_config, stored in iflags -
+iflags is never written to a save, so save files are unaffected). Gated
+by bestroll_active() = iflags.bestroll && Role_if(PM_TOURIST); every
+other role rolls normally. Each value is the ceiling of a roll the stock
+game makes, so nothing is impossible in an ordinary game:
+- trquan() returns trquan_max: 40 darts (21-40).
+- UNDEF_BLESS items blessed (darts, potions, scrolls, shirt).
+- Random food: LEFT RANDOM (2026-11-11). It was 10 x lembas wafer at mksobj()'s
+  1-in-6 pair = 20 lembas; the user found that overpowered (food stops mattering).
+- Camera 99 charges (rn1(70,30)); gold 1000 (rnd(1000)).
+- Extra item: magic marker (else-if chain's last, 1-in-20 slot) at
+  19+3 = 22 charges.
+- Stats: bestroll_attrs() = init_attr(75) + vary_init_attr() at their
+  ceiling - fill priority stats to cap-4, let vary's +4 finish them.
+  Tourist priority Con, Dex, Cha, Str, Int, Wis gives
+  Str 18/03 Int 14 Wis 10 Dex 18 Con 18 Cha 18.
+Enabled in kilmer.nethackrc (backup: NetHack/backup-2026-11-09/
+kilmer.nethackrc.pre-bestroll-2026-11-10).
+
+TRAP: the core makefile has NO header dependency tracking. Touching
+flag.h relinked 138 stale objects against the new struct instance_flags
+layout. Stale objects were moved aside (scratch dir) and the core rebuilt
+clean: o/nethackv (139 objs) + o/hacklib. craft.o (the Crafting mod's
+leftover object, not part of NetHackV.exe) was put back untouched. After
+ANY include/*.h edit, check `find src/o/nethackv -name '*.o' ! -newer
+include/<file>.h` before trusting the build.
+
+## 34. `autoid` option: price, sink-ring and wand-engrave identification (2026-11-10)
+
+New boolean option `autoid` (optlist.h, set_in_game, iflags - not saved).
+Everything goes through autoid_call(otyp, label, why) in do_name.c, which
+#calls the type the way docall() does (oc_uname + discover_object) and
+prints "You make a note from <why>: <type>.". It never touches a
+formally identified type or a name the player chose: an existing name
+is replaced only if it is one of our five group labels
+(autoid_group_labels[]), and never by a wider group.
+
+- Prices (shk.c): only min/max buy and sell quotes per type exist
+  (record_price_quote). priceid_candidates() tests every unknown type in
+  the item's obj_shuffle_range() group against ALL of them, mirroring
+  get_cost()/set_cost() rounding: unID 4/3, dunce/tourist 4/3, Cha table,
+  angry +1/3; sell /3 or /2, x3/4 shk, x9/10 credit, per-unit integer
+  division over stack sizes 1-40. Fallbacks: drop the low sell quote
+  (short-funds offer), then sell entirely. Armor allows +10/enchant.
+  Uses the hero's CURRENT Cha/look, so quotes from a different Cha can
+  stop fitting -> no note (never a guess). objnam.c appends " [light]" /
+  " [a/b/c]" / " [100: 7 kinds]" (needs dknown). autoid_price_pass()
+  runs once per input (allmain.c) and names single-candidate types that
+  are oc_encountered (no leak from quotes seen blind).
+- Sinks (do.c dosinkring): with eyes and no hallucination every ring
+  has its own message (all 28 RIN_ ids have a case; hunger's is
+  silence), except "The sink vanishes." = teleportation or polymorph.
+  Named before trycall(), so the #call prompt no longer appears.
+- Engraving (engrave.c): labels set per wand case only when the message
+  is actually shown; applied where post_engr_text prints (the message
+  is lost if the player escapes the text prompt). "engraving vanishes"
+  is shown at once, so it names at once. No message at all: "no engrave
+  message" (an engraving was here) or "... - retry on an engraving"
+  (cancellation/make invisible/teleportation/polymorph also silent).
+  Self-identifying wands are oc_name_known by then and are skipped.
+- Offline check (Python mirror of the price code) on a real inventory:
+  50 -> light, 20 -> identify, 60 -> enchant weapon, 80 -> enchant
+  armor/remove curse, sell-only 67 -> 8 kinds (200, or 300 as credit).
+- Enabled in all eight character rc files (backups in
+  NetHack/backup-2026-11-10/), not in the near-stock .nethackrc.
+
+Build incident: the session was cut off mid-build. include/date.h was
+left as 664 bytes of padding but newer than makedefs, so make would not
+regenerate it and vulture_sdl.cpp failed on VERSION_ID. Fix: move
+date.h aside (and the half-written vulture_gen.o) and rebuild. Installed
+23:17; previous exe = NetHackV.exe.bak-2026-11-10.
+
+## 35. Mouse cursor ghosting (2026-11-18)
+
+User report: the mouse cursor leaves ghost images behind. Not the §30
+window-ghosting guess (that is popups restoring stale backgrounds); this one
+is the software cursor itself (vulture_mou.cpp).
+
+**Cause.** The cursor is painted into vulture_screen, its rect pushed to the
+display, then the saved background goes straight back into vulture_screen,
+so afterwards the cursor pixels exist ONLY on the display. The next
+vulture_mouse_refresh() had to erase them, but it picked the rect from
+`vulture_mouse.prev + prevcursor` - the position before the LATEST
+vulture_set_mouse_pos() and the shape before the LATEST set_mcursor(). That
+is the last DRAWN rect only if each changes at most once between draws.
+They change more often: mouse motion during vulture_wait_key() (--More--)
+updates cur/prev with no draw; vulture_curs() warps the pointer in
+look/teleport; a MOUSEMOVEOUT + MOUSEMOTION pair can each set a cursor. The
+true last rect was never refreshed, so a cursor image stayed on the display
+until a window happened to repaint there (soon on the map, never over static
+UI). The two right-Ctrl object-highlight paths (vulture_sdl.cpp) also pushed
+the cursor via vulture_refresh_window_region() and skipped
+vulture_mouse_refresh() altogether.
+
+**Fix.** Rects are now recorded, never re-derived: `bg_rect` (where the
+background was read; restore writes it back exactly there), `drawn_rect`
+(the latest paint) and `shown_rect` (what refresh last pushed). Refresh =
+refresh(shown) + refresh(drawn), then shown = drawn. A draw that never
+reached refresh is folded into shown_rect so it still gets erased. Both
+highlight paths now call vulture_mouse_refresh(). set_mcursor's own
+previous-shape refresh is left as is (harmless, now redundant).
+
+Built clean (no new warnings; GUI subsystem). Installed by swapping
+binary/NetHackV.exe over VultureNetHack/NetHackV.exe once the running game
+quit; previous exe = NetHackV.exe.bak-2026-11-18. NOT yet confirmed in play.
+Not ported to VultureNetHack-Crafting (separate build).
+
+## 36. One-step armor swap on W (2026-11-18)
+
+User request: wearing a new helm over an old one should not need a manual
+T first. do_wear.c:
+
+- `wear_swap_blocker(otmp)` returns the worn piece in otmp's own slot when
+  that piece is the ONLY obstacle: it empties the slot pointer for one
+  quiet canwearobj() call and restores it, so every other refusal (2-hander
+  vs shield, welded weapon vs gloves, horns, trapped feet, polyform) still
+  wins with its stock message. Same slot only - a suit under a cloak or a
+  shirt under suit/cloak still needs the outer layer off by hand. uskin
+  never swaps.
+- accessory_or_armor_on(): if there is a blocker, take it off through
+  armor_or_accessory_off() (stock cursed check, cockatrice-glove prompt,
+  delay, messages), then queue `dowear` + the new item's invlet on
+  CQ_CANNED. Same turn cost as by hand.
+- ⭐Why not chain cloak+suit: armoroff() with a delay calls nomul(), and
+  nomul() clears CQ_CANNED. So the queue must be added AFTER the takeoff
+  starts, and only ONE follow-up step survives. Anything that interrupts
+  the takeoff (stop_occupation, teleport) clears the queue: old piece off,
+  new one unworn - safe.
+- equip_ok(): a swappable piece is GETOBJ_SUGGEST (listed in the W prompt)
+  instead of DOWNPLAY. dowear(): "full complement of armor" only when
+  nothing unworn could swap in.
+
+No save-format change. Built clean. NOT yet confirmed in play.
+
+## 37. Tourist photo album: #photos (2026-11-18)
+
+User request: a Tourist should automatically record which species they
+have photographed. 5.0.0 ALREADY records it - svm.mvitals[].photographed,
+set by see_monster_closeup() (mon.c) on a camera flash, saved with the game
+(it also drives the Tourist's first-photo EXP bonus) - but nothing ever
+displayed it. So, no save change, and games started before the mod keep
+their photos:
+
+- mon.c: a Tourist gets "You add a <species> to your photo album." the
+  first time each species is photographed (same rules as the record:
+  no hallucination, invisible/hidden monsters don't count, a mimic posing
+  as a monster records the pose).
+- insight.c `dophotos()` + cmd.c `#photos` (alphabetical slot after
+  perminv; extern in extern.h): text window "Photo album: N species", then
+  species names in monster-index order (groups by class). Works for any
+  role. Vulture's # opens extcmd_via_menu(), so it appears in that list.
+- extern.h only gained a prototype - no struct change, so the missing
+  header deps in the core makefile (see memory) don't matter here.
+
+Built clean together with §36 (21:46). Installed once the game quit;
+previous exe (the §35 cursor build) = NetHackV.exe.bak-2026-11-18-cursorfix.
+NOT yet confirmed in play.
+
+## 38-42. QOL batch (2026-11-18)
+
+User approved a list of eight; three turned out to exist already (5.0 or
+earlier mods), so they were extended or switched on instead of rebuilt.
+All built clean together (22:01), installed by the same quit-watcher (it
+copies whatever binary/NetHackV.exe is at exit, so it shipped this build,
+not the §36-37 one). No save-format change anywhere. NOT yet confirmed in
+play.
+
+**§38 Corpse freshness tag** (objnam.c doname_base). Corpses read
+"(fresh)" / "(getting old)" / "(dangerously old)" / "(never rots)".
+Mirrors eatcorpse(): rotted = age/(10+rn2(20)) (+2 cursed, -2 blessed),
+>3 can sicken, >5 = tainted. The label uses the WORST divisor (10), so
+"fresh" (rot<=3) is a promise and "dangerously old" (rot>=6) means "could
+be tainted". BUC shifts it only when bknown. Age via
+peek_at_iced_corpse_age(); never-rot list copied from eat.c's
+nonrotting_corpse() (lizard, lichen, Riders, acid blob). Hidden while
+hallucinating. The 1-in-7 random "rotten" roll on any corpse is not age
+based and is not covered by "fresh".
+
+**§39 #enhance** (weapon.c). Confirm "Spend N skill slot(s) on <skill>?
+(Can't be undone.)" before skill_advance(); "no" re-shows the menu
+(`reshow` joins the do/while condition). Skipped in wizard speedy mode.
+Skill-ready message now names the skill: "You feel more confident in your
+dart skill.  (#enhance to advance)". (Vulture's enhance icon already
+existed - enhancebutton.cpp.)
+
+**§40 Thrown missiles with autopickup off** (pickup.c). All 8 rc files
+have autopickup ON, so pickup_thrown already worked; but '@' (toggle off)
+made pickup() return before autopick(). Now, with '@' off and
+pickup_thrown on and something the hero threw underfoot, it still
+autopicks - only LOST_THROWN objects (file-static autopick_thrown_only,
+checked first in autopick_testobj, set/cleared around the autopick()
+call). **Auto-quiver**: stock option, just enabled - `OPTIONS=autoquiver`
+appended to all 8 character rcs (backups NetHack/backup-2026-11-18/).
+autoquiver() prefers launcher ammo, then darts/shuriken, then daggers;
+addinv() also quivers picked-up missiles when the quiver is empty.
+
+**§41 Cloak + suit swap** (do_wear.c). W on a suit while a cloak is on:
+if the suit would fit (or swap) with the cloak gone, take the cloak off,
+remember it (static swap_cloak_oid + turn stamp, not saved), queue W+suit.
+Re-entry swaps the old suit out (§36), the next re-entry dons the suit,
+and AFTER its nomul() queues W+cloak (only if the cloak is carried, unworn,
+and the record is <100 turns old). Shirt-under-suit is still manual. A
+cursed old suit stops the chain with the cloak off.
+
+**§42 #stash** (dungeon.c dostash, cmd.c, extern.h). Prompts "What did you
+stash here?" and APPENDS "note (on <dfeature>)" to the level's
+mapseen->custom (#annotate text), "; "-separated, capped at BUFSZ - so
+#overview (^O) lists stashes per level. Same saved string as #annotate.
+
+**Already present, no code:** shop price memory = §34 autoid (records
+min/max quotes per type, tags names [a/b/c] / [100: 7 kinds]).
+
+## 43-49. QOL batch 2 (2026-11-18)
+
+Built clean together (22:15; only the two pre-existing vulture_main.cpp
+warnings at the delay loop). No save-format change - every new piece of
+state is static or lives in already-saved fields. Installed by the
+quit-watcher; previous exe = NetHackV.exe.bak-2026-11-18-qol2. NOT yet
+confirmed in play. Sources before this batch: scratchpad tarball only.
+
+**§43 Message history across save/restore** (vulture_main.cpp,
+messagewin.{h,cpp}). vulture_get/putmsghistory were //TODO stubs, so the
+log came back empty after every reload. Modelled on tty: get hands out the
+newest 200 (V_SAVED_MSGHIST) oldest-first from a static snapshot; put sets
+this session's messages aside on the first restoring call and re-adds them
+after the NULL terminator. messagewin gained history(max) / clear_history();
+add_message() never stores age 0 (0 = empty slot). Saves written by older
+exes carry no history - that's expected, not a bug.
+
+**§44 Typed '#' commands** (vulture_main.cpp vulture_get_ext_cmd,
+vulture_win.{h,cpp} vulture_get_input_completing, inputdialog.{h,cpp}).
+Unless `extmenu` is set: a text box; Tab completes to the longest common
+prefix; the headline shows live matches ("#: photos, pickup, pray, ...")
+cut to the dialog width. Enter: exact name or unique prefix runs it,
+ambiguous prefix -> menu of just those matches, empty -> the old full
+menu. Uses extcmds_match(ECM_IGNOREAC|ECM_NO1CHARCMD); its result list is
+static, so the ambiguous case copies it before building the menu.
+
+**§45 Low-HP warning + quiver readout** (allmain.c vulture_qol_pass,
+statuswin.cpp). ⭐Correction: the HP number ALREADY changed colour (green/
+yellow/orange/red at 90/70/50/25%) - added only the one-time message "You
+feel dangerously weak!  (HP n of m)" below 1/3 (or <=5 when max>10), which
+also stops an occupation; re-armed above 1/2. Status bar: bottom-left cell
+{0,4} shows "Qv:23 darts" (yellow at <=5); conditions now use 7 cells (the
+stock 9th wrote over the alignment). Throwing doesn't set disp.botl, so
+vulture_qol_pass flags the status line when the quiver object/count changes.
+
+**§46 Pet info on hover** (mapdata.cpp map_square_description). A visible
+pet adds " (HP 12/15, hungry)"; hunger from EDOG hungrytime +300 hungry /
++500 starving (dogmove.c DOG_HUNGRY / DOG_WEAK). Not while hallucinating.
+
+**§47 Monster know-how** (pager.c monster_lore, do_look). After a ';' /
+click-look on a monster the hero really sees (canspotmon, not disguised,
+not hallucinating): "You recall: hitting it can paralyze you, poisonous
+to eat." Built from the attack table + flags (touch_petrifies, passive
+AD_*, AT_ENGL/BREA/GAZE/MAGC/BOOM, steal/drain/teleport/etc., acidic,
+poisonous, regenerates), max 6 phrases, deduped. Exported (extern.h) so a
+future hover tooltip can reuse it.
+
+**§48 Item weights - REVERTED same evening.** Vulture's own inventory
+window already shows weights, so the "(wt N)" suffix was a duplicate;
+invent.c is back to stock (byte-identical to before the batch).
+
+**§49 Auto-explore** (cmd.c doautoexplore, key `'` / #autoexplore;
+allmain.c chain). BFS from the hero over KNOWN walkable squares, same
+neighbour rule as findtravelpath (test_move TEST_TRAV, seenv or couldsee,
+no known trap via TEST_TRAP, no boulder), to the nearest square touching a
+GLYPH_UNEXPLORED square; then dotravel_target() (u.tx/ty set too). So
+walking, door opening and interruptions are stock travel. Chain: in
+vulture_qol_pass, once travel fully stops, re-queue doautoexplore on
+CQ_CANNED only if the hero stands on the leg's target, no hostile is in
+view (canspotmon && couldsee), and HP isn't low; otherwise stop. Refuses
+when blind, trapped, engulfed, or with hostiles in sight; 200-leg cap per
+press. Named "autoexplore" (not "explore") because #exploremode exists.
+Travel sets nopick, so explore walks over items without picking them up.
+
+## 50-53. Door arches, quick photo, travel pickup, OS cursor (2026-11-18)
+
+Built 22:42, installed by the quit-watcher; previous exe =
+NetHackV.exe.bak-2026-11-18-qol3. NOT yet confirmed in play.
+
+**§50 Door arch orientation** (mapdata.cpp vulture_orient_door_tile, both
+door branches of the furniture pass). User screenshot: an open door in a
+corner of irregular walls drew its arch sideways. The core's
+set_door_orientation() (sp_lev.c) says horizontal = (wall left or right)
+&& !(wall above AND below) - fine for tty's '|'/'-', but a corner door gets
+the short stub's axis. Projection check (levelwin map_to_mouse): screen x ~
+(x - y), screen y ~ (x + y), so map +x runs to the lower right and a
+horizontal wall runs upper-left -> lower-right; H art faces that way, V art
+the other.  Now the art follows the real walls: adjacent wall count per
+axis, then the longer straight wall run (up to 4), then the walkable side
+(walkable left/right = passed along x = vertical wall), then the core.
+Broken doors/doorways untouched. ⭐The first build had the helper but no
+call site - the -Wunused-function warning is how that showed up.
+
+**§51 #photograph, Ctrl+S** (apply.c dophotograph, cmd.c, extern.h). User:
+"What do you want to use or apply?" on every camera shot. Queues doapply +
+the camera's invlet on CQ_CANNED, so only the direction is asked. Ctrl+S
+was unbound (checked the extcmdlist keys and bind_key defaults); Vulture's
+vulture_make_nh_key passes Ctrl+letter through.
+
+**§52 Travel picks up thrown missiles** (cmd.c travel_pickup_thrown,
+pickup.c). User: "how come I don't autopickup darts". Two causes: Kilmer's
+pickup_types is $"?!/= (no weapons), and dotravel_target() sets
+context.nopick - and Vulture's click-to-move IS travel - so even thrown
+darts were never picked up when walking by mouse. dotravel_target() now sets
+travel_pickup_thrown (cleared at the top of every rhack(), so an 'm' move
+never inherits it); pickup() lets a nopick travel autopick, thrown-only
+(autopick_thrown_only = !flags.pickup || nopick). Config:
+AUTOPICKUP_EXCEPTION="<.*dart.*" added to kilmer.nethackrc (normal walking
+grabs any darts; shop stock is still rejected first in autopick_testobj).
+
+**§53 The pointer is an OS cursor** (vulture_mou.cpp, vulture_sdl.cpp,
+vulture_main.cpp). §35 did not end it: the user then showed a pointer, and
+later a whole trail of arrows, baked into the top-of-screen message area
+(a pixels-in-vulture_screen bake, not a stale display rect - the exact path
+was never found by reading). So the software cursor is gone: each cursor
+tile becomes an SDL_CreateColorCursor (native art, hotspot = -xmod/-ymod,
+clamped), set by set_mcursor and on every mouse_draw; SDL_ShowCursor is now
+ENABLED at startup; the pointer's get_bg/put/restore and the §35 rect
+tracking are deleted. The tooltip is still painted by Vulture and still
+placed with the scaled vulture_cursor() geometry. vulture_curs() (keyboard
+look/teleport cursor) now also SDL_WarpMouseInWindow()s the real pointer
+(render -> window space). mouse_destroy frees the cursors and restores the
+system arrow. Backup of the software-cursor file: session scratchpad only.
+
+## 54. Scores were never broken; end-of-game dumplogs turned on (2026-11-18)
+
+User: "fix the score files". ⭐VultureNetHack/record, xlogfile, logfile,
+livelog and perm are 0-byte placeholders from the July packaging; nothing
+reads them.  The live files are in C:/ProgramData/NetHack/5.0/ (record,
+xlogfile, logfile, livelog - all current, 220 xlogfile games), as is the
+LIVE sysconf (its LIVELOG=0x1FFF is what writes livelog).  The game-folder
+sysconf is NOT read.  No code change for scores.
+
+Dumplog: DUMPLOG was commented out in include/config.h.  Now defined (adds
+sysopt.dumplogfile - runtime config only, not in any save, so saves stay
+compatible).  ⭐Because the core makefile has no header deps, ALL core objects
+were moved aside (src/o/nethackv.pre-dumplog/) and rebuilt - 139 files, clean;
+craft.o (Crafting build, not in this makefile) put back untouched.  No Vulture
+code reads sysopt, so its objects needed nothing.  Live sysconf (backup
+sysconf.bak-2026-11-18): DUMPLOGFILE=C:/Users/dalla/NetHack/dumplogs/%n-%D.log
+(folder created).  Built 23:31, installed directly (game not running);
+previous exe = NetHackV.exe.bak-2026-11-18-predumplog.  NOT yet seen writing
+a report - it appears when a game ends.
+
+## 55-61. QOL batch 4 (2026-11-18)
+
+Built 23:45 clean (no new warnings), installed directly; previous exe =
+NetHackV.exe.bak-2026-11-18-qol4.  No save-format change (new state is
+static; album count uses the already-saved lifelist counter).  NOT yet
+confirmed in play.  Pre-batch sources: scratchpad pre-batch4.tar.
+
+Keys (all verified unbound first; Vulture's vulture_make_nh_key maps
+Alt+letter to M()): Alt+Q #firenearest, Alt+K #attacknearest, Alt+Z #rest,
+Alt+H #elbereth, Ctrl+S #photograph (now aims), '>' smart descend.
+
+**§55 Smarter auto-explore** (cmd.c).  Per-level stood-on bitmap
+(autoexplore_note_position from vulture_qol_pass).  BFS targets: frontier,
+or a remembered object never stood on (not corpse/boulder/shop) -> AEX_ITEM,
+chain stops there.  Nothing left -> nearest unsearched corridor dead end
+(CORR with <=1 known accessible neighbour) -> AEX_DEADEND; on arrival
+autoexplore_start_search() searches 15 turns (occupation), AEX_SEARCHING,
+then explores again.  Already standing on the dead end = no travel.
+
+**§56 One-key commands** (cmd.c, apply.c, engrave.c).  vq_line_target():
+8 straight lines up to BOLT_LIM, stops at walls/closed doors/the FIRST
+monster of any kind (pets and peacefuls block, never get shot); camera mode
+prefers species not yet photographed.  #firenearest queues dofire + dir.
+#attacknearest: adjacent -> queue the walk into it (paranoid attack rules
+still apply), else travel toward the nearest visible hostile.  #rest:
+occupation searching until HP and Pw full; stops at Weak, 2000 turns, or
+any interruption.  #elbereth: preset text (vq_engrave_preset, valid only
+the same turn) + queued doengrave + '-' (+ 'n' ONLY if a visible dust
+engraving is there - otherwise the 'n' would become a move).  Smart '>':
+stock dodown on stairs/ladder/trap or when levitating/blind/trapped; else
+travel to the nearest remembered down stair/ladder (incl. branch) and
+vulture_qol_pass queues dodown on arrival.
+
+**§57 Pets mark items** (dogmove.c, after place_monster).  A pet (has_edog,
+not a food move) stepping onto a pile with cursemsg false, pet and spot both
+seen, no hallucination -> bknown=1 on every item there.  No "not cursed"
+state exists, so blessed items show as blessed - documented trade-off.
+
+**§58 Danger colours** (messagewin.cpp).  danger_phrases[] (stoning, slime,
+strangling, terminal illness, fainting, low HP, paralysis, ...) draw in a
+red version of the age fade.
+
+**§59 Prayer sense** (statuswin.cpp condition cell).  NoPray (red: angry god
+or Luck<0), Pray (green: ublesscnt 0), Pray? (yellow: <=200, major trouble
+only), nothing above 200.
+
+**§60 Photo album rewards** (mon.c, shk.c).  Tourist milestones at
+10/25/50/100 species: message + 100/400/1500/5000 exp.  famous_photographer()
+(Tourist, total_photographed >= 50) removes the low-level Tourist surcharge in
+get_cost, set_cost AND priceid_touristy (autoid's mirror) - the visible-shirt
+surcharge stays.
+
+**§61 Save backups** (restore.c vq_backup_savefile).  Before a successful
+restore deletes the save: copy to <savedir>/backups/<save>-<YYYYMMDDhhmmss>.
+Never pruned.  Restore one by copying it back under the original name.
+
+## 62. Rotatable isometric view - PageUp / PageDown (2026-11-18)
+
+User's "dream feature".  Built 23:53 clean, installed; previous exe =
+NetHackV.exe.bak-2026-11-18-prerotate.  NOT yet seen on screen - this is the
+change most likely to need a visual follow-up.
+
+Model: vulture_view_rot (vulture_gen.cpp, 0-3 quarter turns, not saved).
+Screen layout stays in VIEW coordinates; v_rot() (levelwin.h, one step =
+(a,b) -> (-b,a)) maps view offset -> map offset, and 4-rot back.  Rotation 0
+is stock Vulture exactly (identity everywhere; mouse_to_map rewritten with
+the view centre factored out + floor division, equal to the old formula for
+the old non-negative numerators).
+
+Touched (levelwin.cpp unless noted): all three draw passes (view offset ->
+map square, bounds checked per square); wall faces (get_wall_tiles now
+loops over the four SCREEN sides via rotated neighbour deltas - "west" means
+screen-west); wall shading neighbours; water/lava edge probes; floor
+pattern tiled in view coordinates; multi-square rug decor disabled while
+turned (it would scramble); door arch art swapped V<->H on odd turns
+(v_rot_door, on top of §50's orientation); mouse_to_map / map_to_mouse /
+need_recenter / glyph-change invalidation / engulf drawing; edge-scroll
+hotspots (screen deltas rotated into map deltas); keys - vulture_translate_key
+(vulture_gen.cpp) now ends in vulture_rotate_dirkey() so hjkl/numpad stay
+SCREEN-relative (also when no_key_translation is set); dirdialog's on-map
+click path rotates its result (the off-map path goes through translate).
+PageUp/PageDown in levelwin::handle_keydown_event (level window only, like
+F7/F8), no game time.
+
+Not rotated (by design or not worth it): monster/object sprites (they face
+the camera anyway), directional furniture art (stairs, altars), drawbridge
+art, the 2D minimap/overview.
+
+**§63 Follow-ups after play review (11-19).**
+- Smart descend moved OFF plain `>`: `>` is stock dodown again (the user:
+  "> is already the command to go downstairs").  It is now #smartdown on
+  M('>'); vulture_make_nh_key (vulture_gen.cpp) turns Ctrl+> AND Alt+>
+  into M('>') (checks ch=='>' or Shift+period, since Ctrl may blank the
+  text char).  Not tried in play.
+- §57 pet BUC marking REVERTED (dogmove.c back to HEAD): "feels like
+  cheating".  Vanilla's "moves only reluctantly" message is untouched.
+- Photo album vs stock 5.0.0: stock already tracks mvitals[].photographed,
+  counts lifelist.total_photographed, and gives a Tourist experience(mtmp)
+  exp for the FIRST photo of each species (not the starting pet, not worm
+  tails / disguised Wizard).  The mod only ADDS: the album message (§37),
+  #photos list, Ctrl+S auto-aim (§51), milestone bonuses + 50-species shop
+  discount (§60).  The last two are non-vanilla balance changes.
+- Prayer cell (§59) no longer reads Luck: NoPray = god angry only ("knowing
+  your luck is also cheating").  With Luck<0, "Pray" can show and still fail.
+- Pet marking, CURSED-ONLY (dogmove.c, inside the "reluctantly steps onto"
+  block): if the hero sees the spot, no pile item is already known cursed,
+  and exactly one item has unknown BUC, that item gets bknown (it must be
+  the cursed one).  Never reveals blessed/uncursed.
+- Prayer sense reworked to hero knowledge only: dopray() now adds a
+  chronicle line "prayed to <god>" (LL_MINORAC, gamelog is saved - no format
+  change); vq_turns_since_prayer() (pray.c) finds the latest one (or the
+  first-prayer conduct line; none = turns since start).  Cell: Pray green
+  at 1000+ turns, Pray? yellow 500-999, NoPray red if god angry, else
+  nothing.  ublesscnt and Luck are no longer read.  Old saves only have the
+  first prayer on record.
+- #smartup on M('<') = Ctrl+< / Alt+< (vulture_gen.cpp, Shift+comma too);
+  smart_stairs(up) shared with #smartdown; descend_is_up picks doup/dodown
+  in vulture_qol_pass.
+
+**§64 Mute when unfocused** (vulture_sound.cpp, vulture_sdl.cpp).
+vulture_focus_mute(): FOCUS_LOST in vulture_handle_global_event sets
+Mix_Volume(-1, 0) + Mix_VolumeMusic(0); FOCUS_GAINED restores MIX_MAX_VOLUME
+(nothing else in the port sets volume).  Volume rather than pause, so
+effects fired while away don't queue up and music keeps its place.  The
+intro video's own audio queue is not covered.
+
+**§65 Main menu / launcher** (NEW win/vulture/vulture_mainmenu.cpp; hook in
+sys/windows/windmain.c before plnamesuffix(); levelwin.cpp; vulture_gra.h).
+Shown when started WITHOUT -nethackrc= / NETHACKOPTIONS=@ (captured right
+after early_options(), since initoptions() frees gc.cmdline_rcfile), not in
+wizard mode, and not when VULTURE_SKIP_MENU is set (cleared on entry so a
+later "Play again?" child shows the menu).  Items: Continue (newest save by
+mtime), Load (get_saved_games(), SELECTSAVED), roster hero (scans
+<CONFIGPREFIX>*.nethackrc except .nethackrc for name:/role:/race:/pettype:),
+new hero (name prompt, default rc, in process), high scores (parses
+record), past games (sysopt.dumplogfile dir, fate = the "You died ... with
+N points" line), save backups (restore: current save backed up first;
+archive: rename into backups/), Guidebook.txt, quit.  A save/hero with a
+roster rc RELAUNCHES the exe with -nethackrc= + VULTURE_SKIP_MENU/INTRO
+(options are read before the window port exists).  Title backdrop =
+graphics/entrance.png + random tip line, held in vulture_backdrop so
+levelwin::draw() repaints it (not black) while no map exists.  Per-hero
+shortcuts still bypass the menu.  NOT yet seen on screen.
+
+## 66. `bestroll` extended to Wizards (2026-11-19)
+
+User request: give the Wizard (Phar'massi) the Tourist's best-start
+treatment.  User's call: rolled item TYPES stay random (picking a wand of
+death etc. would be overpowered, same reasoning as the Tourist's food);
+only the rolls go to their ceiling.  bestroll_active() is now Tourist OR
+Wizard.  Wizard effects (u_init.c):
+- UNDEF_BLESS items blessed: cloak, wand, rings, potions, scrolls, random
+  spellbook (existing generic path).
+- Wand charges = top of mksobj()'s roll: 8 (rn1(5,4)), NODIR 15
+  (rn1(5,11)), stasis 6 (rn1(4,3)).  Wishing is already filtered out.
+- Chargeable rings +5 (rne(3) caps at 5 below XL 15).
+- Magic marker 22 (generic 19+rn2(4) path); blindfold always (1-in-5).
+- Stats: bestroll_attrs() takes a per-role priority; Wizard = Int, Con,
+  Dex, Wis, Str, Cha.  Elven Wizard: Str 14 Int 20 Wis 20 Dex 18 Con 16
+  Cha 11.
+Option description/comments in optlist.h + flag.h updated (comment/string
+only - no struct layout change); options.o moved aside so it rebuilt.
+Enabled in pharmassi.nethackrc + pharmassi-nopet.nethackrc (backups in
+NetHack/backup-2026-11-19/).  Kilmer rc comment fixed (it still said
+20 lembas).  Built via finalize_exe.sh, rc=0.  NOT yet seen in a new game.
+
+## 67. Auto-explore opens doors (2026-11-19)
+
+Bug report: `'` auto-explore never opened doors.  Cause: it walks by
+travel, travel sets context.run, and stock test_move() (hack.c) only
+autoopens when !context.run - so the leg stopped with "That door is
+closed." short of its target and the chain ended.  Fix: autoopen also
+fires while autoexplore_active.  A door found LOCKED by that attempt is
+recorded (autoexplore_door_locked -> aex_locked[][], per level, cleared
+with the other aex maps) and the BFS treats it as a wall from then on;
+the chain re-plans once (autoexplore_reroute) instead of stopping.  The
+hero saw "This door is locked", so no hidden info leaks.  A stuck door
+still just ends the leg (press `'` again).
+
+## 68. Gor'oth: orcish melee Wizard + `bestroll_melee` (2026-11-19)
+
+New roster hero: goroth.nethackrc (copy of pharmassi-nopet: chaotic male
+orc Wizard, pettype:none, bestroll) + `Play as Gor'oth.lnk`.  New boolean
+option `bestroll_melee` (flag.h iflags, optlist.h): with bestroll, stat
+priority Con, Str, Dex, Int, Wis, Cha.  First version also SET Str/Con to
+the race cap (18/50) - user REJECTED that as cheating the same day; now
+within the dice: orc Str 18/16 Con 18 Int 14 Wis 11 Dex 11 Cha 11.
+flag.h + extern.h changed -> all 139 core objects moved aside (scratchpad
+stale-o2, craft.o kept) and rebuilt; finalize_exe.sh rc=0.  NOT yet seen
+in a new game.
+
+## 69. Local-LLM monster chat: `llmchat` option (2026-11-19)
+
+User idea: #chat barks written by a local LLM.  OPTIONS=llmchat:<ollama
+model> (compound, iflags.llmchat[64], optfn_llmchat; empty/none = off).
+- Transport: win/vulture/vulture_llm.cpp - blocking HTTP/1.0 POST to
+  127.0.0.1:11434 only (winsock; -lws2_32 added to sys/windows/GNUmakefile
+  LIBS), 8 s timeout, refused connection = instant fail.  Kept free of
+  NetHack headers.  vulture_llm_warmup() loads the model on a thread once
+  per run (called from vulture_qol_pass) - a cold load took 60-70 s.
+  -DLLM_DEBUG prints raw replies (standalone test only).
+- Game side: sounds.c llm_rewrite()/llm_chat_ok(), hooked after the
+  domonnoise() switch.  The STOCK line is computed as before and given to
+  the model as the meaning to keep.  Action barks keep the stock verb
+  verbatim and the model only appends a clause ("The little dog whines,
+  tail low and eyes on you.") so info-bearing barks can't change meaning.
+  Speech is rewritten whole; narration around a quote is stripped.
+- Model sees only hero-knowable things: displayed species (+given name),
+  attitude, the hero as seen (race/role/gender or poly form, wielded item
+  via simpleonames), place (shop/town/Mines/Sokoban/Gehennom/DoD depth).
+  System prompt forbids new facts/hints.  Per-monster memory of its last 2
+  speech lines (12 slots, not saved) to avoid repeats.
+- Stock text kept for: Hallucination, unseen monsters (name would leak),
+  Death, cancelled lines, MS_NURSE/GUARD/RIDER/SPELL/SELL/PRIEST/ORACLE/
+  LEADER/NEMESIS/GUARDIAN.  cuss() prints itself and is untouched.
+- Any failure -> stock line.  Prompt tested via Ollama: ~1.2-2 s per line
+  warm on the GTX 1660 with qwen2.5-coder:7b; standalone transport test
+  ok (1.1 s) and dead-port test ok.
+Enabled in all 9 roster rc files (llmchat:qwen2.5-coder:7b; backups
+*.pre-llmchat in NetHack/backup-2026-11-19/).  flag.h changed -> full core
+rebuild (stale-o4 in scratchpad).  NOT yet seen in a real game.
+
+## 70. LLM: every spoken line, typing to monsters, names (2026-11-19)
+
+Model switched to llama3.2:3b (pulled; fits the 6 GB GTX 1660 fully):
+0.2-0.6 s a line warm, ~5 s cold, vs 1-2 s / 60-70 s for the 7B.
+- EVERY verbalize()d line: vpline() (pline.c) hands PLINE_VERBALIZE lines
+  to llm_rewrite_spoken() (sounds.c).  Skipped: lines with digits
+  (prices/amounts), hallucination, lines the model already wrote
+  (llm_skip_spoken).  Rejected replies: > 2x stock length + 30, any digit,
+  or a lost proper name (capitalised word not starting a sentence must
+  survive).  Cached per run (128 lines): stable within a session, new
+  wording next run.  Speaker species from set_voice() -> llm_note_speaker()
+  (same turn only, cleared after use).  TESTED: a rich-context prompt made
+  the 3B echo the scene and add facts ("Thou hast angered me" -> a
+  description of the player); a bare 2-example few-shot rephrase keeps
+  meaning and names ("You have incurred my wrath.").
+- llmtalk (boolean): dochat() -> llm_free_talk(): getlin "Say what?";
+  blank/Esc = normal chat.  Speakers answer in character (deflect hints);
+  animals get a described reaction.  Per-monster memory of the last
+  exchange.  Not for shk/priest/vault guard/Oracle/quest/Riders.
+- Names: llm_pet_name_pass() (vulture_qol_pass) names an unnamed starting
+  pet from turn 5 ("You decide to call your little dog Flicker."), up to 4
+  tries.  A peaceful speaker (not shk/priest/guard/minion/unique) is
+  christened the first time it talks and introduces itself.  HERO naming
+  NOT done: plname keys the save file and lock and is fixed before role
+  selection - needs a design decision.
+Enabled llmtalk in all 9 roster rc files (backups *.pre-llmtalk).
+
+## 71. Logs from trees, #build walls and doors (2026-11-19)
+
+New object "log" (objects.h, ROCK_CLASS after statue, prob 0, wt 30,
+WOOD, mergeable).  EDITLEVEL 0 -> 1: the object table is saved, so old
+saves/bones are invalid (no saves existed; the 9 old bones files get
+discarded).  Tile: win/share/objects.txt entry after statue + renumbered;
+Vulture art tiles/object.log.png + objicon.log.png (drawn from the club's
+bark texture, scratchpad mklog.py), conf object.LOG/objicon.LOG in both
+gamedata and the package conf.  Cutting down a tree (axe, dig.c) now drops
+2-3 logs.  #build (dig.c dobuild, cmd.c ext cmd): adjacent doorway/broken
+door -> door (2 logs) or wall (5 rocks); floor/corridor -> wall (5 rocks).
+Not in shops/Sokoban, not on traps/objects/monsters; 5 turns.  Wall type
+HWALL/VWALL from neighbouring walls; xy_set_wall_state + vision recalc.
+Full rebuild incl. tilemap.exe/tile.c/makedefs (stale-o5).  NOT yet seen
+in a game.
+
+## 72. Right-click menu = 5.0's own #therecmdmenu (2026-11-19)
+
+Vulture's popup (mapdata::get_map_contextmenu) was a hardcoded 3.x list.
+It now lists exactly what 5.0's there_cmd_menu would offer for the square
+and performs the pick with 5.0's act_on_act().  cmd.c: mcmd_addmenu() has
+a capture mode; vulture_collect_cmd_menu(x,y,...) runs the self/next2u/
+far/common builders into a buffer; vulture_do_cmd_menu_act() queues the
+action and sets vulture_click_consumed, which makes readchar_core() skip
+click_to_cmd() for the click Vulture hands back (num 0) - rhack() then
+runs the canned queue.  Popup ids V_ACTION_NHMENU (1000) + index.  Vulture
+extras 5.0 lacks are appended: Fire, Engrave, Pay bill, Pray, Turn undead,
+Wipe face (only when Glib/creamed), What's this? (if no Look at).
+
+## 73. Ask your god a question (2026-11-19)
+
+pray.c pleased(): when the prayer fixed no trouble (trouble0 == 0,
+p_trouble == 0) and granted no favour (pat_roll <= 0, i.e. no pat on the
+head or its "nothing" roll), llm_ask_god() (sounds.c) offers a getlin
+question; the llmchat model answers as the god - cryptic, archaic, never
+game facts.  "The voice of X booms out:" + verbalize (skip-flagged so the
+spoken-line rewrite doesn't touch it).
+
+## 74. Sound fixes, new SFX, location music, shake, vignette, footsteps (2026-11-19)
+
+- Event sounds: whole-word matching (vulture_sound_match) - [ cat] fired
+  inside "catch" ("You catch fire" meowed).  Animal lines now keyed on the
+  noise verb (barks/yips/mews/purrs/roars/growls...), not the species.
+- 14 synthesized effects (pure-Python synth_sfx.py in scratchpad, WAV):
+  explode, fire, zap, chime, hurt, click, coins, crunch, gulp, rattle,
+  whoosh, splash, step1-4; conf lines for explosions, catching fire,
+  bolts, prayer/blessing glows, monster hits ("bites!"), traps, gold,
+  eating, locked doors, level teleport; bell.ogg on "You die".  16 mixer
+  channels (was 4).
+- Music: message triggers for shops removed ([store] etc.).  The core
+  calls vulture_music_zone() every turn (vulture_qol_pass): battle (a
+  real-threat hostile within 7 squares, or one that hurt you, +12 turns of
+  hysteresis) > shop > town > Oracle > Mines > Gehennom > dungeon.  A zone
+  change fades the new track in, so shop music hands back as you leave.
+  Shop music at 30% volume, everything else 55%; dungeon rotates calm
+  tracks only (battle tracks reserved for fights).  The old random
+  ambient picker defers once zones run.
+- Screen shake + red hit flash on HP loss (vulture_screen_shake in
+  vulture_sdl.cpp, on the presented window surface, ~8 frames).
+- Low-HP vignette below half HP (levelwin.cpp, drawn at the end of the
+  full map repaint; vulture_force_map_redraw when the HP step changes).
+- Footsteps from domove() (quiet, 4 variants; splash in water; none when
+  levitating/flying/riding).
+None of this is toggleable yet.  NOT yet seen/heard in a game.
+
+## 75. Every line reworded, text-to-speech, tweening, facing (2026-11-20)
+
+User: variety is the point - every line of text, not only speech, and
+not the same wording twice in a game.
+- llm_rewrite_line() (sounds.c) replaces llm_rewrite_spoken(): vpline()
+  hands it EVERY line except PLINE_NOREPEAT/OVERRIDE_MSGTYPE/
+  SUPPRESS_HISTORY/NO_CURS_ON_U (Norep and getpos autodescribe need exact
+  text), inventory lines ("a - ..."), [prompts], "--", < 8 chars,
+  hallucination.  NO cache.  Narration uses a 3-example few-shot;
+  speech keeps the speaker few-shot.  2.5 s timeout; a slow (not refused)
+  call backs off 60 s.
+- Meaning check llm_meaning_kept(): same numbers; every proper name;
+  every GAME NOUN (vocab = every word of every object name/appearance and
+  monster name, built once) - and the reverse: no game noun or
+  capitalised name the original didn't have (tested: the 3B invented a
+  "warhammer" and a "translation" of ZELGO MER).  Protected state words
+  must survive (hungry, weak, faint, burdened..., blind, confused, cursed/
+  blessed/uncursed, compass directions, locked, peaceful/hostile/tame).
+  Verbs are NOT protected - "strikes" for "hits" is fine (an earlier list
+  that protected hit/kill/opens/up/down rejected half of all rewrites).
+  Parroted few-shot examples rejected.  Prefix labels stripped.  Test on
+  36 real messages: ~0.2 s each.
+- Sound effects key on the ORIGINAL text: vpline calls
+  vulture_msg_sound_original() before swapping the line; vulture_main.cpp
+  skips its own match for that message.
+- TTS: win/vulture/vulture_tts.cpp, Windows SAPI 5 (David/Zira), async,
+  XML pitch/rate.  llm_tts_line() for verbalize()d lines when
+  OPTIONS=voices (5.0's own flag; its windsound_verbal is a stub).
+  Voice from set_voice() -> llm_note_speaker(mtmp, moreinfo): gender ->
+  voice, m_id -> stable pitch/rate, small/big monsters higher/lower, deity
+  deep and slow.  voices enabled in all 9 rc files (backups
+  *.pre-voices).
+- Tweening (levelwin.cpp vtw_*): movers keyed by m_id (hero = VTW_HERO)
+  vs positions committed after the last animation; a 1-square move draws
+  the mover and the camera at the OLD place (t = 0), then
+  vulture_tween_run() - called at the end of
+  vulture_refresh_window_region(), re-entry guarded - plays 6 eased
+  frames (3 while running/travelling, ~12 ms each) and commits.  Camera
+  offset = (1-t)*proj(new view - old view); mover offset =
+  (1-t)*proj(old - new), both through v_rot so view rotation is right.
+  Teleports, level changes and rotation snap.
+- Facing: last horizontal screen direction per mover; each sprite's own
+  facing detected once from the x-centroid of the top 30% of its opaque,
+  non-shadow pixels (jackal/dog/kitten/rat right, horse left, symmetric
+  -> treated as right); flipped copies cached per tile id.
+NOT yet seen/heard in a game.
+
+## 76. Mail daemon over Discord; the hero mutters remarks (2026-11-20)
+
+- MAIL is now defined for Windows (windconf.h).  SCR_MAIL and flags.biff
+  were already unconditional, so no object-table/struct change.
+- Discord transport: win/vulture/vulture_discord.cpp - WinHTTP (HTTPS,
+  -lwinhttp added to LIBS) on a background thread polling
+  GET /api/v10/channels/{id}/messages?after={last} every `poll` s (min 10;
+  the first poll only records the newest id, so history isn't delivered);
+  small JSON parser; bot-authored messages skipped (no echo of replies);
+  non-ASCII -> '?'.  Config: %USERPROFILE%\NetHack\discord.txt (token=,
+  channel=, poll=), written by the player; template discord.txt.example
+  there.  UA "DiscordBot (https://www.nethack.org, 1.0)" - nothing about
+  the player is sent.
+- mail.c (!UNIX branch): ckmailstatus() pops queued messages ->
+  newmail() with "I have a message for you from X", scroll named after
+  the sender, omailcmd = "discord<US>id<US>author<US>text" (saved with the
+  object).  readmail() -> read_discord_mail(): text window, word-wrapped,
+  then "Write a reply?" -> POST as a Discord reply (message_reference).
+  newmail()'s give_up path still hands over a Discord scroll if no daemon
+  could reach you.  Without discord.txt the old fake junk mail is
+  unchanged (and never fires on Windows: mustgetmail stays -1).
+- heroquips (boolean, iflags): llm_hero_quip_pass() from vulture_qol_pass:
+  every 200-500 turns, or (60-turn cooldown) on arriving at a new level
+  (1 in 3), getting hungrier, or dropping below 1/3 HP.  Context =
+  role/race/name, place, rough health, hunger, burden, up to 3 visible
+  non-pets, last message.  llm_no_new_nouns(): the remark may not name a
+  game noun absent from that context.  'You mutter, "..."' (skip-flagged
+  for the rewording pass) + TTS in the hero's gender with voices on.
+  Enabled in all 9 rc files.
+Full rebuild (stale-o6).  Not exercised against a live Discord bot or in
+a game yet.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

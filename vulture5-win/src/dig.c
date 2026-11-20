@@ -477,6 +477,13 @@ dig(void)
             if (digtyp == DIGTYP_TREE) {
                 digtxt = "You cut down the tree.";
                 lev->typ = ROOM, lev->flags = 0;
+                /* Vulture s71: the trunk splits into 2-3 logs */
+                {
+                    struct obj *logs = mksobj_at(LOG, dpx, dpy, TRUE, FALSE);
+
+                    logs->quan = (long) rn1(2, 2);
+                    logs->owt = weight(logs);
+                }
                 if (!rn2(5))
                     (void) rnd_treefruit_at(dpx, dpy);
                 if (Race_if(PM_ELF) || Role_if(PM_RANGER))
@@ -2327,3 +2334,190 @@ wiz_debug_cmd_bury(void)
 /*#undef STRIDENT*/
 
 /*dig.c*/
+
+/*
+ * Vulture mod (IMPLEMENTATION_LOG s71): #build.
+ *
+ * Rocks build walls, logs build doors (logs come from cutting down trees
+ * with an axe - dig() drops them).  Pick an adjacent square:
+ *   - an empty doorway or broken door: a door (BUILD_LOGS logs) or a wall
+ *     (BUILD_ROCKS rocks) - this is how dug-through walls get repaired;
+ *   - bare floor or corridor: a wall.
+ * Never in shops, Sokoban, on stairs/altars/fountains (those aren't ROOM),
+ * on traps, under a monster or over objects.  Takes BUILD_TURNS turns.
+ */
+#define BUILD_ROCKS 5
+#define BUILD_LOGS 2
+#define BUILD_TURNS 5
+
+/* count carried items of type otyp */
+staticfn long
+build_count(int otyp)
+{
+    struct obj *o;
+    long n = 0L;
+
+    for (o = gi.invent; o; o = o->nobj)
+        if (o->otyp == otyp)
+            n += o->quan;
+    return n;
+}
+
+/* use up n carried items of type otyp */
+staticfn void
+build_consume(int otyp, long n)
+{
+    struct obj *o, *onext;
+
+    for (o = gi.invent; o && n > 0; o = onext) {
+        onext = o->nobj;
+        if (o->otyp != otyp)
+            continue;
+        if (o->quan > n) {
+            o->quan -= n;
+            o->owt = weight(o);
+            n = 0;
+        } else {
+            n -= o->quan;
+            useupall(o);
+        }
+    }
+    update_inventory();
+}
+
+/* wall continues left/right of x,y?  (else treat it as vertical) */
+staticfn boolean
+build_horizontal(coordxy x, coordxy y)
+{
+    boolean l = isok(x - 1, y) && (IS_WALL(levl[x - 1][y].typ)
+                                   || IS_DOOR(levl[x - 1][y].typ));
+    boolean r = isok(x + 1, y) && (IS_WALL(levl[x + 1][y].typ)
+                                   || IS_DOOR(levl[x + 1][y].typ));
+    boolean up = isok(x, y - 1) && (IS_WALL(levl[x][y - 1].typ)
+                                    || IS_DOOR(levl[x][y - 1].typ));
+    boolean dn = isok(x, y + 1) && (IS_WALL(levl[x][y + 1].typ)
+                                    || IS_DOOR(levl[x][y + 1].typ));
+
+    if (l || r)
+        return TRUE;
+    if (up || dn)
+        return FALSE;
+    return TRUE;
+}
+
+staticfn void
+build_refresh(coordxy x, coordxy y)
+{
+    int dx, dy;
+
+    for (dx = -1; dx <= 1; dx++)
+        for (dy = -1; dy <= 1; dy++)
+            if (isok(x + dx, y + dy) && IS_WALL(levl[x + dx][y + dy].typ))
+                xy_set_wall_state(x + dx, y + dy);
+    if (closed_door(x, y) || IS_WALL(levl[x][y].typ))
+        block_point(x, y);
+    else
+        unblock_point(x, y);
+    gv.vision_full_recalc = 1;
+    newsym(x, y);
+}
+
+int
+dobuild(void)
+{
+    coordxy x, y;
+    struct rm *lev;
+    boolean doorway, floor, can_wall, can_door;
+    long rocks = build_count(ROCK), logs = build_count(LOG);
+    char c;
+
+    if (u.uswallow || Underwater || Levitation || u.utrap) {
+        You_cant("build anything right now.");
+        return ECMD_OK;
+    }
+    if (rocks < BUILD_ROCKS && logs < BUILD_LOGS) {
+        You("need %d rocks to build a wall or %d logs to build a door.",
+            BUILD_ROCKS, BUILD_LOGS);
+        return ECMD_OK;
+    }
+    if (!getdir("In what direction do you want to build?"))
+        return ECMD_CANCEL;
+    if (u.dz || (!u.dx && !u.dy)) {
+        You_cant("build there.");
+        return ECMD_OK;
+    }
+    x = u.ux + u.dx, y = u.uy + u.dy;
+    if (!isok(x, y)) {
+        You_cant("build there.");
+        return ECMD_OK;
+    }
+    lev = &levl[x][y];
+    if (In_sokoban(&u.uz)) {
+        pline("The walls of this puzzle aren't yours to change.");
+        return ECMD_OK;
+    }
+    if (*in_rooms(x, y, SHOPBASE) || *u.ushops) {
+        pline("The shopkeeper would not appreciate that.");
+        return ECMD_OK;
+    }
+    doorway = (IS_DOOR(lev->typ)
+               && (lev->doormask == D_NODOOR
+                   || (lev->doormask & D_BROKEN) != 0));
+    floor = (lev->typ == ROOM || lev->typ == CORR);
+    if (IS_DOOR(lev->typ) && !doorway) {
+        pline("There's already a door there.");
+        return ECMD_OK;
+    }
+    if (!doorway && !floor) {
+        You_cant("build there.");
+        return ECMD_OK;
+    }
+    if (m_at(x, y) || u_at(x, y)) {
+        pline("Something is in the way.");
+        return ECMD_OK;
+    }
+    if (OBJ_AT(x, y)) {
+        pline("Clear the objects off that spot first.");
+        return ECMD_OK;
+    }
+    if (t_at(x, y)) {
+        pline("You can't build on top of a trap.");
+        return ECMD_OK;
+    }
+    can_wall = (rocks >= BUILD_ROCKS);
+    can_door = (doorway && logs >= BUILD_LOGS);
+    if (!can_wall && !can_door) {
+        if (doorway)
+            You("need %d logs for a door or %d rocks for a wall.",
+                BUILD_LOGS, BUILD_ROCKS);
+        else
+            You("need %d rocks to build a wall here.", BUILD_ROCKS);
+        return ECMD_OK;
+    }
+    if (can_wall && can_door) {
+        c = yn_function("Build a door or a wall?", "dwq", 'd', TRUE);
+        if (c == 'q' || c == '\033')
+            return ECMD_CANCEL;
+        can_door = (c == 'd');
+    }
+
+    if (can_door) {
+        build_consume(LOG, BUILD_LOGS);
+        lev->doormask = D_CLOSED;
+        lev->horizontal = build_horizontal(x, y) ? 1 : 0;
+        You("fit a sturdy wooden door into the doorway.");
+    } else {
+        boolean horiz = build_horizontal(x, y);
+
+        build_consume(ROCK, BUILD_ROCKS);
+        lev->typ = horiz ? HWALL : VWALL;
+        lev->flags = 0; /* doormask/wall_info share this field */
+        lev->horizontal = horiz ? 1 : 0;
+        You("stack the rocks into a solid wall.");
+    }
+    build_refresh(x, y);
+    nomul(-BUILD_TURNS);
+    gm.multi_reason = "building";
+    gn.nomovemsg = "You finish building.";
+    return ECMD_TIME;
+}

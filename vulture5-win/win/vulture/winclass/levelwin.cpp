@@ -23,6 +23,8 @@ extern "C" {
 #include "vulture_tile.h"
 #include "vulture_win.h"
 
+static int v_rot_door(int tile); /* s62 */
+
 /* ??????????
  * without this the file will occasionally fail to compile, seemingly at
  * random
@@ -177,8 +179,9 @@ levelwin::need_recenter(int map_x, int map_y)
 {
     int screen_x, screen_y;
 
-    map_x -= view_x;
-    map_y -= view_y;
+    /* §62: through the view rotation */
+    v_rot(map_x - view_x, map_y - view_y, 4 - vulture_view_rot, &map_x,
+          &map_y);
     screen_x = vulture_screen->w / 2 + V_MAP_XMOD * (map_x - map_y);
     screen_y = vulture_screen->h / 2 + V_MAP_YMOD * (map_x + map_y);
 
@@ -204,6 +207,361 @@ levelwin::force_redraw(void)
     clip_br_y = h;
 }
 
+#include <map>
+
+/*
+ * IMPLEMENTATION_LOG s75: tweening + facing.
+ *
+ * Every visible mover (hero and monsters, keyed by m_id) is compared with
+ * the positions committed after the last animation.  A one-square move
+ * makes the map draw that mover - and the camera, when the view followed
+ * the hero - at the OLD place first (vtw_t = 0); vulture_tween_run(),
+ * called after that frame reaches the screen, then plays the in-between
+ * frames (eased) and commits.  So the screen never shows stale positions:
+ * the slide starts the moment the move is displayed.  Teleports, level
+ * changes and view rotation snap.
+ *
+ * Facing: the last horizontal screen direction each mover travelled.
+ * Vulture's art faces either way (jackal right, horse left), so each
+ * sprite's own facing is detected once from where its top (head/ears)
+ * sits; sprites flip to match travel.  Front-facing art counts as right.
+ */
+struct vtw_ent {
+    int x, y;
+    signed char face;
+};
+static std::map<unsigned, vtw_ent> vtw_snap, vtw_cur;
+static int vtw_snap_vx = -1, vtw_snap_vy = -1, vtw_snap_rot = -1;
+static d_level vtw_snap_lev = { -1, -1 };
+static bool vtw_pending = false, vtw_animating = false;
+static double vtw_t = 1.0;
+static short vtw_ox[ROWNO][COLNO], vtw_oy[ROWNO][COLNO];
+static signed char vtw_face[ROWNO][COLNO];
+static int vtw_gx = 0, vtw_gy = 0;
+static int vtw_last_vx = -1, vtw_last_vy = -1;
+#define VTW_HERO 0xFFFFFFFFu
+
+static void
+vtw_proj(int a, int b, int *sx, int *sy)
+{
+    int va, vb;
+
+    v_rot(a, b, 4 - vulture_view_rot, &va, &vb);
+    *sx = V_MAP_XMOD * (va - vb);
+    *sy = V_MAP_YMOD * (va + vb);
+}
+
+static void
+vtw_commit(int vx, int vy)
+{
+    vtw_snap = vtw_cur;
+    vtw_snap_vx = vx, vtw_snap_vy = vy;
+    vtw_snap_rot = vulture_view_rot;
+    vtw_snap_lev = u.uz;
+}
+
+/* fill vtw_ox/oy/face and the camera offset for this draw */
+static void
+vtw_prepare(int vx, int vy)
+{
+    struct monst *mtmp;
+    bool snap_ok, moved = false;
+    double t, te;
+    std::map<unsigned, vtw_ent>::iterator it, sn;
+
+    memset(vtw_ox, 0, sizeof vtw_ox);
+    memset(vtw_oy, 0, sizeof vtw_oy);
+    memset(vtw_face, 0, sizeof vtw_face);
+    vtw_gx = vtw_gy = 0;
+    vtw_last_vx = vx, vtw_last_vy = vy;
+
+    vtw_cur.clear();
+    {
+        vtw_ent e = { u.ux, u.uy, 0 };
+        vtw_cur[VTW_HERO] = e;
+    }
+    for (mtmp = fmon; mtmp; mtmp = mtmp->nmon)
+        if (!DEADMONSTER(mtmp) && canspotmon(mtmp) && isok(mtmp->mx, mtmp->my)) {
+            vtw_ent e = { mtmp->mx, mtmp->my, 0 };
+            vtw_cur[mtmp->m_id] = e;
+        }
+
+    snap_ok = (vtw_snap_rot == vulture_view_rot && on_level(&vtw_snap_lev, &u.uz));
+
+    for (it = vtw_cur.begin(); it != vtw_cur.end(); ++it) {
+        sn = vtw_snap.find(it->first);
+        if (sn == vtw_snap.end())
+            continue;
+        it->second.face = sn->second.face;
+        if (!snap_ok)
+            continue;
+        int dx = it->second.x - sn->second.x, dy = it->second.y - sn->second.y;
+        if ((dx || dy) && abs(dx) <= 1 && abs(dy) <= 1) {
+            int sx, sy;
+
+            moved = true;
+            vtw_proj(dx, dy, &sx, &sy);
+            if (sx > 0)
+                it->second.face = 1;
+            else if (sx < 0)
+                it->second.face = -1;
+        }
+    }
+    if (snap_ok && vtw_snap_vx >= 0 && (vx != vtw_snap_vx || vy != vtw_snap_vy)
+        && abs(vx - vtw_snap_vx) <= 1 && abs(vy - vtw_snap_vy) <= 1)
+        moved = true;
+
+    if (moved && !vtw_animating && !vtw_pending) {
+        vtw_pending = true;
+        vtw_t = 0.0;
+    }
+    if (!vtw_pending && !vtw_animating) {
+        vtw_commit(vx, vy);
+        for (it = vtw_cur.begin(); it != vtw_cur.end(); ++it)
+            vtw_face[it->second.y][it->second.x] = it->second.face;
+        return;
+    }
+
+    t = vtw_t;
+    te = t * t * (3.0 - 2.0 * t); /* smoothstep */
+    for (it = vtw_cur.begin(); it != vtw_cur.end(); ++it) {
+        int x = it->second.x, y = it->second.y;
+
+        vtw_face[y][x] = it->second.face;
+        sn = vtw_snap.find(it->first);
+        if (sn == vtw_snap.end() || !snap_ok)
+            continue;
+        int dx = sn->second.x - x, dy = sn->second.y - y;
+        if ((dx || dy) && abs(dx) <= 1 && abs(dy) <= 1) {
+            int sx, sy;
+
+            vtw_proj(dx, dy, &sx, &sy);
+            vtw_ox[y][x] = (short) ((1.0 - te) * sx);
+            vtw_oy[y][x] = (short) ((1.0 - te) * sy);
+        }
+    }
+    if (snap_ok && vtw_snap_vx >= 0 && abs(vx - vtw_snap_vx) <= 1
+        && abs(vy - vtw_snap_vy) <= 1) {
+        int sx, sy;
+
+        vtw_proj(vx - vtw_snap_vx, vy - vtw_snap_vy, &sx, &sy);
+        vtw_gx = (int) ((1.0 - te) * sx);
+        vtw_gy = (int) ((1.0 - te) * sy);
+    }
+}
+
+/* the art's own facing: +1 right, -1 left, 0 unclear (cached per tile) */
+static int
+vtw_art_facing(int tile_id, SDL_Surface *s)
+{
+    static std::map<int, int> cache;
+    std::map<int, int>::iterator ci = cache.find(tile_id);
+    int x, y, x0 = 99999, x1 = -1, y0 = 99999, y1 = -1, bpp, res = 0;
+    Uint32 key = 0;
+    bool haskey;
+    long sumx = 0, cnt = 0;
+
+    if (ci != cache.end())
+        return ci->second;
+    if (!s || SDL_LockSurface(s) != 0) {
+        cache[tile_id] = 0;
+        return 0;
+    }
+    bpp = s->format->BytesPerPixel;
+    haskey = (SDL_GetColorKey(s, &key) == 0);
+#define VTW_PIX(xx, yy) \
+    (bpp == 4 ? *(Uint32 *) ((Uint8 *) s->pixels + (yy) * s->pitch + (xx) * 4) \
+     : bpp == 2 ? *(Uint16 *) ((Uint8 *) s->pixels + (yy) * s->pitch + (xx) * 2) \
+     : *((Uint8 *) s->pixels + (yy) * s->pitch + (xx) * bpp))
+    for (int pass = 0; pass < 2; pass++)
+        for (y = 0; y < s->h; y++)
+            for (x = 0; x < s->w; x++) {
+                Uint32 p = VTW_PIX(x, y);
+                Uint8 r, g, b, a;
+
+                if (haskey && p == key)
+                    continue;
+                SDL_GetRGBA(p, s->format, &r, &g, &b, &a);
+                if (a < 200)
+                    continue;
+                /* skip the grey drop shadow */
+                if (abs(r - g) < 6 && abs(g - b) < 6 && r < 110)
+                    continue;
+                if (pass == 0) {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                } else if (y <= y0 + (y1 - y0) * 3 / 10) {
+                    sumx += x, cnt++;
+                }
+            }
+#undef VTW_PIX
+    SDL_UnlockSurface(s);
+    if (cnt && x1 > x0) {
+        double d = ((double) sumx / cnt - (x0 + x1) / 2.0) / (x1 - x0);
+
+        res = d > 0.06 ? 1 : d < -0.06 ? -1 : 0;
+    }
+    cache[tile_id] = res;
+    return res;
+}
+
+/* horizontally mirrored copy of a tile graphic (cached per tile id) */
+static SDL_Surface *
+vtw_flipped(int tile_id, SDL_Surface *s)
+{
+    static std::map<int, std::pair<SDL_Surface *, SDL_Surface *> > cache;
+    std::map<int, std::pair<SDL_Surface *, SDL_Surface *> >::iterator ci
+        = cache.find(tile_id);
+    SDL_Surface *f;
+    SDL_BlendMode bm;
+    Uint32 key;
+    Uint8 am;
+    int x, y, bpp;
+
+    if (ci != cache.end()) {
+        if (ci->second.first == s)
+            return ci->second.second;
+        SDL_FreeSurface(ci->second.second); /* tile was reloaded */
+        cache.erase(ci);
+    }
+    f = SDL_CreateRGBSurfaceWithFormat(0, s->w, s->h, s->format->BitsPerPixel,
+                                       s->format->format);
+    if (!f)
+        return NULL;
+    if (SDL_LockSurface(s) == 0) {
+        if (SDL_LockSurface(f) == 0) {
+            bpp = s->format->BytesPerPixel;
+            for (y = 0; y < s->h; y++) {
+                Uint8 *src = (Uint8 *) s->pixels + y * s->pitch;
+                Uint8 *dst = (Uint8 *) f->pixels + y * f->pitch;
+
+                for (x = 0; x < s->w; x++)
+                    memcpy(dst + (s->w - 1 - x) * bpp, src + x * bpp, bpp);
+            }
+            SDL_UnlockSurface(f);
+        }
+        SDL_UnlockSurface(s);
+    }
+    if (SDL_GetSurfaceBlendMode(s, &bm) == 0)
+        SDL_SetSurfaceBlendMode(f, bm);
+    if (SDL_GetColorKey(s, &key) == 0)
+        SDL_SetColorKey(f, SDL_TRUE, key);
+    if (SDL_GetSurfaceAlphaMod(s, &am) == 0)
+        SDL_SetSurfaceAlphaMod(f, am);
+    cache[tile_id] = std::make_pair(s, f);
+    return f;
+}
+
+/* draw a monster tile facing `face` (+1 right, -1 left, 0 as drawn) */
+static void
+vtw_put_tile_facing(int x, int y, int tile_id, int face)
+{
+    vulture_tile *tile = vulture_get_tile(tile_id);
+    int art;
+    bool flip;
+
+    if (!tile || !tile->graphic)
+        return;
+    art = vtw_art_facing(tile_id, tile->graphic);
+    flip = face != 0 && ((art == 0 && face < 0) || (art != 0 && art != face));
+    if (flip) {
+        SDL_Surface *f = vtw_flipped(tile_id, tile->graphic);
+
+        if (f) {
+            vulture_put_img(x - tile->xmod - tile->graphic->w + 1,
+                            y + tile->ymod, f);
+            return;
+        }
+    }
+    vulture_put_img(x + tile->xmod, y + tile->ymod, tile->graphic);
+}
+
+/* play the in-between frames of a pending tween (vulture_win.cpp calls this
+   after each refresh; re-entry is blocked while animating) */
+void
+vulture_tween_run(void)
+{
+    int f, frames;
+
+    if (!vtw_pending || vtw_animating || !levwin)
+        return;
+    vtw_animating = true;
+    frames = (svc.context.run || svc.context.travel) ? 3 : 6;
+    for (f = 1; f <= frames; f++) {
+        vtw_t = (double) f / frames;
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        vulture_refresh_window_region();
+        SDL_Delay(12);
+    }
+    vtw_t = 1.0;
+    vtw_pending = false;
+    vtw_animating = false;
+    vtw_commit(vtw_last_vx, vtw_last_vy);
+}
+
+#include <math.h>
+
+/*
+ * IMPLEMENTATION_LOG s74: low-HP vignette.  Below half HP the map's edges
+ * darken to blood red, stronger as HP falls.  Drawn at the end of the map
+ * draw (which repaints the whole map), so the UI windows on top stay
+ * clean and the overlay never stacks.
+ */
+static SDL_Surface *vg_surf = NULL;
+
+static void
+vulture_draw_vignette(int x0, int y0, int w, int h)
+{
+    int hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax;
+    double r, k;
+    SDL_Rect d;
+
+    if (hpmax <= 0 || hp <= 0 || hp * 2 >= hpmax || w <= 0 || h <= 0)
+        return;
+    if (!vg_surf || vg_surf->w != w || vg_surf->h != h) {
+        int x, y;
+        Uint32 *px;
+
+        if (vg_surf)
+            SDL_FreeSurface(vg_surf);
+        vg_surf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32,
+                                                 SDL_PIXELFORMAT_ARGB8888);
+        if (!vg_surf)
+            return;
+        SDL_LockSurface(vg_surf);
+        for (y = 0; y < h; y++) {
+            px = (Uint32 *) ((Uint8 *) vg_surf->pixels + y * vg_surf->pitch);
+            for (x = 0; x < w; x++) {
+                double dx = (x - w / 2.0) / (w / 2.0);
+                double dy = (y - h / 2.0) / (h / 2.0);
+                double dd = sqrt(dx * dx + dy * dy);
+                double a = (dd - 0.55) / 0.75;
+
+                if (a < 0)
+                    a = 0;
+                if (a > 1)
+                    a = 1;
+                a = a * a;
+                px[x] = SDL_MapRGBA(vg_surf->format, 110, 0, 0,
+                                    (Uint8) (a * 255));
+            }
+        }
+        SDL_UnlockSurface(vg_surf);
+        SDL_SetSurfaceBlendMode(vg_surf, SDL_BLENDMODE_BLEND);
+    }
+    r = (double) hp / hpmax;      /* < 0.5 here */
+    k = (0.5 - r) / 0.5;          /* 0 at half HP, 1 near death */
+    SDL_SetSurfaceAlphaMod(vg_surf, (Uint8) (90 + 165 * k));
+    d.x = x0;
+    d.y = y0;
+    d.w = w;
+    d.h = h;
+    SDL_BlitSurface(vg_surf, NULL, vulture_screen, &d);
+}
+
 bool
 levelwin::draw()
 {
@@ -212,6 +570,8 @@ levelwin::draw()
     int x, y;
     int tile_id, shadelevel;
     int map_tr_x, map_tr_y, __i, __j, diff, sum;
+    int rot_dj, rot_di;     /* s62: map offset of the current view offset */
+    int nwx, nwy, nnx, nny, nex, ney, nsx, nsy; /* s62: view-side neighbours */
     int map_centre_x = this->w / 2;
     int map_centre_y = this->h / 2;
     int map_back, map_darkness, map_obj, map_mon;
@@ -224,6 +584,9 @@ levelwin::draw()
 
     if (vulture_windows_inited != TRUE) {
         SDL_FillRect(vulture_screen, NULL, CLR32_BLACK);
+        /* s65: keep the main menu's title image behind its dialogs */
+        if (vulture_backdrop)
+            SDL_BlitSurface(vulture_backdrop, NULL, vulture_screen, NULL);
         vulture_invalidate_region(clip_tl_x, clip_tl_y, clip_br_x - clip_tl_x,
                                   clip_br_y - clip_tl_y);
         return 1;
@@ -233,6 +596,11 @@ levelwin::draw()
         init_floor_decors(10);
         cur_dlevel = u.uz.dlevel;
     }
+
+    /* s75: tween offsets (camera + movers) and facing for this frame */
+    vtw_prepare(view_x, view_y);
+    map_centre_x += vtw_gx;
+    map_centre_y += vtw_gy;
 
     if (prev_cx != view_x || prev_cy != view_y
         || map_data->map_swallow != V_TILE_NONE) {
@@ -263,8 +631,14 @@ levelwin::draw()
         /* Clear map area */
         SDL_FillRect(vulture_screen, NULL, CLR32_BLACK);
 
-        x = map_centre_x + V_MAP_XMOD * (u.ux - u.uy + view_y - view_x);
-        y = map_centre_y + V_MAP_YMOD * (u.ux + u.uy - view_y - view_x);
+        {
+            int vj, vi; /* §62 */
+
+            v_rot(u.ux - view_x, u.uy - view_y, 4 - vulture_view_rot, &vj,
+                  &vi);
+            x = map_centre_x + V_MAP_XMOD * (vj - vi);
+            y = map_centre_y + V_MAP_YMOD * (vj + vi);
+        }
 
         /* engulf tile */
         vulture_put_tile(x, y, map_data->map_swallow);
@@ -295,10 +669,11 @@ levelwin::draw()
     sum = map_tr_x + map_tr_y + 1;
 
     for (__i = -map_tr_y; __i <= map_tr_y; __i++) {
-        i = view_y + __i;
-
         for (__j = diff + __i; __j + __i <= sum; __j++) {
-            j = view_x + __j;
+            /* s62: screen position (view offset) -> map square */
+            v_rot(__j, __i, vulture_view_rot, &rot_dj, &rot_di);
+            j = view_x + rot_dj;
+            i = view_y + rot_di;
 
             x = map_centre_x + V_MAP_XMOD * (__j - __i);
             y = map_centre_y + V_MAP_YMOD * (__j + __i);
@@ -379,13 +754,11 @@ levelwin::draw()
     }
 
     for (__i = -map_tr_y; __i <= map_tr_y; __i++) {
-        i = view_y + __i;
-        if (i < 0 || i >= ROWNO)
-            continue;
-
         for (__j = diff + __i; __j + __i <= sum; __j++) {
-            j = view_x + __j;
-            if (j < 1 || j >= COLNO)
+            v_rot(__j, __i, vulture_view_rot, &rot_dj, &rot_di); /* s62 */
+            j = view_x + rot_dj;
+            i = view_y + rot_di;
+            if (j < 1 || j >= COLNO || i < 0 || i >= ROWNO)
                 continue;
             /* Find position of tile centre */
             x = map_centre_x + V_MAP_XMOD * (__j - __i);
@@ -395,21 +768,32 @@ levelwin::draw()
             map_obj = map_data->get_glyph(MAP_OBJ, j, i);
             map_mon = map_data->get_glyph(MAP_MON, j, i);
 
+            /* s62: the squares on this square's screen-west/north/east/
+             * south sides, in map coordinates */
+            v_rot(-1, 0, vulture_view_rot, &nwx, &nwy);
+            v_rot(0, -1, vulture_view_rot, &nnx, &nny);
+            v_rot(1, 0, vulture_view_rot, &nex, &ney);
+            v_rot(0, 1, vulture_view_rot, &nsx, &nsy);
+            nwx += j, nwy += i, nnx += j, nny += i;
+            nex += j, ney += i, nsx += j, nsy += i;
+
             /* 1. West and north walls */
-            if (j > 1)
+            if (nwx >= 1 && nwx < COLNO && nwy >= 0 && nwy < ROWNO)
                 vulture_put_tile_shaded(
                     x, y, maptile_wall[i][j].west,
-                    map_data->get_glyph(MAP_DARKNESS, j - 1, i));
-            if (i > 1)
+                    map_data->get_glyph(MAP_DARKNESS, nwx, nwy));
+            if (nnx >= 1 && nnx < COLNO && nny >= 0 && nny < ROWNO)
                 vulture_put_tile_shaded(
                     x, y, maptile_wall[i][j].north,
-                    map_data->get_glyph(MAP_DARKNESS, j, i - 1));
+                    map_data->get_glyph(MAP_DARKNESS, nnx, nny));
 
             /* shortcut for unmapped case */
             if (map_back != V_MISC_UNMAPPED_AREA || map_obj != V_TILE_NONE) {
-                /* 2. Furniture*/
+                /* 2. Furniture (s62: a quarter turn swaps the door
+                   arch art between the two wall directions) */
                 vulture_put_tile(x, y,
-                                 map_data->get_glyph(MAP_FURNITURE, j, i));
+                                 v_rot_door(map_data->get_glyph(
+                                     MAP_FURNITURE, j, i)));
 
                 /* 3. Traps */
                 vulture_put_tile(x, y, map_data->get_glyph(MAP_TRAP, j, i));
@@ -419,11 +803,14 @@ levelwin::draw()
 
                 /* 5. Monsters */
                 if ((cur_tile = vulture_get_tile(map_mon)) != NULL) {
-                    vulture_put_tile(x, y, map_mon);
+                    /* s75: slide between squares, face the way it went */
+                    int tx = x + vtw_ox[i][j], ty = y + vtw_oy[i][j];
+
+                    vtw_put_tile_facing(tx, ty, map_mon, vtw_face[i][j]);
                     if (iflags.hilite_pet
                         && map_data->get_glyph(MAP_PET, j, i))
                         vulture_put_img(
-                            x + cur_tile->xmod, y + cur_tile->ymod - 10,
+                            tx + cur_tile->xmod, ty + cur_tile->ymod - 10,
                             vulture_get_tile(V_MISC_HILITE_PET)->graphic);
                 }
 
@@ -433,27 +820,25 @@ levelwin::draw()
             }
 
             /* 7. South & East walls */
-            if (i < ROWNO - 1)
+            if (nsx >= 1 && nsx < COLNO && nsy >= 0 && nsy < ROWNO)
                 vulture_put_tile_shaded(
                     x, y, maptile_wall[i][j].south,
-                    map_data->get_glyph(MAP_DARKNESS, j, i + 1));
-            if (j < COLNO - 1)
+                    map_data->get_glyph(MAP_DARKNESS, nsx, nsy));
+            if (nex >= 1 && nex < COLNO && ney >= 0 && ney < ROWNO)
                 vulture_put_tile_shaded(
                     x, y, maptile_wall[i][j].east,
-                    map_data->get_glyph(MAP_DARKNESS, j + 1, i));
+                    map_data->get_glyph(MAP_DARKNESS, nex, ney));
         }
     }
 
     /* draw object highlights if requested */
     if (vulture_map_highlight_objects) {
         for (__i = -map_tr_y; __i <= map_tr_y; __i++) {
-            i = view_y + __i;
-            if (i < 0 || i >= ROWNO)
-                continue;
-
             for (__j = diff + __i; __j + __i <= sum; __j++) {
-                j = view_x + __j;
-                if (j < 1 || j >= COLNO)
+                v_rot(__j, __i, vulture_view_rot, &rot_dj, &rot_di); /* s62 */
+                j = view_x + rot_dj;
+                i = view_y + rot_di;
+                if (j < 1 || j >= COLNO || i < 0 || i >= ROWNO)
                     continue;
 
                 x = map_centre_x + V_MAP_XMOD * (__j - __i);
@@ -464,6 +849,8 @@ levelwin::draw()
             }
         }
     }
+    vulture_draw_vignette(this->abs_x, this->abs_y, this->w, this->h); /* s74 */
+
     /* Restore drawing region */
     vulture_set_draw_region(0, 0, vulture_screen->w - 1,
                             vulture_screen->h - 1);
@@ -530,35 +917,45 @@ levelwin::handle_timer_event(window *target, void *result, int time)
         if (!mouse_moved)
             return V_EVENT_HANDLED_NOREDRAW;
 
+        {
+        /* s62: these deltas are screen directions (view space);
+           turn them into map space for the current rotation */
+        int sdx = 0, sdy = 0, mdx, mdy;
+
         switch (target->menu_id) {
         case V_HOTSPOT_SCROLL_UPLEFT:
-            view_x -= increment;
+            sdx -= increment;
             break;
         case V_HOTSPOT_SCROLL_UP:
-            view_x -= increment;
-            view_y -= increment;
+            sdx -= increment;
+            sdy -= increment;
             break;
         case V_HOTSPOT_SCROLL_UPRIGHT:
-            view_y -= increment;
+            sdy -= increment;
             break;
         case V_HOTSPOT_SCROLL_LEFT:
-            view_x -= increment;
-            view_y += increment;
+            sdx -= increment;
+            sdy += increment;
             break;
         case V_HOTSPOT_SCROLL_RIGHT:
-            view_x += increment;
-            view_y -= increment;
+            sdx += increment;
+            sdy -= increment;
             break;
         case V_HOTSPOT_SCROLL_DOWNLEFT:
-            view_y += increment;
+            sdy += increment;
             break;
         case V_HOTSPOT_SCROLL_DOWN:
-            view_x += increment;
-            view_y += increment;
+            sdx += increment;
+            sdy += increment;
             break;
         case V_HOTSPOT_SCROLL_DOWNRIGHT:
-            view_x += increment;
+            sdx += increment;
             break;
+        }
+
+        v_rot(sdx, sdy, vulture_view_rot, &mdx, &mdy);
+        view_x += mdx;
+        view_y += mdy;
         }
 
         view_x = (view_x < 0) ? 0 : view_x;
@@ -711,6 +1108,19 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
               vulture_render_scale > 1 ? "zoomed out" : "normal", w, h);
         return V_EVENT_HANDLED_REDRAW;
 
+    /* Vulture mod (IMPLEMENTATION_LOG §62): turn the view a quarter at a
+     * time.  Level window only (same reasoning as F7/F8: never fires inside
+     * a menu or prompt), takes no game time, not saved - a new session
+     * starts at the stock angle. */
+    case SDLK_PAGEUP:
+    case SDLK_PAGEDOWN:
+        vulture_view_rot = (vulture_view_rot + ((sym == SDLK_PAGEUP) ? 3 : 1))
+                           & 3;
+        force_redraw();
+        pline("View turned to %d degrees.  (PageUp/PageDown)",
+              vulture_view_rot * 90);
+        return V_EVENT_HANDLED_REDRAW;
+
     /* F1- F6 trigger macros */
     case SDLK_F1:
     case SDLK_F2:
@@ -842,8 +1252,13 @@ levelwin::map_update(glyph_type type, int prev_glyph, int new_glyph, int x,
     int tl_x = 99999, tl_y = 99999, br_x = 0, br_y = 0;
     vulture_tile *oldtile, *newtile;
 
-    pixel_x = (this->w / 2) + V_MAP_XMOD * (x - y + view_y - view_x);
-    pixel_y = (this->h / 2) + V_MAP_YMOD * (x + y - view_y - view_x);
+    {
+        int vj, vi; /* §62: map -> view offset */
+
+        v_rot(x - view_x, y - view_y, 4 - vulture_view_rot, &vj, &vi);
+        pixel_x = (this->w / 2) + V_MAP_XMOD * (vj - vi);
+        pixel_y = (this->h / 2) + V_MAP_YMOD * (vj + vi);
+    }
 
     if (pixel_x < -VULTURE_CLIPMARGIN || pixel_y < -VULTURE_CLIPMARGIN
         || pixel_x > vulture_screen->w + VULTURE_CLIPMARGIN
@@ -903,20 +1318,45 @@ levelwin::map_clear()
         }
 }
 
+/* s62: on a quarter (odd) turn the two door-arch directions trade places */
+static int
+v_rot_door(int tile)
+{
+    if (!(vulture_view_rot & 1))
+        return tile;
+    switch (tile) {
+    case V_MISC_VDOOR_WOOD_OPEN:   return V_MISC_HDOOR_WOOD_OPEN;
+    case V_MISC_HDOOR_WOOD_OPEN:   return V_MISC_VDOOR_WOOD_OPEN;
+    case V_MISC_VDOOR_WOOD_CLOSED: return V_MISC_HDOOR_WOOD_CLOSED;
+    case V_MISC_HDOOR_WOOD_CLOSED: return V_MISC_VDOOR_WOOD_CLOSED;
+    default:                       return tile;
+    }
+}
+
+/* floor division for a positive divisor (C '/' truncates toward zero) */
+static int
+v_floordiv(int a, int b)
+{
+    return (a >= 0) ? a / b : -((-a + b - 1) / b);
+}
+
 point
 levelwin::mouse_to_map(point mouse)
 {
-    point mappos, px_offset;
+    point mappos;
+    int px = mouse.x - (w / 2), py = mouse.y - (h / 2), vj, vi, dj, di;
 
-    px_offset.x = mouse.x - (w / 2) + (view_x - view_y) * V_MAP_XMOD;
-    px_offset.y = mouse.y - (h / 2) + (view_x + view_y) * V_MAP_YMOD;
-
-    mappos.x = (V_MAP_YMOD * px_offset.x + V_MAP_XMOD * px_offset.y
-                + V_MAP_XMOD * V_MAP_YMOD)
-               / (2 * V_MAP_XMOD * V_MAP_YMOD);
-    mappos.y = (-V_MAP_YMOD * px_offset.x + V_MAP_XMOD * px_offset.y
-                + V_MAP_XMOD * V_MAP_YMOD)
-               / (2 * V_MAP_XMOD * V_MAP_YMOD);
+    /* §62: screen -> VIEW offset (the stock formula, with the view centre
+     * factored out and floor division so negative offsets round the same
+     * way), then view -> map through the rotation */
+    vj = v_floordiv(V_MAP_YMOD * px + V_MAP_XMOD * py + V_MAP_XMOD * V_MAP_YMOD,
+                    2 * V_MAP_XMOD * V_MAP_YMOD);
+    vi = v_floordiv(-V_MAP_YMOD * px + V_MAP_XMOD * py
+                        + V_MAP_XMOD * V_MAP_YMOD,
+                    2 * V_MAP_XMOD * V_MAP_YMOD);
+    v_rot(vj, vi, vulture_view_rot, &dj, &di);
+    mappos.x = view_x + dj;
+    mappos.y = view_y + di;
 
     return mappos;
 }
@@ -927,11 +1367,13 @@ levelwin::map_to_mouse(point mappos)
     int map_centre_x = w / 2;
     int map_centre_y = h / 2;
     point mouse;
+    int vj, vi;
 
-    mouse.x =
-        map_centre_x + V_MAP_XMOD * (mappos.x - mappos.y + view_y - view_x);
-    mouse.y =
-        map_centre_y + V_MAP_YMOD * (mappos.x + mappos.y - view_y - view_x);
+    /* §62: map -> view offset, then the stock projection */
+    v_rot(mappos.x - view_x, mappos.y - view_y, 4 - vulture_view_rot, &vj,
+          &vi);
+    mouse.x = map_centre_x + V_MAP_XMOD * (vj - vi);
+    mouse.y = map_centre_y + V_MAP_YMOD * (vj + vi);
 
     /* FIXME Why does this happen sometimes ? */
     if (mouse.x < 0)
@@ -1225,47 +1667,40 @@ levelwin::init_floor_decors(int num_decors)
 void
 levelwin::get_wall_tiles(int y, int x)
 {
-    int style;
-    int bg_west, bg_north, bg_east, bg_south;
+    /* s62: the four sides are SCREEN sides - west is whatever map square
+     * lies to this square's screen-west at the current view rotation (at
+     * rotation 0 that is x - 1, exactly as before) */
+    static const int side_dx[4] = { -1, 0, 1, 0 }; /* W N E S (view) */
+    static const int side_dy[4] = { 0, -1, 0, 1 };
+    int side, style, nx, ny, bg, tile;
 
     if (!svl.level.locations[x][y].seenv)
         return;
 
-    /* x - 1: west wall  */
-    bg_west = map_data->get_glyph(MAP_BACK, x - 1, y);
-    if (x > 0 && bg_west != V_TILE_WALL_GENERIC
-        && bg_west != V_MISC_UNMAPPED_AREA) {
-        style = get_wall_decor(bg_west, y, x, y, x - 1);
-        maptile_wall[y][x].west = walltiles[style].west;
-    } else
-        maptile_wall[y][x].west = V_TILE_NONE;
-
-    /* y - 1: north wall  */
-    bg_north = map_data->get_glyph(MAP_BACK, x, y - 1);
-    if (y > 0 && bg_north != V_TILE_WALL_GENERIC
-        && bg_north != V_MISC_UNMAPPED_AREA) {
-        style = get_wall_decor(bg_north, y, x, y - 1, x);
-        maptile_wall[y][x].north = walltiles[style].north;
-    } else
-        maptile_wall[y][x].north = V_TILE_NONE;
-
-    /* x + 1: east wall  */
-    bg_east = map_data->get_glyph(MAP_BACK, x + 1, y);
-    if (x < COLNO - 1 && bg_east != V_TILE_WALL_GENERIC
-        && bg_east != V_MISC_UNMAPPED_AREA) {
-        style = get_wall_decor(bg_east, y, x, y, x + 1);
-        maptile_wall[y][x].east = walltiles[style].east;
-    } else
-        maptile_wall[y][x].east = V_TILE_NONE;
-
-    /* y + 1: south wall  */
-    bg_south = map_data->get_glyph(MAP_BACK, x, y + 1);
-    if (y < ROWNO - 1 && bg_south != V_TILE_WALL_GENERIC
-        && bg_south != V_MISC_UNMAPPED_AREA) {
-        style = get_wall_decor(bg_south, y, x, y + 1, x);
-        maptile_wall[y][x].south = walltiles[style].south;
-    } else
-        maptile_wall[y][x].south = V_TILE_NONE;
+    for (side = 0; side < 4; side++) {
+        v_rot(side_dx[side], side_dy[side], vulture_view_rot, &nx, &ny);
+        nx += x;
+        ny += y;
+        tile = V_TILE_NONE;
+        if (nx >= 0 && nx < COLNO && ny >= 0 && ny < ROWNO) {
+            bg = map_data->get_glyph(MAP_BACK, nx, ny);
+            if (bg != V_TILE_WALL_GENERIC && bg != V_MISC_UNMAPPED_AREA) {
+                style = get_wall_decor(bg, y, x, ny, nx);
+                tile = (side == 0) ? walltiles[style].west
+                       : (side == 1) ? walltiles[style].north
+                       : (side == 2) ? walltiles[style].east
+                       : walltiles[style].south;
+            }
+        }
+        if (side == 0)
+            maptile_wall[y][x].west = tile;
+        else if (side == 1)
+            maptile_wall[y][x].north = tile;
+        else if (side == 2)
+            maptile_wall[y][x].east = tile;
+        else
+            maptile_wall[y][x].south = tile;
+    }
 }
 
 int
@@ -1275,15 +1710,25 @@ levelwin::get_floor_tile(int tile, int y, int x)
     int deco_pos;
     unsigned char deco = map_deco[y][x];
 
-    if (deco && tile == V_TILE_FLOOR_COBBLESTONE) {
+    /* s62: multi-square floor art (rugs) is laid out for rotation 0;
+       turned, it would come out scrambled, so it sits out */
+    if (deco && tile == V_TILE_FLOOR_COBBLESTONE && !(vulture_view_rot & 3)) {
         style = (deco >> 4) - 1;
         deco_pos = (int) (deco & 0x0F);
         return floorstyles[style].array[deco_pos];
     }
 
     style = get_floor_decor(tile, y, x);
-    deco_pos = floorstyles[style].x * (y % floorstyles[style].y)
-               + (x % floorstyles[style].x);
+    {
+        /* s62: tile the floor pattern in VIEW coordinates so it lines
+           up on screen at every rotation */
+        int px, py, fx = floorstyles[style].x, fy = floorstyles[style].y;
+
+        v_rot(x, y, 4 - vulture_view_rot, &px, &py);
+        px = ((px % fx) + fx) % fx;
+        py = ((py % fy) + fy) % fy;
+        deco_pos = fx * py + px;
+    }
     return floorstyles[style].array[deco_pos];
 }
 
@@ -1297,6 +1742,16 @@ levelwin::get_floor_edges(int y, int x)
     point s_delta[4] = { { -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 } };
     point d_delta[4] = { { -1, 1 }, { -1, -1 }, { 1, -1 }, { 1, 1 } };
 
+    /* s62: the edge art is per SCREEN direction; turn the probes */
+    for (i = 0; i < 4; i++) {
+        int rx, ry;
+
+        v_rot(s_delta[i].x, s_delta[i].y, vulture_view_rot, &rx, &ry);
+        s_delta[i].x = rx, s_delta[i].y = ry;
+        v_rot(d_delta[i].x, d_delta[i].y, vulture_view_rot, &rx, &ry);
+        d_delta[i].x = rx, d_delta[i].y = ry;
+    }
+
     /* Default: no floor edges around tile */
     clear_floor_edges(y, x);
 
@@ -1304,8 +1759,8 @@ levelwin::get_floor_edges(int y, int x)
     for (i = 0; i < 4; i++) {
         x2 = x + s_delta[i].x;
         y2 = y + s_delta[i].y;
-        if (x > 0 && x < COLNO - s_delta[i].x && y > 0
-            && y < ROWNO - s_delta[i].y
+        if (x > 0 && y > 0 && x2 >= 0 && x2 < COLNO && y2 >= 0
+            && y2 < ROWNO
             && tile != map_data->get_glyph(MAP_BACK, x2, y2)
             && tile + map_data->get_glyph(MAP_BACK, x2, y2)
                    != V_TILE_FLOOR_WATER

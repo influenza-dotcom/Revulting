@@ -381,7 +381,7 @@ CONSOLEDEF = $(COMMONDEF) -D_CONSOLE
 CFLAGSU = $(CFLAGS) $(CONSOLEDEF) $(DLBFLG)
 
 LIBS = -lcomctl32 -lgdi32 -lole32 -lshell32 -luserenv -luuid -lwinmm \
-       -lrpcrt4 -lbcrypt $(LIBUCRT)
+       -lrpcrt4 -lbcrypt -lws2_32 -lwinhttp $(LIBUCRT)
 
 $(GAMEDIR):
 	@mkdir -p $@

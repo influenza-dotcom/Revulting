@@ -14,6 +14,8 @@ struct trobj {
     char trbless;
 };
 
+staticfn boolean bestroll_active(void);
+staticfn void bestroll_attrs(void);
 staticfn long trquan(const struct trobj *);
 staticfn struct obj *ini_inv_mkobj_filter(int, boolean);
 staticfn short ini_inv_obj_substitution(const struct trobj *,
@@ -753,9 +755,11 @@ u_init_role(void)
         }
         break;
     case PM_TOURIST:
-        u.umoney0 = rnd(1000);
+        u.umoney0 = bestroll_active() ? 1000 : rnd(1000);
         ini_inv(Tourist);
-        if (!rn2(25))
+        if (bestroll_active())
+            ini_inv(Magicmarker); /* the most valuable of the four extras */
+        else if (!rn2(25))
             ini_inv(Tinopener);
         else if (!rn2(25))
             ini_inv(Leash);
@@ -773,7 +777,7 @@ u_init_role(void)
         break;
     case PM_WIZARD:
         ini_inv(Wizard);
-        if (!rn2(5))
+        if (bestroll_active() || !rn2(5))
             ini_inv(Blindfold);
         break;
 
@@ -1104,12 +1108,100 @@ restricted_spell_discipline(int otyp)
     return TRUE;
 }
 
+/*
+ * 'bestroll' (local addition).  For a Tourist or a Wizard, every random
+ * roll in the starting kit and stats comes up at the best value the dice
+ * can produce: nothing here is impossible in an ordinary game, just very
+ * unlikely.  Item TYPES that are rolled stay random (user's call: picking
+ * them would make the start overpowered, same reason food stays random).
+ * Tourist:
+ *   darts       40 (21-40), blessed       gold         1000 (rnd(1000))
+ *   food        left random on purpose (maxed out it was 20 lembas, which
+ *               made food irrelevant for the whole game)
+ *   potions, scrolls, shirt: blessed (UNDEF_BLESS items can roll it)
+ *   camera      99 charges (rn1(70,30))
+ *   extra item  magic marker, 22 charges (the 1-in-20 slot, 19+rn2(4))
+ *   stats       see bestroll_attrs()
+ * Wizard:
+ *   cloak, wand, rings, potions, scrolls, random spellbook: blessed
+ *   wand        top of its charge roll (rn1(5,4)=8, NODIR rn1(5,11)=15,
+ *               stasis rn1(4,3)=6)
+ *   rings       chargeable ones +5 (rne(3) caps at 5 below XL 15)
+ *   marker      22 charges (19+rn2(4))
+ *   blindfold   always (the 1-in-5 extra)
+ *   stats       see bestroll_attrs()
+ */
+staticfn boolean
+bestroll_active(void)
+{
+    return (boolean) (iflags.bestroll
+                      && (Role_if(PM_TOURIST) || Role_if(PM_WIZARD)));
+}
+
+/* init_attr(75) + vary_init_attr() at their ceiling.  init_attr spreads
+   75 points over the role's base values within the race caps; vary then
+   nudges any stat by up to +4 (rn2(7)-2), still capped.  So fill each
+   stat, in priority order, to (cap - 4) and let the +4 finish it; the
+   remainder goes to the next stat.  Tourist priority: Con (HP per level),
+   Dex (dart to-hit), Cha (shop prices; Tourists start at 10 = +1/3
+   surcharge), Str (damage), then Int, Wis.  Human Tourist result:
+   Str 18/03 Int 14 Wis 10 Dex 18 Con 18 Cha 18.
+   Wizard priority: Int (spell failure, energy), Con (HP), Dex (to-hit,
+   AC-free survival), Wis (energy regen), Str, Cha.  Elven Wizard result:
+   Str 14 Int 20 Wis 20 Dex 18 Con 16 Cha 11. */
+staticfn void
+bestroll_attrs(void)
+{
+    static const int tou_prio[A_MAX] = { A_CON, A_DEX, A_CHA, A_STR,
+                                         A_INT, A_WIS };
+    static const int wiz_prio[A_MAX] = { A_INT, A_CON, A_DEX, A_WIS,
+                                         A_STR, A_CHA };
+    /* bestroll_melee: Con then Str - still within the dice (no forced cap:
+       the user rejected 18/50 as cheating).  Orc Wizard: Str 18/16 Con 18
+       Dex 11 Int 14 Wis 11 Cha 11. */
+    static const int mel_prio[A_MAX] = { A_CON, A_STR, A_DEX, A_INT,
+                                         A_WIS, A_CHA };
+    const int *prio = iflags.bestroll_melee ? mel_prio
+                      : Role_if(PM_WIZARD) ? wiz_prio : tou_prio;
+    int i, a, add, np = 75;
+
+    for (i = 0; i < A_MAX; i++) {
+        ABASE(i) = AMAX(i) = gu.urole.attrbase[i];
+        ATEMP(i) = ATIME(i) = 0;
+        np -= gu.urole.attrbase[i];
+    }
+    for (i = 0; i < A_MAX && np > 0; i++) {
+        a = prio[i];
+        add = (ATTRMAX(a) - 4) - ABASE(a);
+        if (add > np)
+            add = np;
+        if (add > 0)
+            ABASE(a) += add, np -= add;
+    }
+    for (i = 0; i < A_MAX && np > 0; i++) { /* only if every cap is hit */
+        a = prio[i];
+        add = ATTRMAX(a) - ABASE(a);
+        if (add > np)
+            add = np;
+        if (add > 0)
+            ABASE(a) += add, np -= add;
+    }
+    for (i = 0; i < A_MAX; i++) { /* the vary_init_attr() +4 */
+        ABASE(i) += 4;
+        if (ABASE(i) > ATTRMAX(i))
+            ABASE(i) = ATTRMAX(i);
+        AMAX(i) = ABASE(i);
+    }
+}
+
 /* randomizes the quantity given a trobj description */
 staticfn long
 trquan(const struct trobj *trop)
 {
     if (!trop->trquan_min)
         return 1;
+    if (bestroll_active())
+        return trop->trquan_max;
     return trop->trquan_min + rn2(trop->trquan_max - trop->trquan_min + 1);
 }
 
@@ -1233,15 +1325,29 @@ ini_inv_adjust_obj(const struct trobj *trop, struct obj *obj)
         if (trop->trspe != UNDEF_SPE) {
             obj->spe = trop->trspe;
             if (trop->trotyp == MAGIC_MARKER && obj->spe < 96)
-                obj->spe += rn2(4);
+                obj->spe += bestroll_active() ? 3 : rn2(4);
         } else {
             /* Don't start with +0 or negative rings */
             if (objects[obj->otyp].oc_class == RING_CLASS
                 && objects[obj->otyp].oc_charged && obj->spe <= 0)
                 obj->spe = rne(3);
+            /* mksobj() charges a camera rn1(70,30): 30..99 */
+            if (bestroll_active() && obj->otyp == EXPENSIVE_CAMERA)
+                obj->spe = 99;
+            /* wands: the top of mksobj()'s charge roll */
+            if (bestroll_active() && obj->oclass == WAND_CLASS
+                && obj->otyp != WAN_WISHING)
+                obj->spe = (obj->otyp == WAN_STASIS) ? 6
+                           : (objects[obj->otyp].oc_dir == NODIR) ? 15 : 8;
+            /* chargeable rings: rne(3) tops out at +5 below XL 15 */
+            if (bestroll_active() && obj->oclass == RING_CLASS
+                && objects[obj->otyp].oc_charged)
+                obj->spe = 5;
         }
         if (trop->trbless != UNDEF_BLESS)
             obj->blessed = trop->trbless;
+        else if (bestroll_active())
+            obj->blessed = 1; /* mksobj() can bless any of these */
 
     }
     /* defined after setting otyp+quan + blessedness */
@@ -1387,8 +1493,12 @@ u_init_inventory_attrs(void)
         ini_inv(Money);
     u.umoney0 += hidden_gold(TRUE); /* in case sack has gold in it */
 
-    init_attr(75);    /* init attribute values */
-    vary_init_attr(); /* minor variation to attrs */
+    if (bestroll_active()) {
+        bestroll_attrs(); /* init_attr + vary_init_attr at their best */
+    } else {
+        init_attr(75);    /* init attribute values */
+        vary_init_attr(); /* minor variation to attrs */
+    }
     u_init_carry_attr_boost();
 }
 

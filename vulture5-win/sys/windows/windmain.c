@@ -15,6 +15,11 @@
 #include <ShlObj.h>
 
 static void nhusage(void);
+#ifdef VULTURE_GRAPHICS
+/* IMPLEMENTATION_LOG s65: Vulture main menu (win/vulture/vulture_mainmenu.cpp) */
+extern void vulture_main_menu(int launched_with_rc);
+static int vq_launched_with_rc = 0;
+#endif
 char *exename(void);
 boolean fakeconsole(void);
 void freefakeconsole(void);
@@ -270,6 +275,17 @@ _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);*/
     /* if (GUILaunched || IsDebuggerPresent()) */
     early_options(&argc, &argv, &dir);
     program_state.early_options = 0;
+#ifdef VULTURE_GRAPHICS
+    /* IMPLEMENTATION_LOG s65: the main menu is skipped for a per-hero
+       launch (-nethackrc= or NETHACKOPTIONS=@file); initoptions() frees
+       cmdline_rcfile, so look now */
+    {
+        const char *nho = getenv("NETHACKOPTIONS");
+
+        vq_launched_with_rc = (gc.cmdline_rcfile != 0)
+                              || (nho && *nho == '@');
+    }
+#endif
 
 
     initoptions();
@@ -379,6 +395,13 @@ _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);*/
         (*utf8graphics_mode_callback)();
 #endif
 
+#ifdef VULTURE_GRAPHICS
+    /* IMPLEMENTATION_LOG s65: Vulture's main menu (continue / load / roster
+       hero / new hero / scores / ...).  Returns with svp.plname set, or
+       relaunches the exe with a hero's rc file and exits. */
+    if (WINDOWPORT(vulture) && !wizard)
+        vulture_main_menu(vq_launched_with_rc);
+#endif
     /* strip role,race,&c suffix; calls askname() if svp.plname[] is empty
        or holds a generic user name like "player" or "games" */
     plnamesuffix();

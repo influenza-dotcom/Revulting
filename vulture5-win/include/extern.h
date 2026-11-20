@@ -101,6 +101,7 @@ extern unsigned FITSuint_(unsigned long long, const char *, int) NONNULLARG2;
 extern void early_init(int, char *[]);
 extern void moveloop_core(void);
 extern void moveloop(boolean);
+extern void vulture_qol_pass(void);
 extern void stop_occupation(void);
 extern void init_sound_disp_gamewindows(void);
 extern void newgame(void);
@@ -112,6 +113,7 @@ extern long timet_delta(time_t, time_t);
 
 extern void do_blinding_ray(struct obj *) NONNULLPTRS;
 extern int doapply(void);
+extern int dophotograph(void); /* Vulture mod §51 */
 extern int dorub(void);
 extern int dojump(void);
 extern int jump(int);
@@ -380,6 +382,44 @@ extern void change_palette(void);
 
 /* ### cmd.c ### */
 
+/* Vulture mod §52: travel may autopick thrown missiles (read in pickup.c) */
+extern boolean travel_pickup_thrown;
+/* Vulture mod §55/§56: smarter explore, one-key commands */
+#define AEX_FRONTIER  0 /* walking to the edge of the unexplored */
+#define AEX_ITEM      1 /* walking to an object never stood on: stop there */
+#define AEX_DEADEND   2 /* walking to an unsearched corridor dead end */
+#define AEX_SEARCHING 3 /* searching that dead end */
+extern int autoexplore_mode;
+extern void autoexplore_note_position(void);
+extern void autoexplore_door_locked(coordxy, coordxy);
+extern void autoexplore_start_search(void);
+extern boolean vq_line_target(boolean, schar *, schar *);
+extern int dofirenearest(void);
+extern int doattacknearest(void);
+extern int dorest(void);
+extern int doelbereth(void);
+extern int dodown_smart(void);
+extern int doup_smart(void);
+extern char vq_engrave_preset[];
+extern long vq_engrave_preset_turn;
+extern boolean descend_pending;
+extern boolean descend_is_up;
+extern coord descend_target;
+/* Vulture mod §49: auto-explore (state read by vulture_qol_pass) */
+extern int doautoexplore(void);
+/* Vulture mod s70-71 */
+extern boolean llm_rewrite_line(const char *, char *, size_t, boolean);
+extern void llm_note_speaker(struct monst *, int);
+extern void llm_tts_line(const char *);
+extern void llm_hero_quip_pass(void);
+extern boolean llm_free_talk(struct monst *);
+extern void llm_pet_name_pass(void);
+extern int dobuild(void);
+extern void llm_ask_god(aligntyp);
+extern boolean autoexplore_hostile_in_view(void);
+extern boolean autoexplore_active;
+extern boolean autoexplore_reroute;
+extern coord autoexplore_target;
 extern void cmdbind_freeall(void);
 extern int dotoggleoption(void);
 extern void set_move_cmd(int, int);
@@ -691,6 +731,7 @@ extern int name_ok(struct obj *);
 extern int call_ok(struct obj *);
 extern int docallcmd(void);
 extern void docall(struct obj *) NONNULLARG1;
+extern void autoid_call(int, const char *, const char *) NONNULLARG23;
 extern const char *rndghostname(void);
 extern char *x_monnam(struct monst *, int, const char *, int, boolean) NONNULLARG1;
 extern char *l_monnam(struct monst *) NONNULLARG1;
@@ -914,6 +955,7 @@ extern schar lev_by_name(const char *);
 extern schar print_dungeon(boolean, schar *, xint16 *);
 extern void print_level_annotation(void);
 extern int donamelevel(void);
+extern int dostash(void);
 extern void free_exclusions(void);
 extern void save_exclusions(NHFILE *) NONNULLARG1;
 extern void load_exclusions(NHFILE *) NONNULLARG1;
@@ -1287,6 +1329,7 @@ extern void show_gamelog(int);
 extern int set_vanq_order(boolean);
 extern int dovanquished(void);
 extern int doborn(void);
+extern int dophotos(void);
 extern void list_vanquished(char, boolean);
 extern int num_genocides(void);
 extern void list_genocided(char, boolean);
@@ -2346,6 +2389,7 @@ extern void check_perm_invent_again(void);
 /* ### pager.c ### */
 
 extern char *self_lookat(char *) NONNULL NONNULLARG1;
+extern int monster_lore(struct permonst *, char *); /* Vulture mod §47 */
 extern char *monhealthdescr(struct monst *mon, boolean,
                             char *) NONNULL NONNULLARG3;
 extern void mhidden_description(struct monst *, unsigned, char *) NONNULLPTRS;
@@ -2563,6 +2607,7 @@ extern void desecrate_altar(boolean, aligntyp);
 extern int dosacrifice(void);
 extern boolean can_pray(boolean);
 extern int dopray(void);
+extern long vq_turns_since_prayer(void); /* Vulture mod §63 */
 extern const char *u_gname(void);
 extern int doturn(void);
 extern int altarmask_at(coordxy, coordxy);
@@ -2721,6 +2766,7 @@ extern void panictrace_setsignals(boolean);
 
 extern void inven_inuse(boolean);
 extern int dorecover(NHFILE *) NONNULLARG1;
+extern void vq_backup_savefile(void); /* Vulture mod s61 */
 extern void restcemetery(NHFILE *, struct cemetery **) NONNULLARG12;
 extern void trickery(char *) NO_NNARGS;
 extern void getlev(NHFILE *, int, xint8) NONNULLARG1;
@@ -2895,6 +2941,10 @@ extern void bclose(int);
 extern void setpaid(struct monst *) NO_NNARGS;
 extern void record_price_quote(int, unsigned long, boolean);
 extern void append_price_quote(char *, char **, int) NONNULLARG12;
+extern int priceid_candidates(int, int *, int) NONNULLARG2;
+extern void append_priceid_note(char *, char **, int) NONNULLARG12;
+extern void autoid_price_pass(void);
+extern boolean famous_photographer(void); /* Vulture mod s60 */
 extern long money2mon(struct monst *, long) NONNULLARG1;
 extern void money2u(struct monst *, long) NONNULLARG1;
 extern void shkgone(struct monst *) NONNULLARG1;

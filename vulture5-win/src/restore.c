@@ -785,6 +785,66 @@ restlevelfile(xint8 ltmp)
  *     other levels
  */
 
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §61): save backups.  A successful restore
+ * deletes the save file, so a crash (or a bug in the mods) later in the
+ * session could cost the character.  Just before that delete, copy the save
+ * to backups/<savename>-<YYYYMMDDhhmmss> next to it.  Never pruned (a save is
+ * ~50 KB); a copy that fails is silently skipped - the game goes on.  To use
+ * one: copy it back over the save name (strip the "-<timestamp>").
+ */
+#ifdef WIN32
+#include <direct.h>
+#define vq_mkdir(d) _mkdir(d)
+#else
+#include <sys/stat.h>
+#define vq_mkdir(d) mkdir((d), 0700)
+#endif
+
+void
+vq_backup_savefile(void)
+{
+    char src[BUFSZ], dir[BUFSZ], dst[BUFSZ * 2];
+    const char *base;
+    char *slash;
+    FILE *in, *out;
+    char buf[8192];
+    size_t n;
+
+    Strcpy(src, fqname(gs.SAVEF, SAVEPREFIX, 0));
+    Strcpy(dir, src);
+    slash = strrchr(dir, '/');
+    {
+        char *bs = strrchr(dir, '\\');
+
+        if (bs && (!slash || bs > slash))
+            slash = bs;
+    }
+    if (slash) {
+        base = src + (slash - dir) + 1;
+        slash[1] = '\0';
+    } else {
+        base = src;
+        dir[0] = '\0';
+    }
+    Strcat(dir, "backups");
+    (void) vq_mkdir(dir);
+    Snprintf(dst, sizeof dst, "%s/%s-%s", dir, base,
+             yyyymmddhhmmss(getnow()));
+
+    if ((in = fopen(src, "rb")) == 0)
+        return;
+    if ((out = fopen(dst, "wb")) == 0) {
+        (void) fclose(in);
+        return;
+    }
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        if (fwrite(buf, 1, n, out) != n)
+            break;
+    (void) fclose(in);
+    (void) fclose(out);
+}
+
 int
 dorecover(NHFILE *nhfp)
 {
@@ -900,8 +960,10 @@ dorecover(NHFILE *nhfp)
     restlevelstate();
     program_state.something_worth_saving = 1; /* useful data now exists */
 
-    if (!wizard && !discover)
+    if (!wizard && !discover) {
+        vq_backup_savefile(); /* §61: keep a copy before it's deleted */
         (void) delete_savefile();
+    }
     if (Is_rogue_level(&u.uz))
         assign_graphics(ROGUESET);
     reset_glyphmap(gm_levelchange);

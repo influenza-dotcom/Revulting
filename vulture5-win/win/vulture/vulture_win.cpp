@@ -76,6 +76,22 @@ void vulture_messagebox(std::string message)
 }
 
 
+/* Vulture mod (IMPLEMENTATION_LOG §44): the typed '#' prompt.  Only ever
+ * called in-game, so ROOTWIN exists (vulture_get_input below also copes with
+ * a missing root for the pre-game name prompt). */
+int vulture_get_input_completing(const char *ques, char *input,
+                                 const std::vector<std::string> &words)
+{
+	int response;
+	inputdialog *win = new inputdialog(ROOTWIN, ques, 256, -1, -1, "");
+
+	win->set_completions(words);
+	vulture_event_dispatcher(&response, V_RESPOND_INT, win);
+	win->copy_input(input);
+	delete win;
+	return response;
+}
+
 int vulture_get_input(int force_x, int force_y, const char *ques, char *input,
                       const char *default_text)
 {
@@ -448,6 +464,13 @@ void vulture_refresh_window_region(void)
 	vulture_invrects = NULL;
 	vulture_invrects_num = 0;
 	vulture_invrects_max = 0;
+
+	/* s75: a frame showing movement just reached the screen - slide */
+	{
+		extern void vulture_tween_run(void);
+
+		vulture_tween_run();
+	}
 }
 
 
@@ -589,3 +612,10 @@ void vulture_show_mainmenu()
 	}
 }
 #endif
+
+/* s74: let the core ask for a full map repaint (vignette step changed) */
+extern "C" void vulture_force_map_redraw(void)
+{
+  if (levwin != NULL)
+    levwin->force_redraw();
+}

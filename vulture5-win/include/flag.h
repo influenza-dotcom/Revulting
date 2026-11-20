@@ -255,6 +255,14 @@ struct instance_flags {
                             * to input becoming taken over);
                             * True => enable fuzzer when entering moveloop */
     boolean herecmd_menu;  /* use menu when mouseclick on yourself */
+    boolean bestroll;      /* local: best Tourist/Wizard start (u_init.c) */
+    boolean bestroll_melee; /* local: bestroll stats favour Con+Str */
+    char llmchat[64];      /* local: Ollama model for #chat, "" = off */
+    boolean llmtalk;       /* local: #chat lets you type to monsters */
+    boolean heroquips;     /* local: the hero remarks on things */
+    boolean autoid;        /* local: name items from shop prices, sink
+                            * rings and wand engraving (shk.c, do.c,
+                            * engrave.c; autoid_call() in do_name.c) */
     boolean idlecheckpoint;  /* platform should perform a checkpoint update
                               * if waiting for input longer than 10 seconds */
     boolean invis_goldsym; /* gold symbol is ' '? */

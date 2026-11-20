@@ -62,7 +62,8 @@ void vulture_init_sound(void)
 		return;
 	}
 
-	Mix_AllocateChannels(4);
+	Mix_AllocateChannels(16); /* s74: footsteps + effects overlap */
+	Mix_VolumeMusic(MIX_MAX_VOLUME * 55 / 100); /* s74: quieter music */
 
 	/* Create the sound cache */
 	vulture_cached_sounds = new vulture_cached_sound[V_MAX_CACHED_SOUNDS];
@@ -78,6 +79,31 @@ void vulture_init_sound(void)
 
 
 
+#include <ctype.h>
+
+/* s74: whole-word match.  A pattern that starts (ends) with a letter
+ * only matches where the message has no letter just before (after) it -
+ * so [ cat] no longer fires inside "catch" and [store] not in "restore". */
+static int vulture_sound_match(const char *str, const char *pat)
+{
+	size_t pl = strlen(pat);
+	const char *p;
+	int lb, rb;
+
+	if (!pl)
+		return 0;
+	lb = isalpha((unsigned char) pat[0]);
+	rb = isalpha((unsigned char) pat[pl - 1]);
+	for (p = strstr(str, pat); p; p = strstr(p + 1, pat)) {
+		if (lb && p > str && isalpha((unsigned char) p[-1]))
+			continue;
+		if (rb && isalpha((unsigned char) p[pl]))
+			continue;
+		return 1;
+	}
+	return 0;
+}
+
 /* tries to play a sound matching the given str */
 void vulture_play_event_sound(const char * str)
 {
@@ -86,7 +112,7 @@ void vulture_play_event_sound(const char * str)
 
 	/* search the configured sounds for one that matches str */
 	for (i = 0; i < vulture_event_sounds.size(); i++) {
-		if (strstr(str, vulture_event_sounds[i].searchpattern)) {
+		if (vulture_sound_match(str, vulture_event_sounds[i].searchpattern)) {
       unsigned int effect_enum( rand()%vulture_event_sounds[i].filenames.size() );
 			switch (vulture_event_sounds[i].soundtype)
 			{
@@ -113,10 +139,17 @@ void vulture_play_event_sound(const char * str)
 }
 
 
+static int vmz_zone = -1;     /* s74: current music zone, -1 = not started */
+static int vmz_volume = MIX_MAX_VOLUME * 55 / 100;
+
 void vulture_play_ambient_sound(int force_play)
 {
 	int k;
 	char tempbuffer[256];
+
+	/* s74: once the game feeds music zones, it owns the background music */
+	if (vmz_zone >= 0)
+		return;
 
 	if ((!force_play) && (vulture_is_music_playing()))
 		return;
@@ -187,6 +220,111 @@ static void vulture_play_sound(std::string wavefilename)
 	/* Play sound */
 	vulture_write_log(V_LOG_DEBUG, __FILE__, __LINE__, "Playing file %s\n", wavefilename.c_str());
 	Mix_PlayChannel(-1, chunk, 0);
+}
+
+
+/* IMPLEMENTATION_LOG s64: mute while the game window is not focused
+ * (alt-tabbed or minimised).  Volume, not pause: effects that fire while
+ * away play silently instead of piling up, and music keeps its place.
+ * Mix_Volume(-1) covers every channel, and SDL_mixer keeps channel and
+ * music volume across new plays, so nothing else has to know. */
+void vulture_focus_mute(int muted)
+{
+	static int is_muted = 0;
+	int freq, chans;
+	Uint16 fmt;
+
+	if (muted == is_muted || !Mix_QuerySpec(&freq, &fmt, &chans))
+		return;
+	is_muted = muted;
+	Mix_Volume(-1, muted ? 0 : MIX_MAX_VOLUME);
+	Mix_VolumeMusic(muted ? 0 : vmz_volume); /* s74: zone volume */
+}
+
+/*
+ * IMPLEMENTATION_LOG s74: location-driven music.  The game calls
+ * vulture_music_zone() once per turn with where the hero is; a change
+ * fades the new track in (shop music now hands back the moment you walk
+ * out).  Shop music is quieter than the rest.  Ordinary dungeon levels
+ * rotate calm tracks; the battle tracks only play during fights.
+ */
+enum { VMZ_DUNGEON, VMZ_SHOP, VMZ_TOWN, VMZ_MINES, VMZ_ORACLE, VMZ_HELL,
+       VMZ_BATTLE, VMZ_COUNT };
+
+static void vmz_start(int zone)
+{
+	static const char *const calm[] = { "ambient1.ogg", "ambient2.ogg",
+		"aircaves.ogg", "earthcav.ogg", "watercav.ogg", "lament1.ogg",
+		"lament2.ogg" };
+	static const char *const battle[] = { "battle1.ogg", "battle2.ogg",
+		"battle3.ogg" };
+	const char *file;
+	int loops = -1;
+
+	switch (zone) {
+	case VMZ_SHOP:   file = "shopping.ogg"; break;
+	case VMZ_TOWN:   file = "town.ogg"; break;
+	case VMZ_MINES:  file = "mines.ogg"; break;
+	case VMZ_ORACLE: file = "oracle.ogg"; break;
+	case VMZ_HELL:   file = "firecave.ogg"; break;
+	case VMZ_BATTLE: file = battle[rand() % 3]; break;
+	default:         file = calm[rand() % 7]; loops = 0; break;
+	}
+	vmz_volume = (zone == VMZ_SHOP) ? MIX_MAX_VOLUME * 30 / 100
+	                                : MIX_MAX_VOLUME * 55 / 100;
+	if (vulture_current_music) {
+		Mix_HaltMusic();
+		Mix_FreeMusic(vulture_current_music);
+	}
+	vulture_current_music = Mix_LoadMUS(
+		vulture_make_filename(V_MUSIC_DIRECTORY, "", file).c_str());
+	if (!vulture_current_music)
+		return;
+	Mix_VolumeMusic(vmz_volume);
+	Mix_FadeInMusic(vulture_current_music, loops, zone == VMZ_BATTLE ? 400 : 1500);
+}
+
+extern "C" void vulture_music_zone(int zone)
+{
+	if (!vulture_sound_inited || !vulture_opts.play_music)
+		return;
+	if (zone < 0 || zone >= VMZ_COUNT)
+		zone = VMZ_DUNGEON;
+	if (zone != vmz_zone) {
+		vmz_zone = zone;
+		vmz_start(zone);
+	} else if (!Mix_PlayingMusic()) {
+		vmz_start(zone); /* calm track ended: next one */
+	}
+}
+
+/* s74: footsteps - four stone variants (quiet), or a splash in water */
+extern "C" void vulture_sfx_footstep(int water)
+{
+	static Mix_Chunk *steps[4], *splash;
+	static int loaded = 0;
+	Mix_Chunk *c;
+
+	if (!vulture_sound_inited || !vulture_opts.play_effects)
+		return;
+	if (!loaded) {
+		char name[16];
+		int i;
+
+		for (i = 0; i < 4; i++) {
+			sprintf(name, "step%d.wav", i + 1);
+			steps[i] = Mix_LoadWAV(vulture_make_filename(V_SOUND_DIRECTORY, "", name).c_str());
+			if (steps[i])
+				Mix_VolumeChunk(steps[i], MIX_MAX_VOLUME * 35 / 100);
+		}
+		splash = Mix_LoadWAV(vulture_make_filename(V_SOUND_DIRECTORY, "", "splash.wav").c_str());
+		if (splash)
+			Mix_VolumeChunk(splash, MIX_MAX_VOLUME * 45 / 100);
+		loaded = 1;
+	}
+	c = water ? splash : steps[rand() % 4];
+	if (c)
+		Mix_PlayChannel(-1, c, 0);
 }
 
 

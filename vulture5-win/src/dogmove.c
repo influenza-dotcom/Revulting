@@ -1309,6 +1309,26 @@ dog_move(
                   (is_flyer(mtmp->data) || is_floater(mtmp->data)) ? "over"
                                                                    : "onto",
                   what);
+            /* Vulture mod (IMPLEMENTATION_LOG §63): the reluctance proves
+               something here is cursed.  If no item in the pile is already
+               known cursed and exactly one has unknown BUC, that one must be
+               it - mark it cursed.  Only ever reveals CURSED (the user:
+               blessed/uncursed from pets is cheating); a pet stepping on
+               freely still marks nothing (§57 was reverted). */
+            if (!Hallucination && cansee(nix, niy)) {
+                struct obj *co, *suspect = 0;
+                int unknown = 0;
+                boolean explained = FALSE;
+
+                for (co = svl.level.objects[nix][niy]; co; co = co->nexthere) {
+                    if (co->bknown && co->cursed)
+                        explained = TRUE;
+                    else if (!co->bknown)
+                        unknown++, suspect = co;
+                }
+                if (!explained && unknown == 1 && suspect->cursed)
+                    suspect->bknown = 1;
+            }
         }
         mon_track_add(mtmp, omx, omy);
         /* We have to know if the pet's going to do a combined eat and

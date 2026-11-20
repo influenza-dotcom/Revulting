@@ -1,6 +1,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include <ctype.h>
+extern int vulture_skip_msg_sound; /* s75 */
 #include <stdlib.h>
 
 #include <SDL.h>
@@ -691,8 +692,13 @@ void vulture_putstr(int winid, int attr, const char *str)
 
 			msgwin->add_message(std::string(str));
 
-			/* Play any event sounds associated with this message */
-			vulture_play_event_sound(str);
+			/* Play any event sounds associated with this message
+			 * (s75: unless the core already played them for the original
+			 * wording before the LLM reworded it) */
+			if (vulture_skip_msg_sound)
+				vulture_skip_msg_sound = 0;
+			else
+				vulture_play_event_sound(str);
 
 			/* Copy message to gt.toplines[] */
 			strcpy(gt.toplines, str);
@@ -894,18 +900,62 @@ void vulture_preference_update(const char *pref)
 	return;
 }
 
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §43): message history across save/restore.
+ * These were //TODO stubs, so Ctrl+P / the message log came back empty after
+ * every reload.  Modelled on tty_get/putmsghistory (win/tty/topl.c):
+ *
+ * getmsghistory: save.c calls it until it returns NULL, init=TRUE first;
+ *   hand out the newest V_SAVED_MSGHIST messages, oldest first.  The strings
+ *   must stay valid between calls, so they live in a static snapshot.
+ * putmsghistory: restore.c feeds the saved messages oldest first, then NULL.
+ *   Messages already issued THIS session ("Restoring save file...") must end
+ *   up AFTER the restored ones, so they are set aside on the first call and
+ *   re-added on the NULL.  A non-restoring call (quest pager summary line) is
+ *   just remembered.
+ */
+#define V_SAVED_MSGHIST 200
+
+static std::vector<std::string> msghist_snapshot;
+static size_t msghist_next = 0;
+
 char *
 vulture_getmsghistory(boolean init)
 {
-  //TODO
-  char *result = 0;
-  return result;
+	if (init) {
+		msghist_snapshot.clear();
+		if (msgwin)
+			msghist_snapshot = msgwin->history(V_SAVED_MSGHIST);
+		msghist_next = 0;
+	}
+	if (msghist_next < msghist_snapshot.size())
+		return (char *) msghist_snapshot[msghist_next++].c_str();
+	return (char *) 0;
 }
 
 void
 vulture_putmsghistory(const char *msg, boolean restoring_msghist)
 {
-  //TODO
+	static bool restoring = false;
+	static std::vector<std::string> this_session;
+
+	if (!msgwin)
+		return;
+
+	if (restoring_msghist && !restoring) {
+		this_session = msgwin->history(V_MESSAGEBUF_SIZE);
+		msgwin->clear_history();
+		restoring = true;
+	}
+
+	if (msg) {
+		msgwin->add_message(std::string(msg));
+	} else if (restoring) {
+		for (size_t i = 0; i < this_session.size(); i++)
+			msgwin->add_message(this_session[i]);
+		this_session.clear();
+		restoring = false;
+	}
 }
 
 /* clean up and quit */
@@ -919,13 +969,76 @@ void vulture_bail(const char *mesg)
 
 extern int extcmd_via_menu(void);
 
-/* display a list of extended commands for the user to pick from */
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §44): typed '#' commands.
+ * Was always the full command menu.  Now (unless the `extmenu` option is
+ * set) a text box: Tab completes, the headline lists live matches.  Enter on
+ * an exact name or a unique prefix runs it; on an ambiguous prefix shows a
+ * menu of just those matches; on empty input falls back to the full menu.
+ * Returns an extcmdlist[] index, or -1 for cancel, like extcmd_via_menu().
+ */
 int vulture_get_ext_cmd(void)
 {
-  return extcmd_via_menu();
-  // TODO if ( iflags.extmenu ) return extcmd_via_menu();
-  // ... in the rest of this function should be code to create an input box
-  // where individual (autocompleted) characters could be entered.
+	std::vector<std::string> names;
+	char buf[256];
+	int *ml, n, i;
+
+	if (iflags.extmenu)
+		return extcmd_via_menu();
+
+	n = extcmds_match((const char *) 0, ECM_IGNOREAC | ECM_NO1CHARCMD, &ml);
+	for (i = 0; i < n; i++)
+		names.push_back(extcmdlist[ml[i]].ef_txt);
+
+	buf[0] = '\0';
+	if (!vulture_get_input_completing(
+			"# Extended command  (Tab completes, Enter on empty = list)",
+			buf, names))
+		return -1;
+	(void) mungspaces(buf);
+	if (!buf[0] || !strcmp(buf, " "))
+		return extcmd_via_menu();
+
+	if (extcmds_match(buf, ECM_IGNOREAC | ECM_EXACTMATCH, &ml) == 1)
+		return ml[0];
+
+	n = extcmds_match(buf, ECM_IGNOREAC | ECM_NO1CHARCMD, &ml);
+	if (n == 1)
+		return ml[0];
+	if (n == 0) {
+		pline("Unknown extended command '%s'.", buf);
+		return -1;
+	}
+
+	/* ambiguous: pick among the matches only.  extcmds_match() returns a
+	   static list, so copy it before the menu code can call it again */
+	{
+		std::vector<int> picks(ml, ml + n);
+		winid win = create_nhwindow(NHW_MENU);
+		menu_item *sel = (menu_item *) 0;
+		anything any;
+		char line[BUFSZ];
+		int k, chosen = -1;
+
+		start_menu(win, MENU_BEHAVE_STANDARD);
+		for (k = 0; k < (int) picks.size(); k++) {
+			any = cg.zeroany;
+			any.a_int = picks[k] + 1;
+			Snprintf(line, sizeof line, "%-15s %s",
+					 extcmdlist[picks[k]].ef_txt,
+					 extcmdlist[picks[k]].ef_desc);
+			add_menu(win, &nul_glyphinfo, &any, 0, 0, ATR_NONE, NO_COLOR,
+					 line, MENU_ITEMFLAGS_NONE);
+		}
+		Snprintf(line, sizeof line, "Commands starting with \"%s\":", buf);
+		end_menu(win, line);
+		if (select_menu(win, PICK_ONE, &sel) > 0) {
+			chosen = sel[0].item.a_int - 1;
+			free((genericptr_t) sel);
+		}
+		destroy_nhwindow(win);
+		return chosen;
+	}
 }
 
 
@@ -1065,6 +1178,13 @@ void vulture_curs(winid window, int x, int y)
 		}
 
 		vulture_set_mouse_pos( mouse.x, mouse.y );
+		/* §53: the pointer is an OS cursor now, so a keyboard-driven
+		 * look/teleport cursor has to move the real pointer too
+		 * (window space = render space / render_scale) */
+		if (vulture_sdl_window)
+			SDL_WarpMouseInWindow(vulture_sdl_window,
+								  mouse.x / vulture_render_scale,
+								  mouse.y / vulture_render_scale);
 	}
 }
 
@@ -1173,3 +1293,11 @@ void vulture_cliparound(int x, int y) {}
 #ifdef POSITIONBAR
 void vulture_update_positionbar(char *features) {}
 #endif
+
+/* s75: the core rewords messages; sound effects key on the original text */
+int vulture_skip_msg_sound = 0;
+extern "C" void vulture_msg_sound_original(const char *orig)
+{
+	vulture_play_event_sound(orig);
+	vulture_skip_msg_sound = 1;
+}

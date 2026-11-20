@@ -2575,6 +2575,56 @@ donamelevel(void)
     query_annotation((d_level *) 0);
     return ECMD_OK;
 }
+
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §42): #stash - jot down what you left on
+ * this level.  APPENDS to the level's #annotate text ("darts (on altar)")
+ * instead of replacing it, so #overview (^O) lists every stash per level.
+ * Uses the existing mapseen->custom string, so nothing new is saved and
+ * old games work.  Capped to fit getlin's buffer for later #annotate edits.
+ */
+int
+dostash(void)
+{
+    mapseen *mptr;
+    char nbuf[BUFSZ], where[BUFSZ], combined[BUFSZ];
+    const char *feat;
+
+    if (!(mptr = find_mapseen(&u.uz)))
+        return ECMD_OK;
+
+    getlin("What did you stash here?", nbuf);
+    if (!*nbuf || *nbuf == '\033')
+        return ECMD_OK;
+    (void) mungspaces(nbuf);
+    if (!*nbuf || !strcmp(nbuf, " "))
+        return ECMD_OK;
+
+    /* say where on the level, when the spot has a landmark */
+    where[0] = '\0';
+    feat = dfeature_at(u.ux, u.uy, where);
+    if (feat && *feat)
+        Snprintf(combined, sizeof combined, "%s (on %s)", nbuf, feat);
+    else
+        Strcpy(combined, nbuf);
+
+    if (mptr->custom) {
+        char joined[BUFSZ];
+
+        if (strlen(mptr->custom) + 2 + strlen(combined) >= BUFSZ - 1) {
+            pline("This level's notes are full; use #annotate to edit them.");
+            return ECMD_OK;
+        }
+        Snprintf(joined, sizeof joined, "%s; %s", mptr->custom, combined);
+        free((genericptr_t) mptr->custom);
+        mptr->custom = dupstr(joined);
+    } else {
+        mptr->custom = dupstr(combined);
+    }
+    mptr->custom_lth = (unsigned) strlen(mptr->custom);
+    You("note the stash: %s.", combined);
+    return ECMD_OK;
+}
 #endif /* !SFCTOOL */
 
 /* exclusion zones */

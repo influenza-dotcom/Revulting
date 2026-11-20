@@ -24,6 +24,7 @@ extern const char *const enc_stat[]; /* defined in botl.c */
 #include <sstream>
 
 statuswin *stwin;
+#define V_STATUS_CONDS 7 /* condition cells; see add_cond() (§45) */
 static const int status_xpos[5] = { 0, 60, 100, 180, 250 };
 static Uint32 warn_colors[V_MAX_WARN];
 
@@ -298,12 +299,48 @@ statuswin::parse_statusline(std::string str)
     if (Slimed)
         add_cond("Slime", nconds++, V_WARN_ALERT);
 
+    /* Vulture mod (IMPLEMENTATION_LOG §59, reworked §63): a VAGUE sense of
+     * how long it's been since you prayed - only what the hero knows.  It
+     * reads turns since the last prayer (the chronicle), never the hidden
+     * prayer timeout or Luck (the user: both are cheating), so it is a hunch,
+     * not a guarantee - the real timeout is random and can run long.
+     *   "Pray"   green  : 1000+ turns since you prayed (or never prayed)
+     *   "Pray?"  yellow : 500-999 turns - a while
+     *   "NoPray" red    : god angry (the hero was told)
+     * Nothing shown under 500 turns. */
+    {
+        long since = vq_turns_since_prayer();
+
+        if (u.ugangr)
+            add_cond("NoPray", nconds++, V_WARN_CRITICAL);
+        else if (since >= 1000L)
+            add_cond("Pray", nconds++, V_WARN_NORMAL);
+        else if (since >= 500L)
+            add_cond("Pray?", nconds++, V_WARN_MORE);
+    }
+
     if (cap > UNENCUMBERED)
         add_cond(enc_stat[cap], nconds++, cap);
 
     /* reset the empty positions */
-    for (; nconds < 8; nconds++)
+    for (; nconds < V_STATUS_CONDS; nconds++)
         add_cond("", nconds, 0);
+
+    /* Vulture mod (IMPLEMENTATION_LOG §45): quiver readout in the
+       bottom-left cell, which conditions no longer use.  Yellow when 5 or
+       fewer are left.  The core refreshes the status line when the quiver
+       changes (vulture_qol_pass, allmain.c). */
+    if (uquiver) {
+        std::stringstream qs;
+
+        qs << "Qv:" << uquiver->quan << " " << simpleonames(uquiver);
+        tokenarray[0][4]->caption = qs.str();
+        tokenarray[0][4]->textcolor =
+            warn_colors[(uquiver->quan <= 5) ? V_WARN_MORE : V_WARN_NONE];
+    } else {
+        tokenarray[0][4]->caption = "Qv:-";
+        tokenarray[0][4]->textcolor = warn_colors[V_WARN_NONE];
+    }
 
 #ifdef SHOW_WEIGHT
     if (flags.showweight && !tokenarray[0][4]->caption[0]) {
@@ -318,10 +355,12 @@ statuswin::parse_statusline(std::string str)
 void
 statuswin::add_cond(std::string str, int warnno, int color)
 {
-    static const point pos[9] = { { 4, 1 }, { 4, 2 }, { 4, 3 },
-                                  { 4, 4 }, { 3, 4 }, { 2, 4 },
-                                  { 1, 4 }, { 0, 4 }, { 4, 0 } };
-    if (warnno >= 9)
+    /* §45: {0,4} now holds the quiver readout and {4,0} is the alignment
+       (stock wrote a 9th condition over it); 7 condition cells remain */
+    static const point pos[V_STATUS_CONDS] = { { 4, 1 }, { 4, 2 }, { 4, 3 },
+                                               { 4, 4 }, { 3, 4 }, { 2, 4 },
+                                               { 1, 4 } };
+    if (warnno >= V_STATUS_CONDS)
         return;
 
     tokenarray[pos[warnno].x][pos[warnno].y]->caption = str;

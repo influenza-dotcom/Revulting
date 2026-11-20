@@ -6000,6 +6000,31 @@ see_monster_closeup(struct monst *mtmp, boolean photo)
             svm.mvitals[mndx].photographed = 1;
             svc.context.lifelist.total_photographed++;
 
+            /* Vulture mod (IMPLEMENTATION_LOG §37): tell a Tourist when a
+               new species goes into the album; #photos lists them all */
+            if (Role_if(PM_TOURIST)) {
+                long n = svc.context.lifelist.total_photographed;
+
+                You("add %s to your photo album.",
+                    an(mons[mndx].pmnames[NEUTRAL]));
+                /* Vulture mod (IMPLEMENTATION_LOG §60): album milestones.
+                   Experience bonus at 10/25/50/100 species; from 50 the
+                   shopkeepers know your work (famous_photographer(), shk.c)
+                   and drop the Tourist surcharge.  Keyed off the saved
+                   lifelist counter, so it survives save/restore. */
+                if (n == 10 || n == 25 || n == 50 || n == 100) {
+                    long bonus = (n == 10) ? 100L : (n == 25) ? 400L
+                                 : (n == 50) ? 1500L : 5000L;
+
+                    pline("Your photo album now holds %ld species!", n);
+                    if (n == 50)
+                        pline("Word spreads of a famous travel photographer;"
+                              " shopkeepers will treat you fairly now.");
+                    more_experienced(bonus, 0);
+                    newexplevel();
+                }
+            }
+
             /* tourist earns points (toward EXP but not final score) for
                the first instance of each type of monster photographed;
                worm tail can be photographed but yields no EXP bonus */

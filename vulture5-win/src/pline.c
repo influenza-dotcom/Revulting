@@ -225,6 +225,25 @@ vpline(const char *line, va_list the_args)
     }
     msgtyp = MSGTYP_NORMAL;
 
+    /* Vulture s70/s75: local-LLM rewording of EVERY line (meaning kept,
+       wording fresh each time); sound effects still match the original.
+       Exact-text messages (no-repeat, history-suppressed, cursor) stay. */
+    if (*iflags.llmchat
+        && !(gp.pline_flags & (PLINE_NOREPEAT | OVERRIDE_MSGTYPE
+                               | SUPPRESS_HISTORY | NO_CURS_ON_U))) {
+        extern void vulture_msg_sound_original(const char *);
+        static char llmline[BUFSZ];
+
+        if (llm_rewrite_line(line, llmline, sizeof llmline,
+                             (gp.pline_flags & PLINE_VERBALIZE) != 0)) {
+            vulture_msg_sound_original(line);
+            line = llmline;
+        }
+    }
+    /* Vulture s75: text-to-speech for spoken lines (OPTIONS=voices) */
+    if ((gp.pline_flags & PLINE_VERBALIZE) && iflags.voices)
+        llm_tts_line(line);
+
 #ifdef DUMPLOG_CORE
     /* We hook here early to have options-agnostic output.
      * Unfortunately, that means Norep() isn't honored (general issue) and

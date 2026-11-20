@@ -178,6 +178,11 @@ static int optfn_##a(int, int, boolean, char *, char *);
     NHOPTB(autodig, Behavior, 0, opt_in, set_in_game,
            Off, Yes, No, No, NoAlias, &flags.autodig, Term_False,
            "dig if moving and wielding a digging tool")
+    /* local addition: deduce item types from shop quotes, sink rings and
+       wand engraving (autoid_call() in do_name.c).  iflags: not saved. */
+    NHOPTB(autoid, Behavior, 0, opt_in, set_in_game,
+           Off, Yes, No, No, NoAlias, &iflags.autoid, Term_False,
+           "name items from shop prices, sink rings and wand engraving")
     NHOPTB(autoopen, Behavior, 0, opt_out, set_in_game,
            On, Yes, No, No, NoAlias, &flags.autoopen, Term_False,
            "walking into a door attempts to open it")
@@ -193,6 +198,17 @@ static int optfn_##a(int, int, boolean, char *, char *);
     NHOPTC(autounlock, Behavior, 80, opt_out, set_in_game,
                 Yes, Yes, No, Yes, NoAlias,
                 "action to take when encountering locked door or chest")
+    /* local addition: every random roll in a new Tourist's or Wizard's start comes up
+       at its best possible value (u_init.c, bestroll_active()).  Lives in
+       iflags, which is never saved, so save files are unaffected. */
+    NHOPTB(bestroll, Advanced, 0, opt_in, set_in_config,
+           Off, Yes, No, No, NoAlias, &iflags.bestroll, Term_False,
+           "Tourist/Wizard starts with the best possible stats and items")
+    /* local addition: with bestroll, spend the stats on Con then Str
+       instead of the role's usual priority (melee build; u_init.c). */
+    NHOPTB(bestroll_melee, Advanced, 0, opt_in, set_in_config,
+           Off, Yes, No, No, NoAlias, &iflags.bestroll_melee, Term_False,
+           "bestroll start favours Constitution and Strength")
     NHOPTB(bgcolors, Map, 0, opt_out, set_in_game,
            On, Yes, No, No, NoAlias, &iflags.bgcolors, Term_Off,
            "use background color for some map hilighting")
@@ -354,6 +370,11 @@ static int optfn_##a(int, int, boolean, char *, char *);
     NHOPTB(help, Advanced, 0, opt_out, set_in_game,
            On, Yes, No, No, NoAlias, &flags.help, Term_False,
            "show all available info when using whatis-command")
+    /* local addition (IMPLEMENTATION_LOG s76): the hero mutters a remark
+       about their situation now and then (needs llmchat; sounds.c) */
+    NHOPTB(heroquips, Advanced, 0, opt_in, set_in_game,
+           Off, Yes, No, No, NoAlias, &iflags.heroquips, Term_False,
+           "your hero comments on their situation (needs llmchat)")
     NHOPTB(herecmd_menu, Advanced, 0, opt_in, set_in_game,
            Off, Yes, No, No, NoAlias, &iflags.herecmd_menu, Term_False,
            "show commands available in this location")
@@ -413,6 +434,16 @@ static int optfn_##a(int, int, boolean, char *, char *);
     NHOPTB(lit_corridor, Advanced, 0, opt_in, set_in_game,
            Off, Yes, No, No, NoAlias, &flags.lit_corridor, Term_False,
            "show dark corridors as lit if in sight")
+    /* local addition (IMPLEMENTATION_LOG §69): Ollama model name that
+       rewrites #chat flavour lines; empty/none = off (sounds.c). */
+    NHOPTC(llmchat, Advanced, 63, opt_in, set_in_config,
+                No, Yes, No, No, NoAlias,
+                "local Ollama model that writes monster chat lines")
+    /* local addition (IMPLEMENTATION_LOG s70): #chat asks what you say
+       and the llmchat model answers in character (sounds.c). */
+    NHOPTB(llmtalk, Advanced, 0, opt_in, set_in_game,
+           Off, Yes, No, No, NoAlias, &iflags.llmtalk, Term_False,
+           "#chat lets you type what you say (needs llmchat)")
     NHOPTB(lootabc, Advanced, 0, opt_in, set_in_game,
            Off, Yes, No, No, NoAlias, &flags.lootabc, Term_False,
            "use a/b/c rather than o/i/c when looting")

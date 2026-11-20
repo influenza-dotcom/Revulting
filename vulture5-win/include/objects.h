@@ -1620,6 +1620,11 @@ OBJECT(OBJ("boulder", NoDes),
 OBJECT(OBJ("statue", NoDes),
        BITS(1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, P_NONE, MINERAL), 0,
        ROCK_CLASS, 900, 0, 2500, 0, 20, 20, 0, 0, 2500, CLR_WHITE, STATUE),
+/* Vulture mod (IMPLEMENTATION_LOG s71): from cutting down trees; #build
+   turns logs into doors.  Never randomly generated (prob 0). */
+OBJECT(OBJ("log", NoDes),
+       BITS(1, 1, 0, 0, 0, 0, 0, 0, 0, 0, WHACK, P_NONE, WOOD), 0,
+       ROCK_CLASS, 0, 0, 30, 2, 4, 4, 0, 0, 30, CLR_BROWN, LOG),
 
 OBJECT(OBJ("heavy iron ball", NoDes),
        BITS(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, WHACK, P_NONE, IRON), 0,

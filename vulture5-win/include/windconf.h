@@ -20,6 +20,7 @@
                         game */
 
 #define SYSCF                /* Use a global configuration */
+#define MAIL /* Vulture s76: the mail daemon delivers Discord messages */
 #define SYSCF_FILE "sysconf" /* Use a file to hold the SYSCF configuration */
 
 #ifdef DUMPLOG

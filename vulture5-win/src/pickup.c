@@ -23,7 +23,27 @@ staticfn boolean all_but_uchain(struct obj *);
 staticfn boolean allow_cat_no_uchain(struct obj *);
 #endif
 staticfn int autopick(struct obj *, int, menu_item **);
+staticfn boolean thrown_here(void);
 staticfn int count_categories(struct obj *, int);
+
+/* Vulture mod (IMPLEMENTATION_LOG §40): pickup_thrown used to be dead
+   whenever autopickup was toggled off ('@'), because pickup() bailed out
+   before autopick() ran.  Now that case still autopicks, but ONLY things
+   the hero threw; this flag tells autopick_testobj() to accept nothing
+   else.  Set and cleared around the one autopick() call in pickup(). */
+static boolean autopick_thrown_only = FALSE;
+
+/* is anything the hero threw lying at the hero's spot? */
+staticfn boolean
+thrown_here(void)
+{
+    struct obj *otmp;
+
+    for (otmp = svl.level.objects[u.ux][u.uy]; otmp; otmp = otmp->nexthere)
+        if (otmp->how_lost == LOST_THROWN)
+            return TRUE;
+    return FALSE;
+}
 staticfn int delta_cwt(struct obj *, struct obj *);
 staticfn long carry_count(struct obj *, struct obj *, long, boolean, int *,
                         int *);
@@ -699,7 +719,12 @@ pickup(int what) /* should be a long */
         struct trap *t;
 
         /* no auto-pick if no-pick move, nothing there, or in a pool */
-        if (autopickup && (svc.context.nopick || !OBJ_AT(u.ux, u.uy)
+        if (autopickup && ((svc.context.nopick
+                            /* §52: travel (click-to-move) still collects
+                               the hero's own thrown missiles */
+                            && !(travel_pickup_thrown && flags.pickup_thrown
+                                 && thrown_here()))
+                           || !OBJ_AT(u.ux, u.uy)
                            || (is_pool(u.ux, u.uy) && !Underwater)
                            || is_lava(u.ux, u.uy))) {
             if (flags.mention_decor)
@@ -722,7 +747,9 @@ pickup(int what) /* should be a long */
          * just teleported onto the object.  They shouldn't pick it up.
          */
         if ((gm.multi && !svc.context.run)
-            || (autopickup && !flags.pickup)
+            || (autopickup && !flags.pickup
+                /* §40: thrown missiles still come back with '@' off */
+                && !(flags.pickup_thrown && thrown_here()))
             || notake(gy.youmonst.data)) {
             check_here(FALSE);
             if (notake(gy.youmonst.data) && OBJ_AT(u.ux, u.uy)
@@ -752,7 +779,10 @@ pickup(int what) /* should be a long */
      * to make things less confusing.
      */
     if (autopickup) {
+        /* §40 ('@' off) / §52 (travel): thrown missiles only */
+        autopick_thrown_only = !flags.pickup || svc.context.nopick;
         n = autopick(*objchain_p, traverse_how, &pick_list);
+        autopick_thrown_only = FALSE;
         goto menu_pickup;
     }
 
@@ -942,6 +972,10 @@ autopick_testobj(struct obj *otmp, boolean calc_costly)
     /* first check: reject if an unpaid item in a shop */
     if (costly && !otmp->no_charge)
         return FALSE;
+
+    /* §40: autopickup toggled off - only the hero's thrown missiles */
+    if (autopick_thrown_only)
+        return (otmp->how_lost == LOST_THROWN);
 
     /* pickup_thrown/pickup_stolen/nopick_dropped override pickup_types and
        exceptions */

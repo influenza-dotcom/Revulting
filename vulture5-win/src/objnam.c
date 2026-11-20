@@ -1521,6 +1521,31 @@ doname_base(
             /* avoid having doname(corpse) consume an extra obuf */
             releaseobuf(cxstr);
             gx.xnamep = save_xnamep;
+
+            /* Vulture mod (IMPLEMENTATION_LOG §38): the hero can see and
+               smell how old a corpse is, so say so.  Mirrors eatcorpse()
+               (eat.c): rotted = age / (10 + rn2(20)), +2 cursed, -2
+               blessed; rotted > 3 can make you sick, rotted > 5 is a
+               tainted (deadly) corpse.  The label uses the WORST case of
+               the random divisor (10), so "fresh" is a promise and
+               "dangerously old" means "could be tainted".  BUC only
+               shifts it when the hero knows the BUC.  Same never-rot list
+               as eat.c's nonrotting_corpse(). */
+            if (ismnum(omndx) && !Hallucination) {
+                if (omndx == PM_LIZARD || omndx == PM_LICHEN
+                    || is_rider(&mons[omndx]) || omndx == PM_ACID_BLOB) {
+                    Concat(bp, 0, " (never rots)");
+                } else {
+                    long rot = (svm.moves - peek_at_iced_corpse_age(obj))
+                               / 10L;
+
+                    if (obj->bknown)
+                        rot += obj->cursed ? 2L : obj->blessed ? -2L : 0L;
+                    Concat(bp, 0, (rot <= 3L) ? " (fresh)"
+                                  : (rot <= 5L) ? " (getting old)"
+                                    : " (dangerously old)");
+                }
+            }
         } else if (obj->otyp == EGG) {
 #if 0 /* corpses don't tell if they're stale either */
             if (known && stale_egg(obj))
@@ -1681,6 +1706,14 @@ doname_base(
             record_price_quote(obj->otyp, price / obj->quan, TRUE);
     } else if (iflags.pricequotes && !objects[obj->otyp].oc_name_known) {
         append_price_quote(bp, &bp_eos, obj->otyp);
+    }
+
+    /* local 'autoid' option: what the recorded shop quotes say this type
+       can be (shk.c).  dknown: never for an appearance not yet seen. */
+    if (iflags.autoid && dknown && !objects[obj->otyp].oc_name_known
+        && !iflags.suppress_price && !program_state.restoring) {
+        append_priceid_note(bp_end, &bp_eos, obj->otyp);
+        bpspaceleft = (size_t) (bp_end - bp_eos);
     }
 
     if (!strncmp(prefix, "a ", 2)) {

@@ -19,6 +19,7 @@ extern "C" {
 
 messagewin *msgwin;
 static Uint32 message_colors[V_MAX_MESSAGE_COLORS];
+static Uint32 danger_colors[V_MAX_MESSAGE_COLORS]; /* §58 */
 
 messagewin::messagewin(window *p) : window(p)
 {
@@ -46,7 +47,55 @@ messagewin::messagewin(window *p) : window(p)
         color = 255 - (i * 11);
         message_colors[i] =
             SDL_MapRGB(vulture_px_format, color, color, color);
+        /* §58: the same fade in red, for messages that mean danger */
+        danger_colors[i] = SDL_MapRGB(vulture_px_format, color,
+                                      color * 45 / 100, color * 45 / 100);
     }
+}
+
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §58): messages that mean "you are in real
+ * trouble" draw in red so they can't scroll past unnoticed.  Matched on the
+ * text (the core gives the window port no severity); the list is the
+ * deadly-or-nearly-so status messages, not every hit.
+ */
+static const char *const danger_phrases[] = {
+    "dangerously weak",          /* §45 low-HP warning */
+    "You feel weak",             /* fainting from hunger is near */
+    "You faint from lack of food",
+    "You are slowing down",      /* turning to stone */
+    "Your limbs are stiffening",
+    "Your limbs have turned to stone",
+    "You are turning into a green slime",
+    "You are turning a little green",
+    "Your limbs are getting oozy",
+    "Your skin begins to peel",
+    "You feel deathly sick",     /* terminal illness */
+    "You feel even worse",
+    "You find it hard to breathe", /* strangulation */
+    "You're gasping for air",
+    "You can no longer breathe",
+    "You are being crushed",
+    "You are being choked",
+    "You are beginning to feel weak",
+    "You feel feverish",         /* lycanthropy */
+    "You die",
+    "You hear the shrieks",
+    "is about to explode",
+    "The engulfing",
+    "You are put to sleep",
+    "You can't move",
+    "You are frozen",
+    NULL
+};
+
+static bool
+vulture_message_is_danger(const std::string &msg)
+{
+    for (int i = 0; danger_phrases[i]; i++)
+        if (msg.find(danger_phrases[i]) != std::string::npos)
+            return true;
+    return false;
 }
 
 messagewin::~messagewin(void)
@@ -132,7 +181,10 @@ messagewin::draw()
             abs_x + (w - vulture_text_length(V_FONT_MESSAGE, message)) / 2;
         pos_y = abs_y + i * (vulture_get_lineheight(V_FONT_MESSAGE) + 1);
         vulture_put_text(V_FONT_MESSAGE, message, vulture_screen, pos_x,
-                         pos_y, message_colors[time_cur - age]);
+                         pos_y,
+                         vulture_message_is_danger(message)
+                             ? danger_colors[time_cur - age]
+                             : message_colors[time_cur - age]);
     }
 
     refresh_w = (refresh_w > w) ? refresh_w : w;
@@ -177,7 +229,42 @@ messagewin::add_message(std::string str)
 {
     message_cur = message_top = (message_top + 1) % V_MESSAGEBUF_SIZE;
     message_buf[message_top] = str;
-    message_ages[message_top] = svm.moves;
+    /* age 0 marks an EMPTY slot (get_message), so never store 0 */
+    message_ages[message_top] = svm.moves ? (int) svm.moves : 1;
+}
+
+/* the newest `maxcount` messages, oldest first - what the core wants to
+   write into the save file (§43) */
+std::vector<std::string>
+messagewin::history(size_t maxcount)
+{
+    std::vector<std::string> out;
+    int i, idx;
+
+    if (message_top < 0)
+        return out;
+    /* walk back from the newest to the first empty slot (or the cap) */
+    for (i = 0; i < V_MESSAGEBUF_SIZE && out.size() < maxcount; i++) {
+        idx = (message_top - i + V_MESSAGEBUF_SIZE) % V_MESSAGEBUF_SIZE;
+        if (!message_ages[idx])
+            break;
+        out.push_back(message_buf[idx]);
+    }
+    /* collected newest first; the core wants oldest first */
+    return std::vector<std::string>(out.rbegin(), out.rend());
+}
+
+void
+messagewin::clear_history(void)
+{
+    int i;
+
+    for (i = 0; i < V_MESSAGEBUF_SIZE; i++) {
+        message_ages[i] = 0;
+        message_buf[i].clear();
+    }
+    message_top = -1;
+    message_cur = -1;
 }
 
 void

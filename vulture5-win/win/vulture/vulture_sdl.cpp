@@ -693,7 +693,11 @@ int vulture_handle_global_event(SDL_Event * event)
 					vulture_refresh();
 					break;
 				case SDL_WINDOWEVENT_FOCUS_GAINED:
+					vulture_focus_mute(0); /* s64 */
 					vulture_refresh();
+					break;
+				case SDL_WINDOWEVENT_FOCUS_LOST:
+					vulture_focus_mute(1); /* s64: alt-tabbed away */
 					break;
 				case SDL_WINDOWEVENT_ENTER:
 					have_mouse_focus = 1;
@@ -912,6 +916,11 @@ int vulture_handle_global_event(SDL_Event * event)
 				/* bring the buffer onto the screen */
 				vulture_refresh_window_region();
 
+				/* erase the cursor's last shown rect and show the new one
+				 * (IMPLEMENTATION_LOG §35) - the window refresh alone only
+				 * covers what the redraw invalidated */
+				vulture_mouse_refresh();
+
 				/* make sure no after-images of the mouse are left over */
 				vulture_mouse_restore_bg();
 			}
@@ -935,6 +944,11 @@ int vulture_handle_global_event(SDL_Event * event)
 
 				/* bring the buffer onto the screen */
 				vulture_refresh_window_region();
+
+				/* erase the cursor's last shown rect and show the new one
+				 * (IMPLEMENTATION_LOG §35) - the window refresh alone only
+				 * covers what the redraw invalidated */
+				vulture_mouse_refresh();
 
 				/* make sure no after-images of the mouse are left over */
 				vulture_mouse_restore_bg();
@@ -1007,8 +1021,10 @@ void vulture_enter_graphics_mode()
 		}
 	}
 
-	/* Don't show double cursor */
-	SDL_ShowCursor(SDL_DISABLE);
+	/* The pointer is an OS cursor with Vulture's art (IMPLEMENTATION_LOG
+	 * §53, vulture_mou.cpp), so the system cursor stays ON; the first
+	 * vulture_mouse_draw()/set_mcursor() swaps in the art. */
+	SDL_ShowCursor(SDL_ENABLE);
 }
 
 
@@ -1125,4 +1141,56 @@ void vulture_refresh(void)
 
 	if (vulture_sdl_window)
 		SDL_UpdateWindowSurface(vulture_sdl_window);
+}
+
+
+/*
+ * IMPLEMENTATION_LOG s74: screen shake + red hit flash.  Works on the
+ * frame as presented (the window surface), so it is independent of the
+ * supersampling path; blocks for ~8 frames, then restores the frame.
+ * strength 1..8.
+ */
+extern "C" void vulture_screen_shake(int strength)
+{
+	SDL_Surface *win, *copy, *red;
+	int f, frames = 8, amp;
+
+	if (!vulture_sdl_window || strength <= 0)
+		return;
+	win = SDL_GetWindowSurface(vulture_sdl_window);
+	if (!win)
+		return;
+	copy = SDL_ConvertSurface(win, win->format, 0);
+	if (!copy)
+		return;
+	red = SDL_CreateRGBSurfaceWithFormat(0, win->w, win->h, 32,
+	                                     SDL_PIXELFORMAT_ARGB8888);
+	if (red) {
+		SDL_FillRect(red, NULL, SDL_MapRGBA(red->format, 170, 0, 0, 255));
+		SDL_SetSurfaceBlendMode(red, SDL_BLENDMODE_BLEND);
+	}
+	if (strength > 8)
+		strength = 8;
+	amp = 2 + strength * 2;
+	for (f = 0; f < frames; f++) {
+		double k = 1.0 - (double) f / frames;
+		SDL_Rect d;
+
+		d.x = (int) (((rand() % (2 * amp + 1)) - amp) * k);
+		d.y = (int) (((rand() % (2 * amp + 1)) - amp) * k);
+		d.w = d.h = 0;
+		SDL_FillRect(win, NULL, SDL_MapRGB(win->format, 0, 0, 0));
+		SDL_BlitSurface(copy, NULL, win, &d);
+		if (red) {
+			SDL_SetSurfaceAlphaMod(red, (Uint8) ((40 + 12 * strength) * k));
+			SDL_BlitSurface(red, NULL, win, NULL);
+		}
+		SDL_UpdateWindowSurface(vulture_sdl_window);
+		SDL_Delay(16);
+	}
+	SDL_BlitSurface(copy, NULL, win, NULL);
+	SDL_UpdateWindowSurface(vulture_sdl_window);
+	if (red)
+		SDL_FreeSurface(red);
+	SDL_FreeSurface(copy);
 }

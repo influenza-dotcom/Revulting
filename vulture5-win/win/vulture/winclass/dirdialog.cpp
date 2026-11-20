@@ -114,7 +114,9 @@ dirdialog::handle_mousebuttonup_event(window *target, void *result,
 
     if (choice) {
         if (!mapwin)
-            choice = vulture_translate_key(choice);
+            choice = vulture_translate_key(choice); /* includes §62 turn */
+        else
+            choice = vulture_rotate_dirkey(choice); /* §62: view turned */
         *(char *) result = choice;
         return V_EVENT_HANDLED_FINAL;
     }

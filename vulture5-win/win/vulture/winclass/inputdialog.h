@@ -5,6 +5,9 @@
 
 #include "mainwin.h"
 
+#include <string>
+#include <vector>
+
 class textwin;
 
 class inputdialog : public mainwin
@@ -26,9 +29,18 @@ class inputdialog : public mainwin
                                             int res_w, int res_h);
     void copy_input(char *dest);
 
+    /* Vulture mod (IMPLEMENTATION_LOG §44): optional word list for the
+       typed '#' prompt.  Non-empty = Tab completes to the longest common
+       prefix of the matches, and the headline shows the live matches. */
+    void set_completions(const std::vector<std::string> &words);
+
   private:
     textwin *input;
     int destsize;
+    std::vector<std::string> completions;
+    std::string base_caption;
+    void complete_tab(void);
+    void refresh_hint(void);
 };
 
 #endif

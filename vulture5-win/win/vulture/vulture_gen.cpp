@@ -371,6 +371,54 @@ void vulture_oom(int do_exit, const char *file, int line)
 
 
 /* Rotate numpad keys for movement */
+/*
+ * View rotation (IMPLEMENTATION_LOG s62).  A movement key names a direction
+ * on the SCREEN (Vulture already maps hjkl/numpad to screen directions in
+ * vulture_translate_key below); when the view is turned, the map direction
+ * for that screen direction turns with it - same v_rot() step as levelwin:
+ * (dx, dy) -> (-dy, dx) per quarter turn.  Case is kept (run keys).
+ */
+int vulture_view_rot = 0;
+
+int vulture_rotate_dirkey(int key)
+{
+	static const char lower[8] = { 'h', 'y', 'k', 'u', 'l', 'n', 'j', 'b' };
+	static const char digits[8] = { '4', '7', '8', '9', '6', '3', '2', '1' };
+	static const int ddx[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
+	static const int ddy[8] = { 0, -1, -1, -1, 0, 1, 1, 1 };
+	int i, r, dx, dy, t, upper = 0;
+
+	if (!(vulture_view_rot & 3))
+		return key;
+
+	for (i = 0; i < 8; i++) {
+		if (iflags.num_pad ? (key == digits[i]) : (key == lower[i]))
+			break;
+		if (!iflags.num_pad && key == (lower[i] & ~0x20)) {
+			upper = 1;
+			break;
+		}
+	}
+	if (i == 8)
+		return key;
+
+	dx = ddx[i];
+	dy = ddy[i];
+	for (r = vulture_view_rot & 3; r > 0; r--) {
+		t = dx;
+		dx = -dy;
+		dy = t;
+	}
+	for (i = 0; i < 8; i++)
+		if (ddx[i] == dx && ddy[i] == dy)
+			break;
+	if (i == 8)
+		return key;
+	if (iflags.num_pad)
+		return digits[i];
+	return upper ? (lower[i] & ~0x20) : lower[i];
+}
+
 int vulture_translate_key(int cmd_key)
 {
 	const char num_translation_table[9] = {'2', '3', '6', '1', '5', '9', '4', '7', '8'};
@@ -387,12 +435,16 @@ int vulture_translate_key(int cmd_key)
 
 	vulture_last_translated_key = cmd_key;
 
-	if (vulture_opts.no_key_translation || cmd_key == '.')
+	if (cmd_key == '.')
 		return cmd_key;
+	/* s62: untranslated keys are map directions already; still turn them
+	   with the view */
+	if (vulture_opts.no_key_translation)
+		return vulture_rotate_dirkey(cmd_key);
 
 	if (iflags.num_pad) {
 		if (isdigit(cmd_key))
-			return num_translation_table[cmd_key -'0' - 1];
+			return vulture_rotate_dirkey(num_translation_table[cmd_key -'0' - 1]);
 	}
 	else
 	{
@@ -404,7 +456,7 @@ int vulture_translate_key(int cmd_key)
 			charpos++;
 
 		if (hjkl_untranslated[charpos])
-			return hjkl_translation_table[charpos] & ~(is_upper << 5);
+			return vulture_rotate_dirkey(hjkl_translation_table[charpos] & ~(is_upper << 5));
 	}
 
 	return cmd_key;
@@ -489,6 +541,17 @@ int vulture_make_nh_key(int sym, int mod, int ch)
 
 	if (alt && ch >= 'a' && ch <= 'z')
 		return (0x80 | (ch));
+
+	/* IMPLEMENTATION_LOG s63: Ctrl+> or Alt+> is #smartdown, bound to
+	   M('>') in the core.  With Ctrl held the text char may come through
+	   as '>', '.' or nothing, so the period key + Shift is checked too. */
+	if ((ctrl || alt)
+	    && (ch == '>' || (shift && (sym == SDLK_PERIOD || ch == '.'))))
+		return (0x80 | '>');
+	/* ...and Ctrl+< / Alt+< is #smartup on M('<') */
+	if ((ctrl || alt)
+	    && (ch == '<' || (shift && (sym == SDLK_COMMA || ch == ','))))
+		return (0x80 | '<');
 
 	if (ch >= 'a' && ch <= 'z') {
 		if (shift)

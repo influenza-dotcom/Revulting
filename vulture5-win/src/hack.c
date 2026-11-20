@@ -1094,7 +1094,12 @@ test_move(
                     if (amorphous(gy.youmonst.data))
                         You("try to ooze under the door,"
                             " but can't squeeze your possessions through.");
-                    if (flags.autoopen && !svc.context.run
+                    /* Vulture mod (IMPLEMENTATION_LOG §67): auto-explore
+                       walks by travel, which sets context.run, so stock
+                       autoopen never fired and every closed door ended the
+                       chain.  Allow it while auto-exploring. */
+                    if (flags.autoopen
+                        && (!svc.context.run || autoexplore_active)
                         && !Confusion && !Stunned && !Fumbling) {
                         int tmp = doopen_indir(x, y);
                         /* if 'autounlock' includes Kick, we might have a
@@ -1108,6 +1113,10 @@ test_move(
                             svc.context.door_opened = TRUE;
                         else
                             svc.context.door_opened = !closed_door(x, y);
+                        /* §67: found locked - don't route through it again */
+                        if (autoexplore_active && closed_door(x, y)
+                            && (tmpr->doormask & D_LOCKED))
+                            autoexplore_door_locked(x, y);
                         svc.context.move = (ux != u.ux || uy != u.uy);
                     } else if (x == ux || y == uy) {
                         if (Blind || Stunned || ACURR(A_DEX) < 10
@@ -2700,8 +2709,14 @@ domove(void)
         domove_core();
         /* gd.domove_succeeded is available to make assessments now */
         if ((gd.domove_succeeded & (DOMOVE_RUSH | DOMOVE_WALK)) != 0) {
+            extern void vulture_sfx_footstep(int);
+
             maybe_smudge_engr(ux1, uy1, u.ux, u.uy);
             maybe_adjust_hero_bubble();
+            /* Vulture s74: footsteps (none while airborne or riding) */
+            if ((ux1 != u.ux || uy1 != u.uy) && !Levitation && !Flying
+                && !u.usteed && !Underwater)
+                vulture_sfx_footstep(is_pool(u.ux, u.uy) ? 1 : 0);
         }
         gd.domove_attempting = 0L;
 

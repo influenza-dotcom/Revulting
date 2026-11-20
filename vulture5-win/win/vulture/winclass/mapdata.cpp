@@ -39,11 +39,132 @@ vulture_mapglyph(int glyph, int *ochar, int *ocolor, unsigned *ospecial, int x, 
     *ospecial = gi.gm.glyphflags;
 }
 
+/* The engraving decal for (x,y), or V_TILE_NONE.  Mirrors the core's own
+ * test in display.c: an engraving shows once the hero has revealed it
+ * (erevealed is set on sight, by touch when blind, and when stepped on)
+ * and nothing that hides traps - water, lava - lies over it. */
+static int
+vulture_engraving_tile(int x, int y)
+{
+    struct engr *ep = engr_at((coordxy) x, (coordxy) y);
+
+    if (ep && ep->erevealed && !covers_traps(x, y))
+        return V_MISC_ENGRAVING;
+    return V_TILE_NONE;
+}
+
+/* The warning marker if this glyph is 5.0.0's trapped-door/trapped-chest
+ * "^", else V_TILE_NONE.  These are dummy traps (TRAPPED_DOOR/TRAPPED_CHEST,
+ * detect.c): sense_trap() paints the glyph but t_at() finds nothing, so the
+ * glyph is the ONLY place the information exists.  Like tty, the mark lasts
+ * until the core redraws the square (newsym() puts the door/box back). */
+static int
+vulture_trapped_marker(int glyph)
+{
+    if (glyph_is_trap(glyph)) {
+        if (glyph_to_cmap(glyph) == S_trapped_door)
+            return V_MISC_TRAPPED_DOOR;
+        if (glyph_to_cmap(glyph) == S_trapped_chest)
+            return V_MISC_TRAPPED_CHEST;
+    }
+    return V_TILE_NONE;
+}
+
 /* the only other cmaps beside furniture that have significant height and
  * therefore need to be drawn as part of the second pass with the furniture.
  */
 #define V_EXTRA_FURNITURE(typ) \
     ((typ) == DOOR || (typ) == DBWALL || (typ) == IRONBARS || (typ) == TREE)
+
+/*
+ * Door arch orientation (IMPLEMENTATION_LOG §50).
+ *
+ * The core picks S_v?door / S_h?door from levl[][].horizontal, set by
+ * set_door_orientation() (sp_lev.c): horizontal = (wall left or right) &&
+ * !(wall above AND below).  That is a best guess for tty, where it only
+ * picks '|' vs '-'; for a door in a CORNER of irregular walls (Mines,
+ * themed rooms) it picks the axis of the short stub, and in this isometric
+ * view the arch then stands sideways to the wall it is set in.
+ *
+ * So the art follows the walls actually around the door, in three steps:
+ *  1. adjacent wall squares: more along map x (left/right) = horizontal
+ *     wall = H art, more along map y = V art;
+ *  2. tie (a corner: one each way) - the longer straight wall run wins,
+ *     which is the wall the eye reads the door as sitting in;
+ *  3. still tied - the side you can walk in from: a walkable square
+ *     left/right means the door is passed along x, i.e. a vertical wall;
+ *  then the core's choice.  Uses the real terrain, which reveals nothing
+ *  the door art itself doesn't.
+ */
+static bool
+vulture_door_wallish(int x, int y)
+{
+    int typ;
+
+    if (!isok(x, y))
+        return false;
+    typ = svl.level.locations[x][y].typ;
+    return IS_WALL(typ) || IS_DOOR(typ) || typ == SDOOR;
+}
+
+/* straight wall squares from the door in one direction, up to 4 */
+static int
+vulture_door_wallrun(int x, int y, int dx, int dy)
+{
+    int k;
+
+    for (k = 1; k <= 4; k++)
+        if (!vulture_door_wallish(x + k * dx, y + k * dy))
+            break;
+    return k - 1;
+}
+
+static bool
+vulture_door_walkable(int x, int y)
+{
+    int typ;
+
+    if (!isok(x, y))
+        return false;
+    typ = svl.level.locations[x][y].typ;
+    return ACCESSIBLE(typ) && !IS_DOOR(typ);
+}
+
+static int
+vulture_orient_door_tile(int tile, int x, int y)
+{
+    int wx = vulture_door_wallish(x - 1, y) + vulture_door_wallish(x + 1, y);
+    int wy = vulture_door_wallish(x, y - 1) + vulture_door_wallish(x, y + 1);
+    int rx = vulture_door_wallrun(x, y, -1, 0) + vulture_door_wallrun(x, y, 1, 0);
+    int ry = vulture_door_wallrun(x, y, 0, -1) + vulture_door_wallrun(x, y, 0, 1);
+    bool vertical;
+
+    if (wy != wx) {
+        vertical = (wy > wx);
+    } else if (ry != rx) {
+        vertical = (ry > rx);
+    } else {
+        bool walk_x = vulture_door_walkable(x - 1, y)
+                      || vulture_door_walkable(x + 1, y);
+        bool walk_y = vulture_door_walkable(x, y - 1)
+                      || vulture_door_walkable(x, y + 1);
+
+        if (walk_x == walk_y)
+            return tile; /* no better information: trust the core */
+        vertical = walk_x;
+    }
+
+    switch (tile) {
+    case V_MISC_VDOOR_WOOD_OPEN:
+    case V_MISC_HDOOR_WOOD_OPEN:
+        return vertical ? V_MISC_VDOOR_WOOD_OPEN : V_MISC_HDOOR_WOOD_OPEN;
+    case V_MISC_VDOOR_WOOD_CLOSED:
+    case V_MISC_HDOOR_WOOD_CLOSED:
+        return vertical ? V_MISC_VDOOR_WOOD_CLOSED : V_MISC_HDOOR_WOOD_CLOSED;
+    default:
+        return tile; /* broken door / doorway: no orientation */
+    }
+}
 
 /* 3.6.x's CMD_TRAVEL (0x90, i.e. Cmd.spkeys[NHKF_TRAVEL]) does not exist in
  * 5.0.0 -- see vulture_retravel_key() below. */
@@ -104,7 +225,8 @@ mapdata::mapdata()
      *   S_lavawall         - a wall of lava; drawing it as lava floor would
      *                        imply it is walkable
      *   S_vibrating_square - Sanctum marker, new in 5.0.0
-     *   S_trapped_door / S_trapped_chest - known-trap indicators, new in 5.0.0
+     *   (S_trapped_door / S_trapped_chest were here until 2026-11-10; they
+     *   now draw a warning marker - see vulture_trapped_marker())
      *   S_goodpos          - debug "valid position" overlay
      * The S_sw_* and S_expl_* runs are never looked up here; swallow and
      * explosion glyphs are routed through their own tile ranges above. */
@@ -151,11 +273,18 @@ mapdata::mapdata()
     vulture_tilemap_misc[S_brupladder] = V_MISC_LADDER_UP;
     vulture_tilemap_misc[S_brdnladder] = V_MISC_LADDER_DOWN;
 
-    /* 5.0.0 gives engraved squares their own cmap symbols; 3.6.6 had no such
-     * distinction and drew the plain floor.  Matching that is restoring parity,
-     * not inventing art. */
+    /* 5.0.0 gives engraved squares their own cmap symbols.  These two entries
+     * are the FLOOR under the engraving (map_back); the engraving itself is a
+     * decal, V_MISC_ENGRAVING, put on the trap layer by
+     * vulture_engraving_tile() below - a trap hides an engraving in the core
+     * too (traps outrank engravings in display.c). */
     vulture_tilemap_misc[S_engroom] = V_TILE_FLOOR_COBBLESTONE;
     vulture_tilemap_misc[S_engrcorr] = V_TILE_FLOOR_ROUGH;
+
+    /* bound so nothing that indexes the table by cmap can hit ERROR; the
+     * map itself routes these through vulture_trapped_marker() */
+    vulture_tilemap_misc[S_trapped_door] = V_MISC_TRAPPED_DOOR;
+    vulture_tilemap_misc[S_trapped_chest] = V_MISC_TRAPPED_CHEST;
 
     /* a poison cloud is a cloud; 3.6.6 had only S_cloud */
     vulture_tilemap_misc[S_poisoncloud] = V_MISC_CLOUD;
@@ -389,7 +518,14 @@ mapdata::set_glyph(int x, int y, int glyph)
             map_trap =
                 vulture_tilemap_misc[trap_to_defsym(trap->ttyp)];
         else
-            map_trap = V_TILE_NONE;
+            /* no visible trap: an engraving takes the same flat layer */
+            map_trap = vulture_engraving_tile(x, y);
+
+        /* a trapped door/box just found by searching: the glyph is the only
+         * record.  The door (furniture pass) and box (vobj_at above) still
+         * draw normally; the marker goes over them. */
+        if (map_special == V_TILE_NONE)
+            map_special = vulture_trapped_marker(glyph);
 
         /* handle furniture: altars, stairs,...
          * furniture is separated out from walls and floors, so that it can be
@@ -408,13 +544,15 @@ mapdata::set_glyph(int x, int y, int glyph)
         } else if (glyph_to_cmap(glyph) >= S_ndoor
                    && glyph_to_cmap(glyph) <= S_tree) {
             /* this is a mimic pretending to be part of the dungeon */
-            map_furniture = vulture_tilemap_misc[glyph_to_cmap(glyph)];
+            map_furniture = vulture_orient_door_tile(
+                vulture_tilemap_misc[glyph_to_cmap(glyph)], x, y); /* §50 */
             map_back = V_TILE_FLOOR_ROUGH;
         } else if (V_EXTRA_FURNITURE(svl.level.locations[x][y].typ)) {
             /* this stuff is not furniture, but we need to draw it at the same
              * time, so we pack it in with the furniture ...*/
-            map_furniture =
-                vulture_tilemap_misc[glyph_to_cmap(back_to_glyph(x, y))];
+            map_furniture = vulture_orient_door_tile(
+                vulture_tilemap_misc[glyph_to_cmap(back_to_glyph(x, y))],
+                x, y); /* §50: arch follows the walls around the door */
             map_back = V_TILE_FLOOR_ROUGH;
         } else {
             map_furniture = V_TILE_NONE;
@@ -486,7 +624,19 @@ mapdata::set_glyph(int x, int y, int glyph)
         /* traps are not seen magically (I think?), so this only triggers when
            loading a level */
         else if (glyph_is_trap(glyph)) {
-            map_trap = vulture_tilemap_misc[glyph_to_cmap(glyph)];
+            if ((map_special = vulture_trapped_marker(glyph)) != V_TILE_NONE) {
+                /* trap detection's trapped door/box: not a floor trap.  Keep
+                 * whatever box is remembered here (map_obj is untouched),
+                 * redraw a door we have actually seen, and mark it. */
+                map_trap = V_TILE_NONE;
+                if (V_EXTRA_FURNITURE(svl.level.locations[x][y].typ)
+                    && svl.level.locations[x][y].seenv) {
+                    map_furniture = vulture_tilemap_misc[glyph_to_cmap(
+                        back_to_glyph(x, y))];
+                    map_back = V_TILE_FLOOR_ROUGH;
+                }
+            } else
+                map_trap = vulture_tilemap_misc[glyph_to_cmap(glyph)];
             if (map_back == V_MISC_UNMAPPED_AREA)
                 map_back = V_MISC_FLOOR_NOT_VISIBLE;
         }
@@ -495,7 +645,13 @@ mapdata::set_glyph(int x, int y, int glyph)
             /* Nethack shows us the cmaps, therefore there are no traps or
              * objects here */
             map_obj = V_TILE_NONE;
-            map_trap = V_TILE_NONE;
+            /* ...but a remembered engraving IS a cmap in 5.0.0: keep its
+             * decal, from the memory glyph rather than engr_at(), so it
+             * matches what the core remembers */
+            map_trap = (glyph_to_cmap(glyph) == S_engroom
+                        || glyph_to_cmap(glyph) == S_engrcorr)
+                           ? (int) V_MISC_ENGRAVING
+                           : (int) V_TILE_NONE;
 
             /* IS_FURNITURE() may be true while the cmap is S_stone for dark
              * rooms  */
@@ -788,6 +944,13 @@ mapdata::mappos_to_dirkey(point mappos)
     return vulture_numpad_to_hjkl(chartable[dy + 1][dx + 1], 0);
 }
 
+/* s72: 5.0 context-menu bridge (cmd.c) and the last popup's entries */
+extern "C" int vulture_collect_cmd_menu(coordxy, coordxy, int *,
+                                        char (*)[80], int);
+extern "C" void vulture_do_cmd_menu_act(coordxy, coordxy, int);
+static int vmenu_acts[32];
+static int vmenu_count = 0;
+
 eventresult
 mapdata::handle_click(void *result, int button, point mappos)
 {
@@ -809,6 +972,18 @@ mapdata::handle_click(void *result, int button, point mappos)
     /* left click: allow the user to choose from a context menu */
     else if (button == SDL_BUTTON_RIGHT)
         action_id = get_map_contextmenu(mappos);
+
+    /* s72: an entry from 5.0's own menu - queue it through the core and
+     * hand back a click that readchar_core() knows is already handled */
+    if (action_id >= V_ACTION_NHMENU
+        && action_id < V_ACTION_NHMENU + vmenu_count) {
+        vulture_do_cmd_menu_act(mappos.x, mappos.y,
+                                vmenu_acts[action_id - V_ACTION_NHMENU]);
+        ((vulture_event *) result)->num = 0;
+        ((vulture_event *) result)->x = mappos.x;
+        ((vulture_event *) result)->y = mappos.y;
+        return V_EVENT_HANDLED_FINAL;
+    }
 
     /* if an action was chosen, return it and leave the event loop */
     if (action_id) {
@@ -939,6 +1114,27 @@ mapdata::map_square_description(point target, int include_seen)
                 out_str += temp_buf;
             }
         }
+
+        /* Vulture mod (IMPLEMENTATION_LOG §46): a pet you can actually see
+           shows its health and hunger - the hero can tell at a glance.
+           Hunger mirrors dogmove.c (dog_hunger / DOG_HUNGRY 300, DOG_WEAK
+           500): "hungry" once it would eat anything, "starving" once it is
+           losing max HP.  Skipped while hallucinating (the shown monster
+           is not the real one). */
+        if (look_buf[0] && mtmp && mtmp->mtame && canspotmon(mtmp)
+            && !Hallucination) {
+            const char *hunger = "";
+
+            if (has_edog(mtmp)) {
+                if (svm.moves > EDOG(mtmp)->hungrytime + 500L)
+                    hunger = ", starving!";
+                else if (svm.moves > EDOG(mtmp)->hungrytime + 300L)
+                    hunger = ", hungry";
+            }
+            snprintf(temp_buf, BUFSZ, " (HP %d/%d%s)", mtmp->mhp,
+                     mtmp->mhpmax, hunger);
+            out_str += temp_buf;
+        }
     } else if (map_obj[target.y][target.x] != V_TILE_NONE) {
         look_buf[0] = '\0';
         monbuf[0] = '\0';
@@ -1050,177 +1246,57 @@ mapdata::get_map_action(point mappos)
     return V_ACTION_NONE;
 }
 
-/* display a context menu for the given map location and return the chosen
- * action */
+/* IMPLEMENTATION_LOG s72: the right-click popup lists what 5.0's own
+ * #therecmdmenu would offer for this square (doors: open/close/lock/
+ * unlock/kick/untrap; monsters: chat/attack/name/ride/saddle; your square:
+ * pick up/loot/eat/quaff/dip/sit/offer/stairs/tip/...; far squares:
+ * throw/travel) and performs the pick through 5.0's act_on_act().  The
+ * old hardcoded 3.x list missed most of these.  Vulture's own extras that
+ * 5.0's menu lacks (Fire, Engrave, Pray, Turn undead, Wipe face, Pay bill,
+ * What's this?) are appended. */
+
 map_action
 mapdata::get_map_contextmenu(point mappos)
 {
     contextmenu *menu;
-    int mapglyph_offset;
-    int result;
+    char txt[32][80];
+    int i, result, extras = 0;
+    bool self = (u.ux == mappos.x && u.uy == mappos.y);
+    bool has_look = false;
 
     /* Dropdown commands are shown only for valid squares */
     if ((mappos.x < 1) || (mappos.x >= COLNO) || (mappos.y < 0)
         || (mappos.y >= ROWNO))
         return V_ACTION_NONE;
 
-    /* Construct a context-sensitive drop-down menu */
     menu = new contextmenu(levwin);
 
-    if ((u.ux == mappos.x) && (u.uy == mappos.y)) {
-        /* Add personal options: */
-        menu->add_item("Fire", V_ACTION_FIRE);
+    vmenu_count = vulture_collect_cmd_menu(mappos.x, mappos.y, vmenu_acts,
+                                           txt, 32);
+    for (i = 0; i < vmenu_count; i++) {
+        if (strstr(txt[i], "Look at"))
+            has_look = true;
+        menu->add_item(txt[i], V_ACTION_NHMENU + i);
+    }
 
-        menu->add_item("Engrave", V_ACTION_ENGRAVE);
-        menu->add_item("Look around", V_ACTION_LOOK_AROUND);
-        menu->add_item("Monster ability", V_ACTION_MONSTER_ABILITY);
-
+    if (self) {
+        menu->add_item("Fire", V_ACTION_FIRE), extras++;
+        menu->add_item("Engrave", V_ACTION_ENGRAVE), extras++;
         if (*u.ushops)
-            menu->add_item("Pay bill", V_ACTION_PAY_BILL);
-
-        menu->add_item("Pray", V_ACTION_PRAY);
-        menu->add_item("Rest", V_ACTION_REST);
-        menu->add_item("Search", V_ACTION_SEARCH);
-        menu->add_item("Sit", V_ACTION_SIT);
-
-        /* do a minimum check to leave turn undead out for those who
-         * _definitely_ can't do it */
-#if defined(VULTURE_NETHACK) || defined(VULTURE_UNNETHACK)
-                if (Role_if(PM_PRIEST) || Role_if(PM_KNIGHT) ||
-#endif
-#ifdef VULTURE_SLASHEM
-		if (tech_known(T_TURN_UNDEAD) ||
-#endif
-			objects[SPE_TURN_UNDEAD].oc_name_known)
-			menu->add_item("Turn undead", V_ACTION_TURN_UNDEAD);
-
-		menu->add_item("Wipe face", V_ACTION_WIPE_FACE);
+            menu->add_item("Pay bill", V_ACTION_PAY_BILL), extras++;
+        menu->add_item("Pray", V_ACTION_PRAY), extras++;
+        if (Role_if(PM_PRIEST) || Role_if(PM_KNIGHT)
+            || objects[SPE_TURN_UNDEAD].oc_name_known)
+            menu->add_item("Turn undead", V_ACTION_TURN_UNDEAD), extras++;
+        if (Glib || u.ucreamed)
+            menu->add_item("Wipe face", V_ACTION_WIPE_FACE), extras++;
     }
+    if (!has_look && map_back[mappos.y][mappos.x] != V_TILE_NONE)
+        menu->add_item("What's this?", V_ACTION_WHATS_THIS), extras++;
 
-    /* monster options */
-    else if (map_mon[mappos.y][mappos.x] != V_TILE_NONE)
-        if ((abs(u.ux - mappos.x) <= 1) && (abs(u.uy - mappos.y) <= 1)) {
-            menu->add_item("Chat", V_ACTION_CHAT);
-            menu->add_item("Fight", V_ACTION_FIGHT);
-            menu->add_item("Name", V_ACTION_NAMEMON);
-        }
-
-    /* Add object options: */
-    if (map_obj[mappos.y][mappos.x] != V_TILE_NONE
-        && (abs(u.ux - mappos.x) <= 1 && abs(u.uy - mappos.y) <= 1)) {
-        mapglyph_offset = map_obj[mappos.y][mappos.x];
-        switch (mapglyph_offset - OBJTILEOFFSET) {
-        /* containers have special options */
-        case LARGE_BOX:
-        case ICE_BOX:
-        case CHEST:
-            if ((u.ux == mappos.x) && (u.uy == mappos.y)) {
-                menu->add_item("Force lock", V_ACTION_FORCE_LOCK);
-                menu->add_item("Loot", V_ACTION_LOOT);
-                menu->add_item("Pick up", V_ACTION_PICK_UP);
-            }
-            menu->add_item("Untrap", V_ACTION_UNTRAP);
-            break;
-
-        case SACK:
-        case OILSKIN_SACK:
-        case BAG_OF_HOLDING:
-        case BAG_OF_TRICKS:
-            if ((u.ux == mappos.x) && (u.uy == mappos.y)) {
-                menu->add_item("Loot", V_ACTION_LOOT);
-                menu->add_item("Pick up", V_ACTION_PICK_UP);
-            }
-            break;
-
-        /* all other objects can merly be picked up */
-        default:
-            if ((u.ux == mappos.x) && (u.uy == mappos.y))
-                menu->add_item("Pick up", V_ACTION_PICK_UP);
-            break;
-        }
-    }
-
-    /* Add location options: */
-    if (map_furniture[mappos.y][mappos.x] != V_TILE_NONE
-        && abs(u.ux - mappos.x) <= 1 && abs(u.uy - mappos.y) <= 1) {
-        switch (map_furniture[mappos.y][mappos.x]) {
-        case V_MISC_STAIRS_DOWN:
-        case V_MISC_LADDER_DOWN:
-            if ((u.ux == mappos.x) && (u.uy == mappos.y))
-                menu->add_item("Go down", V_ACTION_GO_DOWN);
-            break;
-
-        case V_MISC_STAIRS_UP:
-        case V_MISC_LADDER_UP:
-            if ((u.ux == mappos.x) && (u.uy == mappos.y))
-                menu->add_item("Go up", V_ACTION_GO_UP);
-            break;
-
-        case V_MISC_FOUNTAIN:
-        case V_MISC_SINK:
-#ifdef VULTURE_SLASHEM
-        case V_MISC_TOILET:
-#endif
-            if ((u.ux == mappos.x) && (u.uy == mappos.y))
-                menu->add_item("Drink", V_ACTION_DRINK);
-            break;
-
-        case V_MISC_VDOOR_WOOD_OPEN:
-        case V_MISC_HDOOR_WOOD_OPEN:
-            if ((u.ux != mappos.x) || (u.uy != mappos.y)) {
-                menu->add_item("Close door", V_ACTION_CLOSE_DOOR);
-                menu->add_item("Untrap", V_ACTION_UNTRAP);
-                menu->add_item("Kick", V_ACTION_KICK);
-            }
-            break;
-
-        case V_MISC_VDOOR_WOOD_CLOSED:
-        case V_MISC_HDOOR_WOOD_CLOSED:
-            if ((u.ux != mappos.x) || (u.uy != mappos.y)) {
-                menu->add_item("Open door", V_ACTION_OPEN_DOOR);
-                menu->add_item("Untrap", V_ACTION_UNTRAP);
-                menu->add_item("Kick", V_ACTION_KICK);
-            }
-            break;
-
-        case V_MISC_ALTAR:
-            if ((u.ux == mappos.x) && (u.uy == mappos.y))
-                menu->add_item("Offer", V_ACTION_OFFER);
-            else
-                menu->add_item("Kick", V_ACTION_KICK);
-            break;
-
-        case V_MISC_GRAVE:
-            if ((u.ux == mappos.x) && (u.uy == mappos.y))
-                menu->add_item("Read", V_ACTION_READ);
-            break;
-
-        default:
-            if ((u.ux != mappos.x) || (u.uy != mappos.y))
-                menu->add_item("Kick", V_ACTION_KICK);
-            break;
-        }
-    }
-
-    /* (known) traps */
-    if (map_trap[mappos.y][mappos.x] != V_TILE_NONE) {
-        menu->add_item("Untrap", V_ACTION_UNTRAP);
-        if ((u.ux != mappos.x) || (u.uy != mappos.y))
-            if ((abs(u.ux - mappos.x) <= 1) && (abs(u.uy - mappos.y) <= 1))
-                menu->add_item("Enter trap", V_ACTION_MOVE_HERE);
-    }
-
-    /* pushing is walking into the boulder: only a direction key does that */
-    if (sobj_at(BOULDER, mappos.x, mappos.y)
-        && ((u.ux != mappos.x) || (u.uy != mappos.y))
-        && (abs(u.ux - mappos.x) <= 1) && (abs(u.uy - mappos.y) <= 1))
-        menu->add_item("Push boulder", V_ACTION_MOVE_HERE);
-
-    /* move to and look will work for every (mapped) square */
-    if (map_back[mappos.y][mappos.x] != V_TILE_NONE) {
-        if ((u.ux != mappos.x) || (u.uy != mappos.y))
-            menu->add_item("Move here", V_ACTION_TRAVEL);
-        menu->add_item("What's this?", V_ACTION_WHATS_THIS);
+    if (!vmenu_count && !extras) {
+        delete menu;
+        return V_ACTION_NONE;
     }
 
     menu->layout();

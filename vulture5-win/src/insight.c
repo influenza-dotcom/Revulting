@@ -3175,6 +3175,44 @@ doborn(void)
     return ECMD_OK;
 }
 
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §37): the #photos command.
+ *
+ * 5.0.0 already records every species caught by a camera flash
+ * (svm.mvitals[].photographed, set in see_monster_closeup(), mon.c) and
+ * saves it - it just never showed the list to anyone.  This only reads it,
+ * so it costs no save-format change and works on games started before the
+ * mod.  Listed in monster-index order, which groups by monster class.
+ */
+int
+dophotos(void)
+{
+    winid datawin;
+    char buf[BUFSZ];
+    int i, n = 0;
+
+    for (i = LOW_PM; i < NUMMONS; i++)
+        if (svm.mvitals[i].photographed)
+            n++;
+
+    if (!n) {
+        You("haven't photographed any monsters yet.");
+        return ECMD_OK;
+    }
+
+    datawin = create_nhwindow(NHW_TEXT);
+    Sprintf(buf, "Photo album: %d species", n);
+    putstr(datawin, ATR_BOLD, buf);
+    putstr(datawin, 0, "");
+    for (i = LOW_PM; i < NUMMONS; i++)
+        if (svm.mvitals[i].photographed)
+            putstr(datawin, 0, mons[i].pmnames[NEUTRAL]);
+
+    display_nhwindow(datawin, FALSE);
+    destroy_nhwindow(datawin);
+    return ECMD_OK;
+}
+
 RESTORE_WARNING_FORMAT_NONLITERAL
 
 /*

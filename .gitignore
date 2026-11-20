@@ -49,3 +49,6 @@
 # and none should ever be re-added.
 *.bak
 *.prezoom
+
+# Personal launch shortcuts (absolute paths to this PC)
+/*.lnk

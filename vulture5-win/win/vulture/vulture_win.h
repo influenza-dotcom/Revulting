@@ -8,6 +8,7 @@
 #undef yn
 #endif
 #include <string>
+#include <vector>
 
 class window;
 
@@ -98,6 +99,9 @@ typedef struct event {
 extern void vulture_messagebox(std::string message);
 extern int vulture_get_input(int x, int y, const char *ques, char *input,
                              const char *default_text = NULL);
+/* §44: same, with Tab completion + live match hints over `words` */
+extern int vulture_get_input_completing(const char *ques, char *input,
+                                        const std::vector<std::string> &words);
 
 
 /* drawing functions */

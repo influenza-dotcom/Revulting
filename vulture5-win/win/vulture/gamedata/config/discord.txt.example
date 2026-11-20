@@ -1,0 +1,27 @@
+# Discord mail for NetHack (Vulture build, IMPLEMENTATION_LOG s76)
+#
+# Messages posted in ONE Discord channel are delivered in-game by the mail
+# daemon as scrolls of mail; reading one lets you write a reply, which the
+# bot posts back to the channel as a Discord reply.
+#
+# To turn it on, copy this file to  discord.txt  (same folder) and fill in
+# the two values.  Keep discord.txt private - the token is your bot's
+# password.  It is only ever sent to discord.com.
+#
+# 1. https://discord.com/developers/applications -> New Application.
+# 2. Bot tab -> Reset Token -> copy it into token= below.
+#    On the same tab, turn ON "Message Content Intent".
+# 3. OAuth2 -> URL Generator: scope "bot"; permissions "View Channels",
+#    "Read Message History", "Send Messages".  Open the URL and add the
+#    bot to your server.
+# 4. In Discord: Settings -> Advanced -> Developer Mode ON, then right-click
+#    the channel you want -> Copy Channel ID -> paste into channel= below.
+# 5. Start a game.  Anything posted in that channel from then on arrives
+#    by mail daemon (checked every 'poll' seconds).  Messages from bots
+#    (including your own replies) are not delivered.
+#
+# The in-game option  mail  (on by default) turns delivery on/off.
+
+token=PASTE_BOT_TOKEN_HERE
+channel=PASTE_CHANNEL_ID_HERE
+poll=20

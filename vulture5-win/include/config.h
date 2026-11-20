@@ -672,7 +672,7 @@ typedef unsigned char uchar;
 #undef LIVELOG
 #endif /* NO_CHRONICLE */
 
-/* #define DUMPLOG */  /* End-of-game dump logs */
+#define DUMPLOG /* End-of-game dump logs - Vulture mod 2026-11-18, IMPLEMENTATION_LOG s54 */
 
 #define USE_ISAAC64 /* Use cross-platform, bundled RNG */
 

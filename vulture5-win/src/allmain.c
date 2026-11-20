@@ -441,6 +441,8 @@ moveloop_core(void)
     /****************************************/
 
     clear_splitobjs();
+    autoid_price_pass(); /* local 'autoid' option (shk.c) */
+    vulture_qol_pass();  /* low-HP warning + quiver readout (§45) */
 
     /* the Amulet of Yendor gives a wish when initially picked up */
     if (u.uhave.amulet && !u.uevent.amulet_wish) {
@@ -679,6 +681,155 @@ regen_hp(int wtcap)
 }
 
 #undef U_CAN_REGEN
+
+/*
+ * Vulture mod (IMPLEMENTATION_LOG §45), once per player input:
+ *  - Low-HP warning: one message the first time HP drops below a third of
+ *    max (or to 5 or less), re-armed once HP is back above half.  Not saved:
+ *    a game restored while already low warns once more, which is fine.
+ *  - Quiver readout: the Vulture status bar shows the quivered stack, but
+ *    throwing doesn't set disp.botl, so it would go stale; refresh the
+ *    status line whenever the quivered object or its count changes.
+ */
+void
+vulture_qol_pass(void)
+{
+    static boolean hp_warned = FALSE;
+    static struct obj *last_quiver = (struct obj *) 0;
+    static long last_qcount = -1L;
+    int hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax;
+    long qcount = uquiver ? uquiver->quan : 0L;
+    static boolean llm_warmed = FALSE;
+
+    /* §69: load the #chat model in the background once per run, so the
+       first chat doesn't wait out the model load */
+    if (!llm_warmed && *iflags.llmchat) {
+        extern void vulture_llm_warmup(const char *);
+
+        llm_warmed = TRUE;
+        vulture_llm_warmup(iflags.llmchat);
+    }
+    llm_pet_name_pass(); /* s70: LLM name for an unnamed starting pet */
+    llm_hero_quip_pass(); /* s76: the hero remarks on things */
+
+    /* s74: presentation - shake on damage, vignette refresh, music zone */
+    {
+        extern void vulture_screen_shake(int);
+        extern void vulture_music_zone(int);
+        extern void vulture_force_map_redraw(void);
+        static int last_hp = -1, last_hpmax = -1, last_vig = -1;
+        static boolean last_poly = FALSE;
+        static long battle_until = 0L, hurt_at = -100L;
+        int vig, zone;
+        struct monst *bm;
+        boolean fight = FALSE;
+
+        if (last_hp >= 0 && last_poly == (Upolyd ? TRUE : FALSE)
+            && hp < last_hp && hp > 0 && hpmax == last_hpmax) {
+            int dmg = last_hp - hp;
+            int str = 1 + (dmg * 16) / (hpmax > 0 ? hpmax : 1);
+
+            hurt_at = svm.moves;
+            flush_screen(1);
+            vulture_screen_shake(str > 8 ? 8 : str);
+        }
+        last_hp = hp, last_hpmax = hpmax;
+        last_poly = Upolyd ? TRUE : FALSE;
+
+        /* vignette steps with HP; redraw the map when the step changes */
+        vig = (hpmax > 0 && hp * 2 < hpmax) ? 1 + (hp * 10) / hpmax : 0;
+        if (vig != last_vig) {
+            last_vig = vig;
+            vulture_force_map_redraw();
+        }
+
+        /* battle: a hostile in sight within 7 squares that is a real
+           threat (not far below your level) or that hurt you lately */
+        for (bm = fmon; bm; bm = bm->nmon)
+            if (!DEADMONSTER(bm) && !bm->mpeaceful && !bm->mtame
+                && canspotmon(bm) && couldsee(bm->mx, bm->my)
+                && distmin(u.ux, u.uy, bm->mx, bm->my) <= 7
+                && (bm->m_lev * 2 >= u.ulevel
+                    || svm.moves - hurt_at < 5)) {
+                fight = TRUE;
+                break;
+            }
+        if (fight)
+            battle_until = svm.moves + 12;
+        if (svm.moves < battle_until)
+            zone = 6;                              /* battle */
+        else if (*u.ushops)
+            zone = 1;                              /* shop */
+        else if (in_town(u.ux, u.uy))
+            zone = 2;                              /* town */
+        else if (Is_oracle_level(&u.uz))
+            zone = 4;
+        else if (In_mines(&u.uz))
+            zone = 3;
+        else if (Inhell)
+            zone = 5;
+        else
+            zone = 0;
+        vulture_music_zone(zone);
+    }
+
+    if (hp > 0 && (hp * 3 < hpmax || (hp <= 5 && hpmax > 10))) {
+        if (!hp_warned) {
+            hp_warned = TRUE;
+            You_feel("dangerously weak!  (HP %d of %d)", hp, hpmax);
+            stop_occupation();
+        }
+    } else if (hp * 2 > hpmax) {
+        hp_warned = FALSE;
+    }
+
+    if (uquiver != last_quiver || qcount != last_qcount) {
+        last_quiver = uquiver;
+        last_qcount = qcount;
+        disp.botl = TRUE;
+    }
+
+    /* §49 auto-explore chain: once a leg's travel has fully stopped, keep
+       going only if it reached its target (anything that interrupted
+       travel - a monster appearing, a door, a trap, a message - leaves the
+       hero short of it) and the coast is clear.  The next leg is queued as
+       a canned command, which rhack() runs before reading a key. */
+    autoexplore_note_position(); /* §55: squares stood on, per level */
+
+    if (autoexplore_active && !gm.multi && !svc.context.run
+        && !svc.context.travel && !go.occupation) {
+        boolean arrived = u_at(autoexplore_target.x, autoexplore_target.y);
+        boolean reroute = autoexplore_reroute;
+
+        autoexplore_reroute = FALSE;
+        if (!arrived && reroute && !hp_warned
+            && !autoexplore_hostile_in_view() && !cmdq_peek(CQ_CANNED)) {
+            /* §67: a locked door stopped the leg - pick another route */
+            cmdq_add_ec(CQ_CANNED, doautoexplore);
+        } else if (!arrived || hp_warned || autoexplore_hostile_in_view()
+            || cmdq_peek(CQ_CANNED)) {
+            autoexplore_active = FALSE;
+        } else if (autoexplore_mode == AEX_ITEM) {
+            /* §55: stop at things worth a look (look_here already ran) */
+            autoexplore_active = FALSE;
+        } else if (autoexplore_mode == AEX_DEADEND) {
+            autoexplore_start_search(); /* sets AEX_SEARCHING */
+        } else {
+            /* frontier reached, or a dead-end search just finished */
+            cmdq_add_ec(CQ_CANNED, doautoexplore);
+        }
+    }
+
+    /* §56 smart '>': travel to the stairs finished - go down if we got
+       there, otherwise (interrupted) just stop */
+    if (descend_pending && !gm.multi && !svc.context.run
+        && !svc.context.travel && !go.occupation) {
+        descend_pending = FALSE;
+        if (u_at(descend_target.x, descend_target.y)
+            && !cmdq_peek(CQ_CANNED))
+            cmdq_add_ec(CQ_CANNED, descend_is_up ? doup : dodown);
+    }
+}
 
 void
 stop_occupation(void)

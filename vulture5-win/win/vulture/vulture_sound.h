@@ -42,6 +42,8 @@ extern void vulture_init_sound(void);
 extern void vulture_play_ambient_sound(int force_play);
 extern void vulture_play_event_sound(const char *);
 extern void vulture_stop_music(void);
+/* IMPLEMENTATION_LOG s64: silence everything while the window is unfocused */
+extern void vulture_focus_mute(int muted);
 
 
 extern vulture_cached_sound * vulture_cached_sounds;

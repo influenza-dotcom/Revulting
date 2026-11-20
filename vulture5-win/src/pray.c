@@ -1073,6 +1073,7 @@ pleased(aligntyp g_align)
     /* don't use p_trouble, worst trouble may get fixed while praying */
     int trouble = in_trouble(); /* what's your worst difficulty? */
     int pat_on_head = 0, kick_on_butt;
+    int trouble0 = trouble, pat_roll = -1; /* Vulture s73 */
 
     You_feel("that %s is %s.", align_gname(g_align),
              (u.ualign.record >= DEVOUT)
@@ -1164,7 +1165,7 @@ pleased(aligntyp g_align)
        fixed or there were no troubles to begin with; hallucination
        won't be in effect so special handling for it is superfluous */
     if (pat_on_head)
-        switch (rn2((Luck + 6) >> 1)) {
+        switch ((pat_roll = rn2((Luck + 6) >> 1))) {
         case 0:
             break;
         case 1:
@@ -1377,6 +1378,10 @@ pleased(aligntyp g_align)
         u.ublesscnt += (int) incr;
     }
 
+    /* Vulture s73: no trouble fixed and no favour granted - the god is
+       listening anyway; with llmchat you may ask it a question */
+    if (trouble0 == 0 && gp.p_trouble == 0 && pat_roll <= 0)
+        llm_ask_god(g_align);
     return;
 }
 
@@ -2230,6 +2235,18 @@ dopray(void)
     if (!can_pray(TRUE))
         return ECMD_OK;
 
+    /* Vulture mod (IMPLEMENTATION_LOG §63): note every prayer in the
+       chronicle (saved with the game, no format change) so the status
+       line's prayer sense can go by "turns since you last prayed" - which
+       the hero knows - instead of the hidden prayer timeout */
+    {
+        char pbuf[BUFSZ];
+
+        Snprintf(pbuf, sizeof pbuf, "prayed to %s",
+                 align_gname(gp.p_aligntyp));
+        gamelog_add(LL_MINORAC, svm.moves, pbuf);
+    }
+
     if (wizard && gp.p_type >= 0) {
         static const char forcesuccess[] = "Force the gods to be pleased?";
 
@@ -2716,6 +2733,30 @@ blocked_boulder(int dx, int dy)
         return TRUE;
 
     return FALSE;
+}
+
+/* Vulture mod (IMPLEMENTATION_LOG §63): turns since the hero last prayed,
+ * from the chronicle ("prayed to ..." entries, plus the first-prayer
+ * conduct line).  Never prayed: turns since the game began.  A save from
+ * before this build only has the FIRST prayer on record, so it reads long
+ * until the next prayer.  (gnostic can't tell "prayed" apart: sacrifice
+ * and turn undead count too.) */
+long
+vq_turns_since_prayer(void)
+{
+    long last = -1L;
+#ifdef CHRONICLE
+    struct gamelog_line *gl;
+
+    for (gl = gg.gamelog; gl; gl = gl->next)
+        if (gl->text && (!strncmp(gl->text, "prayed to ", 10)
+                         || !strcmp(gl->text,
+                                    "rejected atheism with a prayer")))
+            last = gl->turn;
+#endif
+    if (last < 0L)
+        return svm.moves;
+    return svm.moves - last;
 }
 
 /*pray.c*/

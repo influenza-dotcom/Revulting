@@ -451,17 +451,61 @@ newmail(struct mail_info *info)
 
  give_up:
     /* deliver some classes of messages even if no daemon ever shows up */
-    if (!message_seen && info->message_typ == MSG_OTHER)
+    if (!message_seen && info->message_typ == MSG_OTHER) {
         pline("Hark!  \"%s.\"", info->display_txt);
+    } else if (!message_seen && info->response_cmd
+               && !strncmp(info->response_cmd, "discord\037", 8)) {
+        /* Vulture s76: a Discord letter is never lost - no daemon could
+           reach you, so it arrives anyway */
+        struct obj *obj = mksobj(SCR_MAIL, FALSE, FALSE);
+
+        if (info->object_nam)
+            obj = oname(obj, info->object_nam, ONAME_NO_FLAGS);
+        new_omailcmd(obj, info->response_cmd);
+        pline("A scroll of mail flutters down out of nowhere!");
+        obj = hold_another_object(obj, "Oops!", (const char *) 0,
+                                  (const char *) 0);
+        nhUse(obj);
+    }
 }
 
 #if !defined(UNIX) && !defined(VMS)
+
+/* Vulture s76: Discord transport (win/vulture/vulture_discord.cpp) */
+extern int vulture_discord_enabled(void);
+extern int vulture_discord_pop(char *, int, char *, int, char *, int);
+extern int vulture_discord_reply(const char *, const char *);
 
 void
 ckmailstatus(void)
 {
     if (u.uswallow || !flags.biff)
         return;
+    /* Vulture s76: with %USERPROFILE%\NetHack\discord.txt set up, the
+       daemon brings real messages from a Discord channel instead of the
+       fake junk mail.  The scroll is named after the sender and carries
+       "discord<US>msgid<US>author<US>text" in its omailcmd (saved with the
+       object). */
+    if (vulture_discord_enabled()) {
+        static char author[64], text[1600], msgid[32], disp[BUFSZ],
+            cmd[1800];
+        static struct mail_info info;
+
+        if (vulture_discord_pop(author, (int) sizeof author, text,
+                                (int) sizeof text, msgid,
+                                (int) sizeof msgid)) {
+            Snprintf(disp, sizeof disp, "I have a message for you from %s",
+                     author);
+            Snprintf(cmd, sizeof cmd, "discord\037%s\037%s\037%s", msgid,
+                     author, text);
+            info.message_typ = MSG_MAIL;
+            info.display_txt = disp;
+            info.object_nam = author;
+            info.response_cmd = cmd;
+            newmail(&info);
+        }
+        return;
+    }
     if (mustgetmail < 0) {
 #if defined(AMIGA) || defined(MSDOS) || defined(TOS)
         mustgetmail = (svm.moves < 2000) ? (100 + rn2(2000))
@@ -482,9 +526,69 @@ DISABLE_WARNING_FORMAT_NONLITERAL
 
 enum delivery_types { faulty_delivery, normal_delivery, subst_delivery };
 
+/* Vulture s76: show a Discord letter and offer a reply */
+staticfn boolean
+read_discord_mail(struct obj *otmp)
+{
+    char buf[1800], line[BUFSZ], reply[BUFSZ];
+    char *id, *author, *text, *p;
+    winid w;
+    int col = 0;
+
+    if (!otmp || !has_omailcmd(otmp)
+        || strncmp(OMAILCMD(otmp), "discord\037", 8))
+        return FALSE;
+    (void) strncpy(buf, OMAILCMD(otmp) + 8, sizeof buf - 1);
+    buf[sizeof buf - 1] = '\0';
+    id = buf;
+    if (!(author = strchr(id, '\037')))
+        return FALSE;
+    *author++ = '\0';
+    if (!(text = strchr(author, '\037')))
+        return FALSE;
+    *text++ = '\0';
+    if (Blind) {
+        pline("Unfortunately you cannot see what it says.");
+        return TRUE;
+    }
+    w = create_nhwindow(NHW_TEXT);
+    Snprintf(line, sizeof line, "A letter from %s:", author);
+    putstr(w, 0, line);
+    putstr(w, 0, "");
+    /* word-wrap at 70 columns, honouring the message's own line breaks */
+    line[0] = '\0';
+    for (p = text; ; p++) {
+        if (!*p || *p == '\n' || (*p == ' ' && col >= 70)) {
+            putstr(w, 0, line);
+            line[0] = '\0';
+            col = 0;
+            if (!*p)
+                break;
+            continue;
+        }
+        if (col < (int) sizeof line - 2) {
+            line[col++] = *p;
+            line[col] = '\0';
+        }
+    }
+    display_nhwindow(w, TRUE);
+    destroy_nhwindow(w);
+    if (vulture_discord_enabled() && y_n("Write a reply?") == 'y') {
+        getlin("Your reply:", reply);
+        mungspaces(reply);
+        if (*reply && *reply != '\033') {
+            if (vulture_discord_reply(id, reply))
+                pline("You hand your reply to a passing mail daemon.");
+            else
+                pline("Your reply goes astray.");
+        }
+    }
+    return TRUE;
+}
+
 /*ARGSUSED*/
 void
-readmail(struct obj *otmp UNUSED)
+readmail(struct obj *otmp)
 {
     int i;
     enum delivery_types delivery = normal_delivery;
@@ -517,6 +621,8 @@ readmail(struct obj *otmp UNUSED)
     };
     const char *const it_reads = "It reads:  \"";
 
+    if (read_discord_mail(otmp)) /* Vulture s76 */
+        return;
     i = rn2(SIZE(junk_templates));
     if (strchr(junk_templates[i], '%')) {
         if (i == 0) {

@@ -49,6 +49,35 @@ objheaderwin::draw()
         vulture_fill_rect(x + V_UI(2), y + V_UI(2), x + h - V_UI(3),
                           y + h - V_UI(3), CLR32_BLACK_A30);
 
+        /* Blessed/cursed wash, matching objitemwin.  There is no struct obj
+         * to read bknown/blessed/cursed from, so take it from the row text
+         * the core already showed the player: a whole word "blessed" or
+         * "cursed" ("uncursed" is a different word and stays unwashed).
+         * It can never reveal more than the text itself says. */
+        {
+            bool blessed = false, cursed = false;
+            size_t pos = 0;
+
+            while (pos < caption.size()) {
+                size_t end = caption.find(' ', pos);
+                if (end == std::string::npos)
+                    end = caption.size();
+                std::string word = caption.substr(pos, end - pos);
+                if (word == "blessed")
+                    blessed = true;
+                else if (word == "cursed")
+                    cursed = true;
+                pos = end + 1;
+            }
+
+            if (blessed)
+                vulture_fill_rect(x + V_UI(2), y + V_UI(2), x + h - V_UI(3),
+                                  y + h - V_UI(3), CLR32_BLESS_BLUE);
+            else if (cursed)
+                vulture_fill_rect(x + V_UI(2), y + V_UI(2), x + h - V_UI(3),
+                                  y + h - V_UI(3), CLR32_CURSE_RED);
+        }
+
         /* same small-icon substitution objitemwin makes */
         if (TILE_IS_OBJECT(icon)) {
             icon = icon - OBJTILEOFFSET + ICOTILEOFFSET;

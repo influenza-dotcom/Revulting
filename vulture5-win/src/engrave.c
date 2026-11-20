@@ -18,6 +18,11 @@ struct _doengrave_ctx {
     boolean disprefresh; /* TRUE if the display needs a refresh */
     boolean frosted;  /* TRUE if engraving on ice */
     boolean adding;   /* TRUE if adding to existing engraving */
+    boolean had_engr; /* local autoid: an engraving was here at the zap */
+    boolean autoid_done; /* local autoid: already named from a message */
+
+    int autoid_otyp;  /* local autoid: the wand's type (survives useup) */
+    const char *autoid_label; /* local autoid: name its message implies */
 
     int ret;          /* doengrave return value */
     int type;         /* Type of engraving made */
@@ -553,6 +558,10 @@ doengrave_ctx_init(struct _doengrave_ctx *de)
     de->zapwand = FALSE;
     de->disprefresh = FALSE;
     de->adding = FALSE;
+    de->had_engr = FALSE;
+    de->autoid_done = FALSE;
+    de->autoid_otyp = STRANGE_OBJECT;
+    de->autoid_label = (const char *) 0;
 
     de->ret = ECMD_OK;
     de->type = DUST;
@@ -582,6 +591,12 @@ doengrave_ctx_init(struct _doengrave_ctx *de)
 staticfn void
 doengrave_sfx_item_WAN(struct _doengrave_ctx *de)
 {
+    /* local 'autoid': remember what this zap can tell us.  Labels are only
+       set where the player actually gets the message (mostly !Blind);
+       they are applied in doengrave() when post_engr_text is shown. */
+    de->autoid_otyp = de->otmp->otyp;
+    de->had_engr = (de->oep != 0);
+
     switch (de->otmp->otyp) {
         /* DUST wands */
     default:
@@ -602,17 +617,20 @@ doengrave_sfx_item_WAN(struct _doengrave_ctx *de)
     case WAN_STRIKING:
         Strcpy(de->post_engr_text,
                "The wand unsuccessfully fights your attempt to write!");
+        de->autoid_label = "striking";
         break;
     case WAN_SLOW_MONSTER:
         if (!Blind) {
             Sprintf(de->post_engr_text, "The bugs on the %s slow down!",
                     surface(u.ux, u.uy));
+            de->autoid_label = "slow monster";
         }
         break;
     case WAN_SPEED_MONSTER:
         if (!Blind) {
             Sprintf(de->post_engr_text, "The bugs on the %s speed up!",
                     surface(u.ux, u.uy));
+            de->autoid_label = "speed monster";
         }
         break;
     case WAN_POLYMORPH:
@@ -630,6 +648,8 @@ doengrave_sfx_item_WAN(struct _doengrave_ctx *de)
                 xcrypt(blengr(), de->buf);
             }
             de->dengr = TRUE;
+            if (!Blind) /* the old text visibly changes */
+                de->autoid_label = "polymorph";
         }
         break;
     case WAN_NOTHING:
@@ -645,6 +665,7 @@ doengrave_sfx_item_WAN(struct _doengrave_ctx *de)
             Sprintf(de->post_engr_text,
                     "The %s is riddled by bullet holes!",
                     surface(u.ux, u.uy));
+            de->autoid_label = "magic missile";
         }
         break;
         /* can't tell sleep from death - Eric Backus */
@@ -653,12 +674,15 @@ doengrave_sfx_item_WAN(struct _doengrave_ctx *de)
         if (!Blind) {
             Sprintf(de->post_engr_text, "The bugs on the %s stop moving!",
                     surface(u.ux, u.uy));
+            de->autoid_label = "sleep or death";
         }
         break;
     case WAN_COLD:
-        if (!Blind)
+        if (!Blind) {
             Strcpy(de->post_engr_text,
                    "A few ice cubes drop from the wand.");
+            de->autoid_label = "cold"; /* even if a burned text vanishes */
+        }
         if (!de->oep || (de->oep->engr_type != BURN))
             break;
         FALLTHROUGH;
@@ -666,17 +690,29 @@ doengrave_sfx_item_WAN(struct _doengrave_ctx *de)
     case WAN_CANCELLATION:
     case WAN_MAKE_INVISIBLE:
         if (de->oep && de->oep->engr_type != HEADSTONE) {
-            if (!Blind)
+            if (!Blind) {
                 pline_The("engraving on the %s vanishes!",
                           surface(u.ux, u.uy));
+                if (de->otmp->otyp != WAN_COLD) { /* shown now: name now */
+                    autoid_call(de->otmp->otyp,
+                       "cancellation, make invisible or teleportation",
+                                "the engraving");
+                    de->autoid_done = TRUE;
+                }
+            }
             de->dengr = TRUE;
         }
         break;
     case WAN_TELEPORTATION:
         if (de->oep && de->oep->engr_type != HEADSTONE) {
-            if (!Blind)
+            if (!Blind) {
                 pline_The("engraving on the %s vanishes!",
                           surface(u.ux, u.uy));
+                autoid_call(de->otmp->otyp,
+                            "cancellation, make invisible or teleportation",
+                            "the engraving");
+                de->autoid_done = TRUE;
+            }
             de->teleengr = TRUE;
         }
         break;
@@ -1186,7 +1222,15 @@ doengrave(void)
     /* Prompt for engraving! */
     Sprintf(de->qbuf, "What do you want to %s the %s here?",
             de->everb, de->eloc);
-    getlin(de->qbuf, de->ebuf);
+    /* Vulture mod (IMPLEMENTATION_LOG §56): doelbereth() (cmd.c) presets
+       the text; honoured only on the turn it was set, then always used up */
+    if (vq_engrave_preset[0] && vq_engrave_preset_turn == svm.moves) {
+        Strcpy(de->ebuf, vq_engrave_preset);
+        pline("%s %s", de->qbuf, de->ebuf);
+    } else {
+        getlin(de->qbuf, de->ebuf);
+    }
+    vq_engrave_preset[0] = '\0';
     /* convert tabs to spaces and condense consecutive spaces to one */
     mungspaces(de->ebuf);
 
@@ -1245,6 +1289,21 @@ doengrave(void)
 
     if (de->post_engr_text[0])
         pline("%s", de->post_engr_text);
+    /* local 'autoid': the zap's message (or its silence) is now shown.
+       Wands that named themselves (digging, fire, lightning, most nodir
+       ones) are oc_name_known by now and autoid_call() skips them. */
+    if (de->autoid_label) {
+        autoid_call(de->autoid_otyp, de->autoid_label, "the engraving");
+    } else if (de->zapwand && !de->autoid_done && !Blind
+               && de->autoid_otyp != STRANGE_OBJECT) {
+        /* no message at all: with an engraving already here this rules
+           out every wand that affects one; without, cancellation, make
+           invisible, teleportation and polymorph also stay silent */
+        autoid_call(de->autoid_otyp,
+                    de->had_engr ? "no engrave message"
+                                 : "no engrave message - retry on an engraving",
+                    "the engraving");
+    }
     if (de->doblind && !resists_blnd(&gy.youmonst)) {
         You("are blinded by the flash!");
         make_blinded((long) rnd(50), FALSE);

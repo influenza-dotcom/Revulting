@@ -675,6 +675,58 @@ docall(struct obj *obj)
         update_inventory();
 }
 
+/*
+ * Local 'autoid' option.  Group labels this code may write as a type's
+ * "called" name.  A name that is one of these is ours and may be refined
+ * by later evidence; any other existing name - the player's own, or an
+ * exact type name we wrote - is never touched.
+ */
+static const char *const autoid_group_labels[] = {
+    "sleep or death",
+    "cancellation, make invisible or teleportation",
+    "no engrave message",
+    "no engrave message - retry on an engraving",
+    "teleportation or polymorph",
+};
+
+staticfn boolean
+autoid_is_group_label(const char *s)
+{
+    int i;
+
+    for (i = 0; i < SIZE(autoid_group_labels); i++)
+        if (!strcmp(s, autoid_group_labels[i]))
+            return TRUE;
+    return FALSE;
+}
+
+/* name object type 'otyp' as 'label' because of 'why' ("the sink", ...),
+   the way #call would, if the 'autoid' option is on.  Never overrides a
+   formal identification or a name the player chose. */
+void
+autoid_call(int otyp, const char *label, const char *why)
+{
+    char **uname_p = &(objects[otyp].oc_uname);
+    char tbuf[BUFSZ];
+
+    if (!iflags.autoid || objects[otyp].oc_name_known)
+        return;
+    if (*uname_p) {
+        if (!strcmp(*uname_p, label) || !autoid_is_group_label(*uname_p))
+            return;
+        /* don't trade a narrow group for a wider one */
+        if (!strcmp(*uname_p, autoid_group_labels[2])
+            && !strcmp(label, autoid_group_labels[3]))
+            return;
+        free((genericptr_t) *uname_p), *uname_p = NULL;
+    }
+    *uname_p = dupstr(label);
+    discover_object(otyp, FALSE, TRUE, TRUE); /* add to discoveries */
+    Strcpy(tbuf, obj_typename(otyp));
+    pline("You make a note from %s: %s.", why, tbuf);
+    update_inventory();
+}
+
 staticfn void
 namefloorobj(void)
 {
