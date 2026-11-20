@@ -34,9 +34,12 @@ Vulture authors.
 
 **Optional local-AI features** (need [Ollama](https://ollama.com) running on
 the same PC; nothing leaves the machine)
-- `OPTIONS=llmchat:<model>` — every message is reworded fresh each time,
-  with checks that keep its meaning (numbers, names, item and monster words,
-  status words must survive; nothing new may be added).
+- `OPTIONS=llmchat:<model>` — turns on the on-demand AI features below
+  (#chat replies, names, ask-your-god, hero remarks).
+- `OPTIONS=llmreword` (off by default; slow) — additionally rewords every
+  message fresh each time, with checks that keep its meaning (numbers,
+  names, item and monster words, status words must survive; nothing new
+  may be added).
 - `OPTIONS=llmtalk` — type what you say to monsters.
 - Pets and peaceful talkers get names; ask your god a question after a
   prayer that brought nothing; `OPTIONS=heroquips` — your hero mutters
