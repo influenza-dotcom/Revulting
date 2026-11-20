@@ -2350,6 +2350,32 @@ at all while Blind and only cansee() sources; lava glow also gated on
 its bloodstain (mondead hook) used canspotmon (true via telepathy) - now
 canseemon.  The hero's own damage numbers stay (you know your HP).
 
+## 100. The 2027 HUD: toasts, location cards, heat stars, waypoint (2026-11-20)
+
+All in levelwin.cpp (vhud_*), drawn last in the map draw, so it animates
+through vulture_idle_bob.
+- **Toasts** (vulture_toast): a card slides in on the right, holds about
+  4.8 s, then slides out, with a chime, three at a time.
+  - insight.c record_achievement: "ACHIEVEMENT UNLOCKED" or "NEW RANK".
+  - exper.c pluslvl: "LEVEL UP".
+- **Location card** (do.c vulture_place_card -> vulture_location_card):
+  - Content: the dungeon name in spaced capitals, with the special place
+    or "Level N" under it.
+  - Shown on a new level, on a change of dungeon, and once per session
+    from vulture_qol_pass.
+- **Heat stars** (vhud_heat, 0-5):
+  - Points: angry shopkeeper +2, angry watch +2, angry priest +1, angry
+    vault guard +1, angry god +1 (+2 when ugangr > 3), udemigod +2.
+  - The stars flash and a whistle sounds when the heat rises.
+- **Waypoint**:
+  - Target: the remembered (seenv) down stairs, or up stairs with the
+    Amulet. It prefers stairs in the same dungeon over a branch.
+  - On screen: a bobbing chevron labelled "Down"/"Up". Off screen: an
+    edge arrow with the distance.
+  - Hidden while hostiles are in view, blind, hallucinating or engulfed.
+- **Smoke test:** an off-screen test hero ran 10 s in game with no crash.
+  The visuals have not been checked on a real display.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
