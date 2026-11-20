@@ -95,6 +95,61 @@ extern "C" int vulture_llm_post(int port, const char *path, const char *body,
 	return ok;
 }
 
+/*
+ * s81: background requests, so features nobody is waiting on (the hero's
+ * remarks, naming the starting pet) never freeze the game.  One job at a
+ * time: vulture_llm_async_start() copies the body and starts a thread;
+ * vulture_llm_async_poll() returns 0 while running, 1 with the reply
+ * body copied out, -1 on failure (or when no job exists).
+ */
+static volatile LONG llm_job_state = 0; /* 0 idle, 1 running, 2 done, 3 failed */
+static char *llm_job_body = NULL;
+static char llm_job_reply[16384];
+
+static DWORD WINAPI llm_job_thread(LPVOID)
+{
+	int ok = vulture_llm_post(11434, "/api/generate", llm_job_body,
+	                          llm_job_reply, sizeof llm_job_reply, 30000);
+	InterlockedExchange(&llm_job_state, ok ? 2 : 3);
+	return 0;
+}
+
+extern "C" int vulture_llm_async_start(const char *body)
+{
+	HANDLE h;
+
+	if (llm_job_state == 1)
+		return 0;
+	free(llm_job_body);
+	llm_job_body = _strdup(body);
+	if (!llm_job_body)
+		return 0;
+	InterlockedExchange(&llm_job_state, 1);
+	h = CreateThread(NULL, 0, llm_job_thread, NULL, 0, NULL);
+	if (!h) {
+		InterlockedExchange(&llm_job_state, 3);
+		return 0;
+	}
+	CloseHandle(h);
+	return 1;
+}
+
+extern "C" int vulture_llm_async_poll(char *out, int outlen)
+{
+	LONG st = llm_job_state;
+
+	if (st == 1)
+		return 0;
+	if (st == 2) {
+		strncpy(out, llm_job_reply, outlen - 1);
+		out[outlen - 1] = '\0';
+		InterlockedExchange(&llm_job_state, 0);
+		return 1;
+	}
+	InterlockedExchange(&llm_job_state, 0);
+	return -1;
+}
+
 static char llm_warm_body[512];
 
 static DWORD WINAPI llm_warm_thread(LPVOID)

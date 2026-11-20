@@ -612,6 +612,17 @@ struct vanim_death {
 static vanim_death vanim_deaths[8];
 static int vanim_ndeaths = 0, vanim_dtile = -1, vanim_dx = 0, vanim_dy = 0;
 
+/* s81: animations never hold the player up - a keypress or click waiting
+   in the queue ends one at once */
+static bool
+vanim_input_waiting(void)
+{
+    SDL_PumpEvents();
+    return SDL_PeepEvents(NULL, 0, SDL_PEEKEVENT, SDL_KEYDOWN, SDL_KEYDOWN) > 0
+           || SDL_PeepEvents(NULL, 0, SDL_PEEKEVENT, SDL_MOUSEBUTTONDOWN,
+                             SDL_MOUSEBUTTONDOWN) > 0;
+}
+
 static void
 vanim_frames(int kind, int frames, int delay_ms)
 {
@@ -620,10 +631,19 @@ vanim_frames(int kind, int frames, int delay_ms)
 
     vanim_kind = kind;
     for (f = 1; f <= frames; f++) {
+        Uint32 tf = SDL_GetTicks();
+
         vanim_t = (double) f / frames;
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         vulture_refresh_window_region();
+        if (vanim_input_waiting())
+            break;
+        /* slow machine/big window: keep the whole thing under ~150 ms */
+        if (f == 1 && SDL_GetTicks() - tf > 25 && frames > 3)
+            frames = 3;
+        if (SDL_GetTicks() - t0 > 150)
+            break;
         SDL_Delay(delay_ms);
     }
     vanim_kind = 0;
@@ -743,17 +763,38 @@ vulture_tween_run(void)
 
     if (vtw_animating || vanim_kind || !levwin)
         return;
+    /* s81: running, travelling, auto-explore and repeated commands snap -
+       animating every step there is what made long walks crawl */
+    if (vtw_pending && (svc.context.run || svc.context.travel || gm.multi
+                        || autoexplore_active)) {
+        vtw_pending = false;
+        vtw_t = 1.0;
+        vtw_commit(vtw_last_vx, vtw_last_vy);
+        levwin->force_redraw();
+    }
     if (vtw_pending) {
         Uint32 t0 = SDL_GetTicks();
 
         vtw_animating = true;
-        frames = (svc.context.run || svc.context.travel) ? 5 : 11;
+        frames = 9;
         for (f = 1; f <= frames; f++) {
+            Uint32 tf = SDL_GetTicks();
+
             vtw_t = (double) f / frames;
             levwin->force_redraw();
             ROOTWIN->draw_windows();
             vulture_refresh_window_region();
-            SDL_Delay(14);
+            if (f < frames && vanim_input_waiting()) {
+                /* next key already pressed: jump to the end */
+                vtw_t = 1.0;
+                levwin->force_redraw();
+                ROOTWIN->draw_windows();
+                vulture_refresh_window_region();
+                break;
+            }
+            if (f == 1 && SDL_GetTicks() - tf > 25)
+                frames = 4; /* slow frames: fewer of them */
+            SDL_Delay(12);
         }
         vtw_t = 1.0;
         vtw_pending = false;

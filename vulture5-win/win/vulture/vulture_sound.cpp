@@ -218,7 +218,6 @@ static void vulture_play_sound(std::string wavefilename)
 	}
 
 	/* Play sound */
-	vulture_write_log(V_LOG_DEBUG, __FILE__, __LINE__, "Playing file %s\n", wavefilename.c_str());
 	Mix_PlayChannel(-1, chunk, 0);
 }
 

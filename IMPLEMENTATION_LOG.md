@@ -2095,6 +2095,22 @@ freezing, boulders and rumbles, lava/gas hiss, drips, cash register,
 tree chopping, digging, locks, chests, sad feelings, wails, land mines.
 NOT yet seen/heard in a game.
 
+## 81. Lag: stale exe, background AI, animations yield (2026-11-20)
+
+User: the game is too laggy.  Root cause: the game was RUNNING during the
+s78-80 builds, so finalize_exe.sh's copy into VultureNetHack/ failed
+("Device or resource busy" - hidden by filtering the build output) and the
+user kept playing the 00:27 build, in which llmchat (re-enabled in the rc
+files in s78) still meant rewording EVERY line.  Lesson: check the copy
+step / exe timestamp after every build; watch for the lock.
+Fixes: hero remarks and pet naming now use a background request
+(vulture_llm_async_start/poll in vulture_llm.cpp; llm_bg_start/poll in
+sounds.c, one job at a time); animations end at once when a key or click
+is queued, drop to fewer frames when a frame takes > 25 ms, cap at
+~150 ms, and the step tween is skipped while running/travelling/
+auto-exploring/repeating; the per-sound "Playing file" debug log line is
+gone (20,000+ file opens in one session's log).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

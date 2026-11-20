@@ -825,6 +825,23 @@ llm_unquote(char *resp)
     "emoji. Add NO new facts: no directions, places, items, warnings, " \
     "hints, prices, identifications, advice or game mechanics."
 
+/* the JSON request body for one generate call */
+staticfn void
+llm_body(const char *sys, const char *prompt, int num_predict, char *body,
+         size_t bodysz)
+{
+    body[0] = '\0';
+    Strcat(body, "{\"model\":\"");
+    llm_json_cat(body, bodysz, iflags.llmchat);
+    Strcat(body, "\",\"system\":\"");
+    llm_json_cat(body, bodysz, sys);
+    Strcat(body, "\",\"prompt\":\"");
+    llm_json_cat(body, bodysz, prompt);
+    Sprintf(eos(body), "\",\"stream\":false,\"keep_alive\":\"30m\","
+                       "\"options\":{\"num_predict\":%d,\"temperature\":0.9,"
+                       "\"stop\":[\"\\n\"]}}", num_predict);
+}
+
 /* one round trip; resp gets the model's text (untidied) */
 staticfn boolean
 llm_call(const char *sys, const char *prompt, int num_predict,
@@ -832,20 +849,49 @@ llm_call(const char *sys, const char *prompt, int num_predict,
 {
     static char body[4096], reply[8192];
 
-    body[0] = '\0';
-    Strcat(body, "{\"model\":\"");
-    llm_json_cat(body, sizeof body, iflags.llmchat);
-    Strcat(body, "\",\"system\":\"");
-    llm_json_cat(body, sizeof body, sys);
-    Strcat(body, "\",\"prompt\":\"");
-    llm_json_cat(body, sizeof body, prompt);
-    Sprintf(eos(body), "\",\"stream\":false,\"keep_alive\":\"30m\","
-                       "\"options\":{\"num_predict\":%d,\"temperature\":0.9,"
-                       "\"stop\":[\"\\n\"]}}", num_predict);
+    llm_body(sys, prompt, num_predict, body, sizeof body);
     if (!vulture_llm_post(11434, "/api/generate", body, reply,
                           (int) sizeof reply, llm_timeout_ms))
         return FALSE;
     return llm_json_response(reply, resp, respsz);
+}
+
+/* s81: background calls for things nobody waits on.  One job at a time;
+   `llm_job_owner` says which feature started it. */
+extern int vulture_llm_async_start(const char *);
+extern int vulture_llm_async_poll(char *, int);
+static int llm_job_owner = 0; /* 0 none, 1 pet name, 2 hero remark */
+
+staticfn boolean
+llm_bg_start(int owner, const char *sys, const char *prompt, int num_predict)
+{
+    static char body[4096];
+
+    if (llm_job_owner)
+        return FALSE;
+    llm_body(sys, prompt, num_predict, body, sizeof body);
+    if (!vulture_llm_async_start(body))
+        return FALSE;
+    llm_job_owner = owner;
+    return TRUE;
+}
+
+/* 0 still running (or not ours), 1 done with resp filled, -1 failed */
+staticfn int
+llm_bg_poll(int owner, char *resp, size_t respsz)
+{
+    static char reply[16384];
+    int r;
+
+    if (llm_job_owner != owner)
+        return -1;
+    r = vulture_llm_async_poll(reply, (int) sizeof reply);
+    if (r == 0)
+        return 0;
+    llm_job_owner = 0;
+    if (r < 0 || !llm_json_response(reply, resp, respsz))
+        return -1;
+    return 1;
 }
 
 /* the hero as a monster sees them, and where they are */
@@ -909,19 +955,27 @@ llm_speaks(struct monst *mtmp)
 }
 
 /* a short name from the model: letters, spaces, apostrophes; 2-20 chars */
-staticfn boolean
-llm_make_name(const char *what, char *name, size_t namesz)
+#define LLM_NAME_SYS "You name characters in a dark fantasy dungeon. " \
+                     "Names are short and evocative."
+
+staticfn void
+llm_name_prompt(const char *what, char *prompt, size_t promptsz)
 {
-    char prompt[512], resp[128], hero[BUFSZ], place[BUFSZ], *r, *w;
+    char hero[BUFSZ], place[BUFSZ];
 
     llm_scene(hero, sizeof hero, place, sizeof place);
-    Snprintf(prompt, sizeof prompt,
+    Snprintf(prompt, promptsz,
              "Invent one fitting first name for %s. The player is %s, in "
              "%s. Output ONLY the name - one or two words, no punctuation, "
              "no explanation.", what, hero, place);
-    if (!llm_call("You name characters in a dark fantasy dungeon. Names are "
-                  "short and evocative.", prompt, 12, resp, sizeof resp))
-        return FALSE;
+}
+
+/* letters, spaces, apostrophes; 2-20 chars; resp is modified */
+staticfn boolean
+llm_clean_name(char *resp, char *name)
+{
+    char *r, *w;
+
     for (r = w = resp; *r; r++)
         if (letter(*r) || *r == '\'' || (*r == ' ' && w > resp))
             *w++ = *r;
@@ -933,10 +987,22 @@ llm_make_name(const char *what, char *name, size_t namesz)
         return FALSE;
     resp[0] = highc(resp[0]);
     Strcpy(name, resp);
-    nhUse(namesz);
     return TRUE;
 }
 
+/* a short name from the model (blocking - used when the player is
+   talking to the creature anyway) */
+staticfn boolean
+llm_make_name(const char *what, char *name, size_t namesz)
+{
+    char prompt[512], resp[128];
+
+    nhUse(namesz);
+    llm_name_prompt(what, prompt, sizeof prompt);
+    if (!llm_call(LLM_NAME_SYS, prompt, 12, resp, sizeof resp))
+        return FALSE;
+    return llm_clean_name(resp, name);
+}
 /* s70: a peaceful that talks gets a name the first time it speaks */
 staticfn void
 llm_maybe_name_peaceful(struct monst *mtmp)
@@ -1632,10 +1698,30 @@ llm_no_new_nouns(const char *ctx, const char *fresh)
     return TRUE;
 }
 
+static char llm_quip_ctx[2048];
+
+/* s81: show a remark that came back from the background */
+staticfn void
+llm_quip_poll(void)
+{
+    extern void vulture_tts_speak(const char *, int, int, int);
+    char resp[256];
+
+    if (llm_job_owner != 2 || llm_bg_poll(2, resp, sizeof resp) <= 0)
+        return;
+    llm_unquote(resp);
+    if (strlen(resp) < 3 || strlen(resp) > 140
+        || !llm_no_new_nouns(llm_quip_ctx, resp) || Hallucination)
+        return;
+    llm_skip_spoken = TRUE; /* already model-written */
+    pline("You mutter, \"%s\"", resp);
+    if (iflags.voices)
+        vulture_tts_speak(resp, flags.female ? 1 : 0, 1, 0);
+}
+
 void
 llm_hero_quip_pass(void)
 {
-    extern void vulture_tts_speak(const char *, int, int, int);
     static long next_quip = -1L, last_quip = -1000L;
     static d_level last_lev = { -1, -1 };
     static int last_hs = -1;
@@ -1644,10 +1730,11 @@ llm_hero_quip_pass(void)
     boolean trigger = FALSE;
     const char *why = "", *health, *hunger;
     char hero[BUFSZ], place[BUFSZ], seen[BUFSZ], ctx[2048], prompt[2600],
-        resp[256], last[BUFSZ];
+        last[BUFSZ];
     struct monst *m;
     int nseen = 0;
 
+    llm_quip_poll(); /* s81 */
     if (!on_level(&last_lev, &u.uz)) {
         if (last_lev.dnum >= 0 && !rn2(3))
             trigger = TRUE, why = "You have just arrived somewhere new. ";
@@ -1707,17 +1794,12 @@ llm_hero_quip_pass(void)
              " - first person, at most 14 words, in character for your "
              "role. No advice, no hints, nothing you could not know. "
              "Output ONLY the remark, no quotation marks.", ctx);
-    if (!llm_call("You voice the muttered inner thoughts of a fantasy "
-                  "dungeon adventurer. Dry wit; never useful facts.",
-                  prompt, 40, resp, sizeof resp))
-        return;
-    llm_unquote(resp);
-    if (strlen(resp) < 3 || strlen(resp) > 140 || !llm_no_new_nouns(ctx, resp))
-        return;
-    llm_skip_spoken = TRUE; /* already model-written */
-    pline("You mutter, \"%s\"", resp);
-    if (iflags.voices)
-        vulture_tts_speak(resp, flags.female ? 1 : 0, 1, 0);
+    /* s81: asked in the background; the remark is shown when it arrives
+       (llm_quip_poll, next turns) so the game never stalls for it */
+    if (llm_bg_start(2, "You voice the muttered inner thoughts of a fantasy "
+                        "dungeon adventurer. Dry wit; never useful facts.",
+                     prompt, 40))
+        Strcpy(llm_quip_ctx, ctx);
 }
 
 /*
@@ -1891,9 +1973,29 @@ llm_pet_name_pass(void)
 {
     static long next_try = 5L;
     static int tries = 0;
+    static boolean waiting = FALSE;
     struct monst *pet;
-    char what[BUFSZ], name[64];
+    char what[BUFSZ], prompt[512], resp[128], name[64];
 
+    if (waiting) { /* s81: the answer arrives in the background */
+        int r = llm_bg_poll(1, resp, sizeof resp);
+
+        if (r == 0)
+            return;
+        waiting = FALSE;
+        pet = svc.context.startingpet_mid
+                  ? find_mid(svc.context.startingpet_mid, FM_FMON) : 0;
+        if (r > 0 && pet && pet->mtame && !has_mgivenname(pet)
+            && llm_clean_name(resp, name)) {
+            char species[BUFSZ];
+
+            Strcpy(species, pmname(pet->data, Mgender(pet)));
+            (void) christen_monst(pet, name);
+            You("decide to call your %s %s.", species, name);
+            tries = 4;
+        }
+        return;
+    }
     if (!*iflags.llmchat || tries >= 4 || svm.moves < next_try
         || !svc.context.startingpet_mid || Hallucination)
         return;
@@ -1910,16 +2012,10 @@ llm_pet_name_pass(void)
     next_try = svm.moves + 25L;
     Snprintf(what, sizeof what, "a %s that is the player's loyal pet",
              pmname(pet->data, Mgender(pet)));
-    if (llm_make_name(what, name, sizeof name)) {
-        char species[BUFSZ];
-
-        Strcpy(species, pmname(pet->data, Mgender(pet)));
-        (void) christen_monst(pet, name);
-        You("decide to call your %s %s.", species, name);
-        tries = 4;
-    }
+    llm_name_prompt(what, prompt, sizeof prompt);
+    if (llm_bg_start(1, LLM_NAME_SYS, prompt, 12))
+        waiting = TRUE;
 }
-
 DISABLE_WARNING_FORMAT_NONLITERAL
 
 int /* check calls to this */
