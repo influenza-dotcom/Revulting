@@ -2210,6 +2210,22 @@ screenshot, which its global key hook catches first).
   follow it in the stereo field, fade out when gone.  Wind: forest levels,
   outside rooms.  Nothing while Deaf or Underwater.
 
+## 89. Silence on death (2026-11-20)
+
+really_done() (end.c) calls vulture_music_silence() when how < PANICKED -
+only once the game is truly over, so lifesaving/second chances don't
+trigger it: music and ambient loops (channels 1-5) fade out over 1.2 s and
+vmz_silenced blocks zone changes and the random ambient picker; the
+tombstone screen no longer plays nhfe_music_end_died.  Quit/escape/ascend
+endings keep their music.
+
+## 90. Dust motes only in light (2026-11-20)
+
+Each mote's screen position is inverse-projected (iso + v_rot) to the map
+square under it; drawn only if that square is cansee() and lit
+(levl[].lit, or within range of a gl.light_base source).  90 motes now,
+since most are culled.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

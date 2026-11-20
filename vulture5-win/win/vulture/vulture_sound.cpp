@@ -141,6 +141,7 @@ void vulture_play_event_sound(const char * str)
 
 
 static int vmz_zone = -1;     /* s74: current music zone, -1 = not started */
+static int vmz_silenced = 0;  /* s89: the hero died - no more music */
 static int vmz_volume = MIX_MAX_VOLUME * 55 / 100;
 
 void vulture_play_ambient_sound(int force_play)
@@ -149,7 +150,7 @@ void vulture_play_ambient_sound(int force_play)
 	char tempbuffer[256];
 
 	/* s74: once the game feeds music zones, it owns the background music */
-	if (vmz_zone >= 0)
+	if (vmz_zone >= 0 || vmz_silenced)
 		return;
 
 	if ((!force_play) && (vulture_is_music_playing()))
@@ -302,7 +303,7 @@ static void vmz_start(int zone)
 
 extern "C" void vulture_music_zone(int zone)
 {
-	if (!vulture_sound_inited || !vulture_opts.play_music)
+	if (!vulture_sound_inited || !vulture_opts.play_music || vmz_silenced)
 		return;
 	if (zone < 0 || zone >= VMZ_COUNT)
 		zone = VMZ_DUNGEON;
@@ -484,4 +485,19 @@ extern "C" void vulture_ambient(int type, int present, int dx, int dy)
 		vamb_on[type] = 1;
 	}
 	Mix_SetPosition(ch, ang, dist);
+}
+
+/* s89: the hero has died for good - fade the music and the environmental
+ * loops out and keep them off (no zone changes, no random ambient track,
+ * no funeral music on the tombstone screen). */
+extern "C" void vulture_music_silence(void)
+{
+	int ch;
+
+	vmz_silenced = 1;
+	if (!vulture_sound_inited)
+		return;
+	Mix_FadeOutMusic(1200);
+	for (ch = 1; ch <= 5; ch++)
+		Mix_FadeOutChannel(ch, 1200);
 }

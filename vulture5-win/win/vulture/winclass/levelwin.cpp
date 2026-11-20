@@ -1171,15 +1171,36 @@ vw_draw(int cx, int cy, int vx, int vy, int x0, int y0, int w, int h)
                 }
     }
 
-    /* dust motes: deterministic drift from the clock, no state to keep */
-    for (i = 0; i < 36; i++) {
+    /* dust motes: deterministic drift from the clock, no state to keep.
+       s90: only visible where there's light - a mote is drawn only if the
+       map square under it is in view and lit (a lit room, or within reach
+       of a light source such as the hero's lamp) */
+    for (i = 0; i < 90; i++) {
         double t = now / 1000.0, seedx = (i * 7919) % 1000 / 1000.0,
                seedy = (i * 104729) % 1000 / 1000.0;
         int px = x0 + (int) (fmod(seedx * w + t * (6 + i % 5) + 30 * sin(t * 0.3 + i), w));
         int py = y0 + (int) (fmod(seedy * h + t * (3 + i % 3) + 20 * cos(t * 0.25 + i), h));
+        double fa = (double) (px - cx) / V_MAP_XMOD, fb = (double) (py - cy) / V_MAP_YMOD;
+        int va = (int) floor((fa + fb) / 2.0 + 0.5), vb = (int) floor((fb - fa) / 2.0 + 0.5);
+        int mdx, mdy, mx, my;
+        bool lit = false;
 
+        v_rot(va, vb, vulture_view_rot, &mdx, &mdy);
+        mx = vx + mdx, my = vy + mdy;
+        if (!isok(mx, my) || !cansee(mx, my))
+            continue;
+        if (levl[mx][my].lit) {
+            lit = true;
+        } else {
+            for (ls = gl.light_base; ls && !lit; ls = ls->next)
+                if (ls->range > 0
+                    && dist2(mx, my, ls->x, ls->y) <= ls->range * ls->range)
+                    lit = true;
+        }
+        if (!lit)
+            continue;
         vfx_dot(px, py, 1 + (i % 3 == 0),
-                SDL_MapRGB(vulture_screen->format, 120, 115, 100));
+                SDL_MapRGB(vulture_screen->format, 135, 128, 110));
     }
 
     /* monster panel */

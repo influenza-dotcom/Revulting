@@ -66,7 +66,8 @@ endingwin::draw()
 
     default:
         image = vulture_load_graphic_ui(V_FILENAME_ENDING_DIED);
-        vulture_play_event_sound("nhfe_music_end_died");
+        /* s89: silence on death - no funeral music (the zone music and
+         * ambient loops were already faded out in really_done()) */
     }
 
     if (image != NULL) {
