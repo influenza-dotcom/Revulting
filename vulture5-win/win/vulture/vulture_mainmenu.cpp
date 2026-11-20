@@ -682,8 +682,7 @@ bool mm_new_hero(void)
 
     buf[0] = '\0';
     if (!vulture_get_input(-1, vulture_screen->h - V_UI(170),
-                           "What is your name?  (leave it blank and the Fates "
-                           "will name you from your kit)", buf, ""))
+                           "What is your name?  (leave it blank to be Nameless)", buf, ""))
         return false;
     std::string name = mm_trim(buf);
     /* s77: blank -> "Nameless"; newgame() asks the local model for a name

@@ -1825,10 +1825,11 @@ llm_name_hero(void)
 
     if (strcmpi(svp.plname, "Nameless"))
         return;
-    if (!*iflags.llmchat) {
-        Strcpy(iflags.llmchat, "llama3.2:3b");
-        borrowed = TRUE;
-    }
+    /* s102: the AI features are opt-in - without llmchat (most players
+       have no Ollama) a blank name simply stays "Nameless" */
+    if (!*iflags.llmchat)
+        return;
+    nhUse(borrowed);
     kit[0] = '\0';
     for (o = gi.invent; o && n < 12; o = o->nobj) {
         char item[BUFSZ];

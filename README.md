@@ -10,6 +10,20 @@ Vulture's Eye / Vulture's Claw lineage, also published on Steam as
 features. It is not affiliated with or endorsed by the NetHack DevTeam or the
 Vulture authors.
 
+## Download and play (Windows)
+
+1. Go to **[Releases](https://github.com/influenza-dotcom/Revulting/releases/latest)**
+   and download **Revulting-Windows.zip**.
+2. Unzip it anywhere and double-click **NetHackV.exe**. (If Windows says
+   "Windows protected your PC", click *More info* -> *Run anyway*; the game
+   isn't code-signed.)
+3. Pick **Create a new hero**. `START HERE.txt` in the folder has the
+   basic controls.
+
+Nothing else needs installing. The optional AI features (monster chat,
+AI names, hero remarks) need [Ollama](https://ollama.com) and are **off by
+default**; see the bottom of `.nethackrc` to turn them on.
+
 ## What's different
 
 **The port**

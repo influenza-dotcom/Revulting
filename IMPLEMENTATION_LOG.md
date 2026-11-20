@@ -2383,6 +2383,25 @@ NetHack." vhud_heat and the star surfaces are gone, and the toasts moved
 up into the freed space. "Bring it into 2027 / GTA VI" means modern polish
 and feel, not GTA mechanics.
 
+## 102. AI is opt-in everywhere; a release package for new players (2026-11-20)
+
+- **Opt-in:** sounds.c llm_name_hero no longer borrows llama3.2:3b when
+  llmchat is unset, so a blank name just stays "Nameless". The main-menu
+  name prompt no longer mentions the Fates. Every other LLM path was
+  already gated on *iflags.llmchat.
+- **Release package:** deliverables/release/Revulting-Windows.zip, 240 MB.
+  - Contents: VultureNetHack minus the exe backups, the log, save/,
+    hearse.ini (it held a personal email) and piper original-configs.
+  - Fresh empty score and log files.
+  - New-player .nethackrc (deliverables/release/newplayer.nethackrc): no
+    role preset, AI lines commented out, voices/autoid/rivals on.
+  - Added START HERE.txt and LICENSE-NetHack.txt.
+- **Test:** the zip, extracted and run with an empty fake USERPROFILE,
+  reaches the main menu. A preset hero reaches vision_init, so the new rc
+  loads cleanly.
+- **Not done:** gh isn't installed, so the GitHub Release isn't created
+  yet. The README links to releases/latest.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
