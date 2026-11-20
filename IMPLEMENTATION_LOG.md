@@ -2326,6 +2326,21 @@ shake: impact_light (< 1/10 max HP), impact_mid (>= 1/10), impact_heavy
 bone-crunch (>= 1/4), heavy + impact_slam deep boom (>= 1/2); synthesized
 (synth_impact.py).  Layered with the Piper grunt (s96).
 
+## 98. Startup trace for the Play NetHack.lnk close; softer blood (2026-11-20)
+
+User: Play NetHack.lnk (main menu, no args) closes instantly; no crash
+event.  Off-screen (SDL dummy video/audio) the earlier test never left the
+intro movie - with VULTURE_SKIP_INTRO it reaches the menu and waits, so the
+close needs the real display or a real choice.  Added
+win/vulture/vulture_trace.cpp: vulture_trace() timestamped "[trace]"
+lines in vulture_log.txt at each startup/menu step (windmain.c: menu
+entered/returned, getlock, vision_init; main menu: saves listed, backdrop,
+waiting, picked N, relaunch), plus last-words handlers - unhandled SEH
+(code + RVA), std::terminate (uncaught C++ exception), abort(), exit().
+Suspect: getlock() refusing when the same hero is already running.
+Blood: spurt particles were square dots ("red boxes") - now soft round
+alpha droplets (vfx_droplet, 3 sizes); stain blobs feathered at the edge.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

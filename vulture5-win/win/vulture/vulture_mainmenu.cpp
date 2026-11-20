@@ -556,8 +556,10 @@ std::string mm_stamp(void)
 /* ----------------------------------------------------------------- actions */
 
 /* start a fresh copy of the game with `rcpath`, then exit this one */
+extern "C" void vulture_trace(const char *); /* s98 */
 void mm_relaunch(const std::string &rcpath)
 {
+    vulture_trace(("menu: relaunching with " + rcpath).c_str());
 #ifdef _WIN32
     char exepath[MAX_PATH];
     std::string exedir, cmd;
@@ -905,6 +907,8 @@ enum {
 
 } /* namespace */
 
+extern "C" void vulture_trace(const char *); /* s98 */
+
 extern "C" void vulture_main_menu(int launched_with_rc)
 {
     bool first = true;
@@ -920,10 +924,12 @@ extern "C" void vulture_main_menu(int launched_with_rc)
     mm_tip = mm_tips[rand() % (int) (sizeof mm_tips / sizeof mm_tips[0])];
 
     for (;;) {
+        vulture_trace("menu: listing saves");
         std::vector<mm_save> saves = mm_list_saves();
         winid w;
         int id;
 
+        vulture_trace("menu: drawing backdrop");
         mm_show_backdrop();
         if (first) {
             /* fade the title in once; later passes just redraw it */
@@ -949,7 +955,14 @@ extern "C" void vulture_main_menu(int launched_with_rc)
         mm_item(w, MM_GUIDE, 'g', "Read the Guidebook");
         mm_text(w, "");
         mm_item(w, MM_QUIT, 'q', "Quit");
+        vulture_trace("menu: waiting for a choice");
         id = mm_pick(w, "Main menu");
+        {
+            char tb[64];
+
+            snprintf(tb, sizeof tb, "menu: picked %d", id);
+            vulture_trace(tb);
+        }
 
         switch (id) {
         case MM_CONTINUE:

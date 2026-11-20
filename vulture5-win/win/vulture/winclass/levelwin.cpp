@@ -915,10 +915,18 @@ vst_make_art(void)
                 for (x = cx - rad * 2; x <= cx + rad * 2; x++) {
                     double dx = (x - cx) / (2.0 * rad), dy = (y - cy) / (double) rad;
 
-                    if (x < 0 || y < 0 || x >= w || y >= h || dx * dx + dy * dy > 1.0)
+                    double rr = dx * dx + dy * dy, a;
+                    Uint32 *px;
+                    Uint8 pr, pg, pb, pa;
+
+                    if (x < 0 || y < 0 || x >= w || y >= h || rr > 1.0)
                         continue;
-                    ((Uint32 *) ((Uint8 *) s->pixels + y * s->pitch))[x]
-                        = SDL_MapRGBA(s->format, 95, 6, 8, 210);
+                    /* s98: soft edge - full in the middle, fading out */
+                    a = rr < 0.5 ? 1.0 : (1.0 - rr) / 0.5;
+                    px = &((Uint32 *) ((Uint8 *) s->pixels + y * s->pitch))[x];
+                    SDL_GetRGBA(*px, s->format, &pr, &pg, &pb, &pa);
+                    if (210 * a > pa)
+                        *px = SDL_MapRGBA(s->format, 95, 6, 8, (Uint8) (210 * a));
                 }
         }
         SDL_UnlockSurface(s);
@@ -1095,6 +1103,41 @@ vfx_dot(int x, int y, int sz, Uint32 col)
     SDL_FillRect(vulture_screen, &r, col);
 }
 
+/* s98: a soft, round blood droplet (3 sizes), alpha-faded at the edge */
+static void
+vfx_droplet(int x, int y, int size, int alpha)
+{
+    static SDL_Surface *drop[3];
+    SDL_Rect d;
+
+    if (size < 0 || size > 2)
+        size = 0;
+    if (!drop[size]) {
+        int r = 2 + size, dim = r * 2 + 1, xx, yy;
+
+        drop[size] = SDL_CreateRGBSurfaceWithFormat(0, dim, dim, 32,
+                                                    SDL_PIXELFORMAT_ARGB8888);
+        if (!drop[size])
+            return;
+        SDL_LockSurface(drop[size]);
+        for (yy = 0; yy < dim; yy++)
+            for (xx = 0; xx < dim; xx++) {
+                double dd = sqrt((double) ((xx - r) * (xx - r) + (yy - r) * (yy - r))) / (r + 0.5);
+                double a = dd >= 1.0 ? 0.0 : 1.0 - dd * dd;
+
+                ((Uint32 *) ((Uint8 *) drop[size]->pixels + yy * drop[size]->pitch))[xx]
+                    = SDL_MapRGBA(drop[size]->format, (Uint8) (150 - 40 * dd), 8, 10,
+                                  (Uint8) (255 * a));
+            }
+        SDL_UnlockSurface(drop[size]);
+        SDL_SetSurfaceBlendMode(drop[size], SDL_BLENDMODE_BLEND);
+    }
+    d.x = x - drop[size]->w / 2, d.y = y - drop[size]->h / 2;
+    d.w = drop[size]->w, d.h = drop[size]->h;
+    SDL_SetSurfaceAlphaMod(drop[size], (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
+    SDL_BlitSurface(drop[size], NULL, vulture_screen, &d);
+}
+
 static void
 vfx_draw(int cx, int cy, int vx, int vy)
 {
@@ -1141,13 +1184,12 @@ vfx_draw(int cx, int cy, int vx, int vy)
                                                (Uint8) (e.b * dim)),
                                     SDL_MapRGB(vulture_screen->format, 0, 0, 0));
         } else if (e.kind == 2) {
-            Uint32 col = SDL_MapRGB(vulture_screen->format, 150, 10, 10);
-
+            /* s98: soft round droplets (the square dots read as boxes) */
             for (k = 0; k < 10; k++) {
                 int px = sx + (int) (e.vx[k] * ts);
                 int py = sy - 30 + (int) (e.vy[k] * ts + 0.5 * 420.0 * ts * ts);
 
-                vfx_dot(px, py, age < 0.6 ? 3 : 2, col);
+                vfx_droplet(px, py, k % 3, (int) (255 * (1.0 - age * 0.8)));
             }
         }
     }

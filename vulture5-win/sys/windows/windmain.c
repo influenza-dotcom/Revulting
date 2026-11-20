@@ -18,6 +18,9 @@ static void nhusage(void);
 #ifdef VULTURE_GRAPHICS
 /* IMPLEMENTATION_LOG s65: Vulture main menu (win/vulture/vulture_mainmenu.cpp) */
 extern void vulture_main_menu(int launched_with_rc);
+/* s98: startup trace (win/vulture/vulture_trace.cpp) */
+extern void vulture_trace(const char *);
+extern void vulture_install_trace(void);
 static int vq_launched_with_rc = 0;
 #endif
 char *exename(void);
@@ -205,6 +208,9 @@ _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);*/
 
     set_emergency_io();
 #ifndef MSWIN_GRAPHICS
+#ifdef VULTURE_GRAPHICS
+    vulture_install_trace(); /* s98 */
+#endif
     early_init(argc, argv); /* already in WinMain for MSWIN_GRAPHICS */
 #endif
 
@@ -399,8 +405,11 @@ _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);*/
     /* IMPLEMENTATION_LOG s65: Vulture's main menu (continue / load / roster
        hero / new hero / scores / ...).  Returns with svp.plname set, or
        relaunches the exe with a hero's rc file and exits. */
+    vulture_trace(vq_launched_with_rc ? "startup: launched with an rc (menu skipped)"
+                                      : "startup: entering the main menu");
     if (WINDOWPORT(vulture) && !wizard)
         vulture_main_menu(vq_launched_with_rc);
+    vulture_trace("startup: main menu returned");
 #endif
     /* strip role,race,&c suffix; calls askname() if svp.plname[] is empty
        or holds a generic user name like "player" or "games" */
@@ -418,6 +427,9 @@ _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);*/
         fnamebuf, encodedfnamebuf, BUFSZ);
     Snprintf(gl.lock, sizeof gl.lock, "%s", encodedfnamebuf);
     /* regularize(lock); */ /* we encode now, rather than substitute */
+#ifdef VULTURE_GRAPHICS
+    vulture_trace("startup: getlock");
+#endif
     if ((getlock_result = getlock()) == 0)
         nethack_exit(EXIT_SUCCESS);
 
@@ -441,6 +453,9 @@ _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);*/
      *  Initialize the vision system.  This must be before mklev() on a
      *  new game or before a level restore on a saved game.
      */
+#ifdef VULTURE_GRAPHICS
+    vulture_trace("startup: vision_init (game starting)");
+#endif
     vision_init();
     init_sound_disp_gamewindows();
     /*
