@@ -2044,6 +2044,57 @@ Wizard -> "Korvok Darkstrike" / "Gorthok Blind" (blindfold), Tourist ->
 "Kaili Snap" (camera), dwarf Valkyrie -> "Kragnok Steelshield".
 NOT yet seen in a game.
 
+## 78. Rewording every line is opt-in; melee lunge; death fade (2026-11-20)
+
+User: the every-line LLM rewording is far too slow, but keep the LLM for
+the on-demand things.  New boolean `llmreword` (iflags, default off) gates
+the vpline() rewording (narration AND spoken lines); llmchat alone now
+means #chat barks, llmtalk, names, ask-your-god, heroquips.  rc files:
+llmchat back on, `#OPTIONS=llmreword` added commented out.
+- vulture_anim_attack(ax,ay,tx,ty) from do_attack() (uhitm.c, before
+  hitum/hmonas) and mattacku() (mhitu.c, adjacent + foundyou + youseeit):
+  the attacker lunges, the target flashes red.  vulture_anim_death(x,y)
+  from mondead() (mon.c, while the monster is still displayed) queues a
+  death; played after the next refresh that no longer shows that tile.
+  Both present frames like the tween; vulture_tween_run() runs the tween,
+  then queued deaths, and refuses to nest inside either.  Each run logs
+  "tween:/anim lunge:/anim death: N frames in M ms" (V_LOG_NOTE) to
+  vulture_log.txt so we can confirm it fires.
+
+## 79. Squash & stretch, rotation; middle-mouse camera drag (2026-11-20)
+
+User: tweens must be more obvious - rotations, squash and stretch; and a
+Dota 2 style middle-mouse drag.
+- vtx_blit(): scale + rotate a sprite about its feet (bottom-centre),
+  red tint and fade, nearest-neighbour inverse mapping into a temp ARGB
+  surface (only animating sprites take this path).
+- Step: 11 frames (5 running/travelling) x 14 ms; hop 12 px airborne for
+  te < 0.8 with a vertical stretch (+18%), then a landing squash (-26%),
+  width = 1/h^0.7, leaning 10 deg toward travel.  Lunge: 45% of a square,
+  stretched along the blow (+20%), leaning 18 deg.  Target: knocked back
+  14%, squashed 24%, tilted, red.  Death: topples to 85 deg, sinks 10 px,
+  reddens then fades.
+- MMB drag (levelwin::handle_mousemotion_event, state & SDL_BUTTON_MMASK):
+  the map follows the mouse (camera moves opposite); xrel/yrel x
+  render_scale accumulate in vpan_px/py; whole tiles become view shifts
+  through the inverse iso projection + v_rot; the remainder is a pixel
+  offset on map_centre.  Panning updates the tween snapshot so it never
+  animates; release (or any set_view recentre) snaps the remainder away.
+
+## 80. Way more sound effects; action sounds (2026-11-20)
+
+31 more synthesized effects (scratchpad synth_sfx2.py).  vulture_sfx(name)
+(vulture_sound.cpp) plays sound/<name>.wav straight from game code:
+pick_obj (pickup), dropx (drop), ready_weapon (wield), accessory_or_armor_on
+and armor_or_accessory_off (armor), start_eating (crunch), dopotion (gulp),
+seffects (read), weffects (zap), throwit (throw), use_container (loot),
+goto_level (stairs / fall), dopray once the prayer starts (pray).  ~60 new
+message lines: misses, kills, shrieks, healing, curses/displeasure,
+polymorph, invisibility, enlightenment, monster spells, poison/acid,
+freezing, boulders and rumbles, lava/gas hiss, drips, cash register,
+tree chopping, digging, locks, chests, sad feelings, wails, land mines.
+NOT yet seen/heard in a game.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

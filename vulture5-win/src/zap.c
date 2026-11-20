@@ -3430,6 +3430,7 @@ zapwrapup(void)
 void
 weffects(struct obj *obj)
 {
+    vulture_sfx("zap"); /* Vulture s80: action sound */
     int otyp = obj->otyp;
     boolean disclose = FALSE, was_unkn = !objects[otyp].oc_name_known;
 

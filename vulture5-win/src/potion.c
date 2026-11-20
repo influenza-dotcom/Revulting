@@ -617,6 +617,7 @@ dodrink(void)
 int
 dopotion(struct obj *otmp)
 {
+    vulture_sfx("gulp"); /* Vulture s80: action sound */
     int retval;
 
     otmp->in_use = TRUE;

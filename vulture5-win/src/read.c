@@ -2194,6 +2194,7 @@ int
 seffects(
     struct obj *sobj) /* sobj - scroll or fake spellbook for spell */
 {
+    vulture_sfx("read"); /* Vulture s80: action sound */
     int otyp = sobj->otyp;
 
     if (objects[otyp].oc_magic)

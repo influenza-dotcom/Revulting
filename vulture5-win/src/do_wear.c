@@ -1779,6 +1779,7 @@ count_worn_stuff(
 staticfn int
 armor_or_accessory_off(struct obj *obj)
 {
+    vulture_sfx("armor"); /* Vulture s80: action sound */
     if (!(obj->owornmask & (W_ARMOR | W_ACCESSORY))) {
         You("are not wearing that.");
         return ECMD_OK;
@@ -2273,6 +2274,7 @@ wear_swap_blocker(struct obj *otmp)
 staticfn int
 accessory_or_armor_on(struct obj *obj)
 {
+    vulture_sfx("armor"); /* Vulture s80: action sound */
     long mask = 0L;
     boolean armor, ring, amulet, eyewear;
 

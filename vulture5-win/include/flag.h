@@ -260,6 +260,7 @@ struct instance_flags {
     char llmchat[64];      /* local: Ollama model for #chat, "" = off */
     boolean llmtalk;       /* local: #chat lets you type to monsters */
     boolean heroquips;     /* local: the hero remarks on things */
+    boolean llmreword;     /* local: llmchat rewords EVERY message */
     boolean autoid;        /* local: name items from shop prices, sink
                             * rings and wand engraving (shk.c, do.c,
                             * engrave.c; autoid_call() in do_name.c) */

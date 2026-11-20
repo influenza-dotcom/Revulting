@@ -368,6 +368,16 @@ static int vulture_is_music_playing(void)
 	return 0;
 }
 
+/* s80: action sounds called straight from the game code (pick up, drop,
+ * wield, armour, eat, quaff, read, zap, throw, loot, stairs, fall, pray) -
+ * they play on the action itself, whatever the message says.  name is a
+ * file in sound/ without ".wav". */
+extern "C" void vulture_sfx(const char *name)
+{
+	char file[64];
 
-
-
+	if (!vulture_sound_inited || !vulture_opts.play_effects || !name)
+		return;
+	snprintf(file, sizeof file, "%s.wav", name);
+	vulture_play_sound(vulture_make_filename(V_SOUND_DIRECTORY, "", file));
+}

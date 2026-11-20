@@ -800,6 +800,7 @@ drop(struct obj *obj)
 void
 dropx(struct obj *obj)
 {
+    vulture_sfx("drop"); /* Vulture s80: action sound */
     freeinv(obj);
     if (!u.uswallow) {
         if (ship_object(obj, u.ux, u.uy, FALSE))
@@ -1497,6 +1498,10 @@ goto_level(
     boolean falling,   /* when falling to level, objects might tag along */
     boolean portal)    /* True if arriving via magic portal */
 {
+    if (at_stairs)
+        vulture_sfx("stairs"); /* Vulture s80 */
+    else if (falling)
+        vulture_sfx("fall");
     int l_idx, save_mode;
     NHFILE *nhfp;
     xint16 new_ledger;

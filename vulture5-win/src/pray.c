@@ -2223,6 +2223,7 @@ dopray(void)
             return ECMD_OK;
     }
 
+    vulture_sfx("pray"); /* Vulture s80: action sound */
     if (!u.uconduct.gnostic++)
         /* breaking conduct should probably occur in can_pray() at
          * "You begin praying to %s", as demons who find praying repugnant

@@ -513,6 +513,12 @@ mattacku(struct monst *mtmp)
         nomul(0);
     if (DEADMONSTER(mtmp))
         return 1;
+    /* Vulture s78: a visible monster lunging at you in melee */
+    if (!ranged && foundyou && youseeit && !u.uswallow && canspotmon(mtmp)) {
+        extern void vulture_anim_attack(int, int, int, int);
+
+        vulture_anim_attack(mtmp->mx, mtmp->my, u.ux, u.uy);
+    }
     if (Underwater && !is_swimmer(mtmp->data))
         return 0;
 

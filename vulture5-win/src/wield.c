@@ -168,6 +168,8 @@ empty_handed(void)
 staticfn int
 ready_weapon(struct obj *wep)
 {
+    if (wep)
+        vulture_sfx("wield"); /* Vulture s80: action sound */
     /* Separated function so swapping works easily */
     int res = ECMD_OK;
     boolean was_twoweap = u.twoweap, had_wep = (uwep != 0);

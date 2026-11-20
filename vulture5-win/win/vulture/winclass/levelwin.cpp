@@ -37,6 +37,7 @@ static int v_rot_door(int tile); /* s62 */
 #define VULTURE_CLIPMARGIN 200
 
 levelwin *levwin;
+static double vpan_px = 0.0, vpan_py = 0.0; /* s79: MMB drag residual */
 int vulture_map_draw_msecs = 0;
 int vulture_map_draw_lastmove = 0;
 int vulture_map_highlight_objects = 0;
@@ -171,6 +172,7 @@ levelwin::set_view(int x, int y)
 {
     view_x = x;
     view_y = y;
+    vpan_px = vpan_py = 0.0; /* s79: a recentre ends any drag offset */
 }
 
 /* check whether the map needs recentering */
@@ -239,6 +241,8 @@ static short vtw_ox[ROWNO][COLNO], vtw_oy[ROWNO][COLNO];
 static signed char vtw_face[ROWNO][COLNO];
 static int vtw_gx = 0, vtw_gy = 0;
 static int vtw_last_vx = -1, vtw_last_vy = -1;
+static double vtw_te = 1.0;               /* s79: eased tween time */
+static char vtw_mv[ROWNO][COLNO];         /* s79: square holds a mover */
 #define VTW_HERO 0xFFFFFFFFu
 
 static void
@@ -272,6 +276,8 @@ vtw_prepare(int vx, int vy)
     memset(vtw_ox, 0, sizeof vtw_ox);
     memset(vtw_oy, 0, sizeof vtw_oy);
     memset(vtw_face, 0, sizeof vtw_face);
+    memset(vtw_mv, 0, sizeof vtw_mv);
+    vtw_te = 1.0;
     vtw_gx = vtw_gy = 0;
     vtw_last_vx = vx, vtw_last_vy = vy;
 
@@ -324,6 +330,7 @@ vtw_prepare(int vx, int vy)
 
     t = vtw_t;
     te = t * t * (3.0 - 2.0 * t); /* smoothstep */
+    vtw_te = te;
     for (it = vtw_cur.begin(); it != vtw_cur.end(); ++it) {
         int x = it->second.x, y = it->second.y;
 
@@ -337,7 +344,11 @@ vtw_prepare(int vx, int vy)
 
             vtw_proj(dx, dy, &sx, &sy);
             vtw_ox[y][x] = (short) ((1.0 - te) * sx);
-            vtw_oy[y][x] = (short) ((1.0 - te) * sy);
+            /* s78/s79: a hop on each step - airborne for the first 0.8,
+               then a landing squash (drawn in levelwin::draw) */
+            vtw_oy[y][x] = (short) ((1.0 - te) * sy
+                                    - 12.0 * sin(3.14159265358979 * (te < 0.8 ? te / 0.8 : 1.0)));
+            vtw_mv[y][x] = 1;
         }
     }
     if (snap_ok && vtw_snap_vx >= 0 && abs(vx - vtw_snap_vx) <= 1
@@ -454,52 +465,306 @@ vtw_flipped(int tile_id, SDL_Surface *s)
     return f;
 }
 
-/* draw a monster tile facing `face` (+1 right, -1 left, 0 as drawn) */
+
+/*
+ * IMPLEMENTATION_LOG s79: squash, stretch and rotation.
+ * vtx_blit() draws a sprite scaled (sx, sy) and rotated (deg, clockwise)
+ * about its FEET - the bottom-centre of the untransformed image - with an
+ * optional red tint and fade.  Nearest-neighbour inverse mapping into a
+ * temporary ARGB surface: only animating sprites take this path, and they
+ * are ~70x90 px, so it costs next to nothing.
+ */
 static void
-vtw_put_tile_facing(int x, int y, int tile_id, int face)
+vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
+         bool red, int alpha)
+{
+    SDL_Surface *src, *dst;
+    double rad, c, s, ax, ay, cx[4], cy[4], minx, miny, maxx, maxy;
+    int w, h, bw, bh, x, y, k;
+    Uint32 key = 0;
+    bool haskey;
+
+    if (sx == 1.0 && sy == 1.0 && deg == 0.0 && alpha >= 255) {
+        if (red)
+            SDL_SetSurfaceColorMod(img, 255, 70, 70);
+        vulture_put_img(dx, dy, img);
+        if (red)
+            SDL_SetSurfaceColorMod(img, 255, 255, 255);
+        return;
+    }
+    src = SDL_ConvertSurfaceFormat(img, SDL_PIXELFORMAT_ARGB8888, 0);
+    if (!src)
+        return;
+    haskey = (SDL_GetColorKey(src, &key) == 0);
+    w = src->w, h = src->h;
+    ax = w / 2.0, ay = (double) h;           /* the feet */
+    rad = deg * 3.14159265358979 / 180.0;
+    c = cos(rad), s = sin(rad);
+    {
+        double px[4] = { -ax, w - ax, -ax, w - ax };
+        double py[4] = { -ay, -ay, h - ay, h - ay };
+
+        minx = miny = 1e9, maxx = maxy = -1e9;
+        for (k = 0; k < 4; k++) {
+            double qx = px[k] * sx, qy = py[k] * sy;
+
+            cx[k] = qx * c - qy * s;
+            cy[k] = qx * s + qy * c;
+            if (cx[k] < minx) minx = cx[k];
+            if (cx[k] > maxx) maxx = cx[k];
+            if (cy[k] < miny) miny = cy[k];
+            if (cy[k] > maxy) maxy = cy[k];
+        }
+    }
+    bw = (int) (maxx - minx) + 2, bh = (int) (maxy - miny) + 2;
+    if (bw <= 0 || bh <= 0 || bw > 1000 || bh > 1000) {
+        SDL_FreeSurface(src);
+        return;
+    }
+    dst = SDL_CreateRGBSurfaceWithFormat(0, bw, bh, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (!dst) {
+        SDL_FreeSurface(src);
+        return;
+    }
+    SDL_LockSurface(src);
+    SDL_LockSurface(dst);
+    for (y = 0; y < bh; y++) {
+        Uint32 *drow = (Uint32 *) ((Uint8 *) dst->pixels + y * dst->pitch);
+
+        for (x = 0; x < bw; x++) {
+            /* inverse: rotate back, unscale, then into source pixels */
+            double rx = x + minx, ry = y + miny;
+            double ux = (rx * c + ry * s) / sx, uy = (-rx * s + ry * c) / sy;
+            int sxp = (int) floor(ux + ax), syp = (int) floor(uy + ay);
+            Uint32 p;
+            Uint8 r, g, b, a;
+
+            drow[x] = 0;
+            if (sxp < 0 || syp < 0 || sxp >= w || syp >= h)
+                continue;
+            p = *(Uint32 *) ((Uint8 *) src->pixels + syp * src->pitch + sxp * 4);
+            if (haskey && p == key)
+                continue;
+            SDL_GetRGBA(p, src->format, &r, &g, &b, &a);
+            if (red) {
+                g = (Uint8) (g * 0.3);
+                b = (Uint8) (b * 0.3);
+            }
+            a = (Uint8) (a * (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha) / 255);
+            drow[x] = SDL_MapRGBA(dst->format, r, g, b, a);
+        }
+    }
+    SDL_UnlockSurface(dst);
+    SDL_UnlockSurface(src);
+    SDL_SetSurfaceBlendMode(dst, SDL_BLENDMODE_BLEND);
+    vulture_put_img(dx + (int) ax + (int) minx, dy + (int) ay + (int) miny, dst);
+    SDL_FreeSurface(dst);
+    SDL_FreeSurface(src);
+}
+
+/* draw a tile facing `face`, transformed */
+static void
+vtw_put_tile_x(int x, int y, int tile_id, int face, double sx, double sy,
+               double deg, bool red, int alpha)
 {
     vulture_tile *tile = vulture_get_tile(tile_id);
-    int art;
+    SDL_Surface *img;
+    int art, dx;
     bool flip;
 
     if (!tile || !tile->graphic)
         return;
     art = vtw_art_facing(tile_id, tile->graphic);
     flip = face != 0 && ((art == 0 && face < 0) || (art != 0 && art != face));
+    img = tile->graphic;
+    dx = x + tile->xmod;
     if (flip) {
         SDL_Surface *f = vtw_flipped(tile_id, tile->graphic);
 
         if (f) {
-            vulture_put_img(x - tile->xmod - tile->graphic->w + 1,
-                            y + tile->ymod, f);
-            return;
+            img = f;
+            dx = x - tile->xmod - tile->graphic->w + 1;
         }
     }
-    vulture_put_img(x + tile->xmod, y + tile->ymod, tile->graphic);
+    vtx_blit(img, dx, y + tile->ymod, sx, sy, deg, red, alpha);
 }
 
-/* play the in-between frames of a pending tween (vulture_win.cpp calls this
-   after each refresh; re-entry is blocked while animating) */
+
+
+/*
+ * IMPLEMENTATION_LOG s78: quasi-animations.
+ *  - Melee lunge: the attacker darts ~40% of a square toward its target and
+ *    back; the target flashes red at the moment of impact.  Played at once
+ *    (vulture_anim_attack, called from do_attack() and mattacku()).
+ *  - Death: a slain monster's last sprite sinks and fades where it stood.
+ *    Queued by vulture_anim_death() (from mondead(), while the monster is
+ *    still on the map) and played after the next refresh that shows the
+ *    square without it.
+ * Both draw through levelwin::draw (vanim_* state) and present frames the
+ * same way the movement tween does.  Each run is timed into vulture_log.
+ */
+static int vanim_kind = 0;           /* 0 none, 1 lunge, 2 death */
+static int vanim_ax, vanim_ay, vanim_tx, vanim_ty;
+static double vanim_t = 0.0;
+struct vanim_death {
+    int x, y, tile;
+};
+static vanim_death vanim_deaths[8];
+static int vanim_ndeaths = 0, vanim_dtile = -1, vanim_dx = 0, vanim_dy = 0;
+
+static void
+vanim_frames(int kind, int frames, int delay_ms)
+{
+    Uint32 t0 = SDL_GetTicks();
+    int f;
+
+    vanim_kind = kind;
+    for (f = 1; f <= frames; f++) {
+        vanim_t = (double) f / frames;
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        vulture_refresh_window_region();
+        SDL_Delay(delay_ms);
+    }
+    vanim_kind = 0;
+    vanim_t = 0.0;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    vulture_refresh_window_region();
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                      "anim %s: %d frames in %u ms\n",
+                      kind == 1 ? "lunge" : "death", frames,
+                      (unsigned) (SDL_GetTicks() - t0));
+}
+
+extern "C" void
+vulture_anim_attack(int ax, int ay, int tx, int ty)
+{
+    if (!levwin || vulture_windows_inited != TRUE || vanim_kind || vtw_animating)
+        return;
+    if (abs(ax - tx) > 1 || abs(ay - ty) > 1 || (ax == tx && ay == ty))
+        return;
+    vanim_ax = ax, vanim_ay = ay, vanim_tx = tx, vanim_ty = ty;
+    vanim_frames(1, 7, 10);
+}
+
+extern "C" void
+vulture_anim_death(int x, int y)
+{
+    int tile;
+
+    if (!levwin || !map_data || vanim_ndeaths >= 8 || !isok(x, y))
+        return;
+    tile = map_data->get_glyph(MAP_MON, x, y);
+    if (tile == V_TILE_NONE || tile < 0)
+        return;
+    vanim_deaths[vanim_ndeaths].x = x;
+    vanim_deaths[vanim_ndeaths].y = y;
+    vanim_deaths[vanim_ndeaths].tile = tile;
+    vanim_ndeaths++;
+}
+
+/* play queued deaths whose monster is gone from the map */
+static void
+vanim_play_deaths(void)
+{
+    int i, n = vanim_ndeaths;
+
+    vanim_ndeaths = 0;
+    for (i = 0; i < n; i++) {
+        if (map_data->get_glyph(MAP_MON, vanim_deaths[i].x, vanim_deaths[i].y)
+            == vanim_deaths[i].tile)
+            continue; /* still shown (lifesaved, or not redrawn): skip */
+        vanim_dx = vanim_deaths[i].x, vanim_dy = vanim_deaths[i].y;
+        vanim_dtile = vanim_deaths[i].tile;
+        vanim_frames(2, 9, 14);
+        vanim_dtile = -1;
+    }
+}
+
+/* s79: attacker lunges - stretched along the blow and leaning into it;
+   the target is knocked back a little, squashed and flashes red */
+static void
+vanim_xform(int j, int i, int *ox, int *oy, double *xs, double *ys,
+            double *deg, bool *red)
+{
+    double t = vanim_t;
+    int sx, sy, side;
+
+    if (vanim_kind != 1)
+        return;
+    vtw_proj(vanim_tx - vanim_ax, vanim_ty - vanim_ay, &sx, &sy);
+    side = sx > 0 ? 1 : sx < 0 ? -1 : 0;
+    if (j == vanim_ax && i == vanim_ay) {
+        double k = sin(3.14159265358979 * t);
+
+        *ox += (int) (sx * 0.45 * k);
+        *oy += (int) (sy * 0.45 * k);
+        *xs *= 1.0 + 0.20 * k;
+        *ys *= 1.0 - 0.10 * k;
+        *deg += side * 18.0 * k;
+    }
+    if (j == vanim_tx && i == vanim_ty && t > 0.35) {
+        double u = (t - 0.35) / 0.65, k = sin(3.14159265358979 * u);
+
+        *ox += (int) (sx * 0.14 * k);
+        *oy += (int) (sy * 0.14 * k);
+        *ys *= 1.0 - 0.24 * k;
+        *xs *= 1.0 + 0.16 * k;
+        *deg += side * 12.0 * k;
+        *red = u < 0.6;
+    }
+}
+
+/* s79: the slain monster topples over, sinks and fades out, reddening */
+static void
+vanim_draw_death(int j, int i, int x, int y)
+{
+    vulture_tile *tile;
+    double t = vanim_t, e = t * t * (3.0 - 2.0 * t);
+
+    if (vanim_kind != 2 || j != vanim_dx || i != vanim_dy || vanim_dtile < 0)
+        return;
+    tile = vulture_get_tile(vanim_dtile);
+    if (!tile || !tile->graphic)
+        return;
+    vtx_blit(tile->graphic, x + tile->xmod, y + tile->ymod + (int) (10 * e),
+             1.0 + 0.1 * e, 1.0 - 0.15 * e, 85.0 * e, t < 0.5,
+             (int) (255 * (1.0 - t * t)));
+}
+
+/* play the in-between frames of a pending tween, then any queued death
+   animations (vulture_win.cpp calls this after each refresh; re-entry is
+   blocked while animating) */
 void
 vulture_tween_run(void)
 {
     int f, frames;
 
-    if (!vtw_pending || vtw_animating || !levwin)
+    if (vtw_animating || vanim_kind || !levwin)
         return;
-    vtw_animating = true;
-    frames = (svc.context.run || svc.context.travel) ? 3 : 6;
-    for (f = 1; f <= frames; f++) {
-        vtw_t = (double) f / frames;
-        levwin->force_redraw();
-        ROOTWIN->draw_windows();
-        vulture_refresh_window_region();
-        SDL_Delay(12);
+    if (vtw_pending) {
+        Uint32 t0 = SDL_GetTicks();
+
+        vtw_animating = true;
+        frames = (svc.context.run || svc.context.travel) ? 5 : 11;
+        for (f = 1; f <= frames; f++) {
+            vtw_t = (double) f / frames;
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            vulture_refresh_window_region();
+            SDL_Delay(14);
+        }
+        vtw_t = 1.0;
+        vtw_pending = false;
+        vtw_animating = false;
+        vtw_commit(vtw_last_vx, vtw_last_vy);
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                          "tween: %d frames in %u ms\n", frames,
+                          (unsigned) (SDL_GetTicks() - t0));
     }
-    vtw_t = 1.0;
-    vtw_pending = false;
-    vtw_animating = false;
-    vtw_commit(vtw_last_vx, vtw_last_vy);
+    if (vanim_ndeaths)
+        vanim_play_deaths();
 }
 
 #include <math.h>
@@ -599,8 +864,8 @@ levelwin::draw()
 
     /* s75: tween offsets (camera + movers) and facing for this frame */
     vtw_prepare(view_x, view_y);
-    map_centre_x += vtw_gx;
-    map_centre_y += vtw_gy;
+    map_centre_x += vtw_gx + (int) vpan_px; /* s79: + MMB drag residual */
+    map_centre_y += vtw_gy + (int) vpan_py;
 
     if (prev_cx != view_x || prev_cy != view_y
         || map_data->map_swallow != V_TILE_NONE) {
@@ -805,14 +1070,32 @@ levelwin::draw()
                 if ((cur_tile = vulture_get_tile(map_mon)) != NULL) {
                     /* s75: slide between squares, face the way it went */
                     int tx = x + vtw_ox[i][j], ty = y + vtw_oy[i][j];
+                    double xs = 1.0, ys = 1.0, deg = 0.0;
+                    bool red = false;
 
-                    vtw_put_tile_facing(tx, ty, map_mon, vtw_face[i][j]);
+                    /* s79: squash & stretch + lean while stepping */
+                    if (vtw_mv[i][j]) {
+                        double te = vtw_te;
+
+                        if (te < 0.8)
+                            ys = 1.0 + 0.18 * sin(3.14159265358979 * te / 0.8);
+                        else
+                            ys = 1.0 - 0.26 * sin(3.14159265358979 * (te - 0.8) / 0.2);
+                        xs = 1.0 / pow(ys, 0.7);
+                        deg = vtw_face[i][j] * 10.0 * sin(3.14159265358979 * te);
+                    }
+                    vanim_xform(j, i, &tx, &ty, &xs, &ys, &deg, &red);
+                    vtw_put_tile_x(tx, ty, map_mon, vtw_face[i][j], xs, ys,
+                                   deg, red, 255);
                     if (iflags.hilite_pet
                         && map_data->get_glyph(MAP_PET, j, i))
                         vulture_put_img(
                             tx + cur_tile->xmod, ty + cur_tile->ymod - 10,
                             vulture_get_tile(V_MISC_HILITE_PET)->graphic);
                 }
+
+                /* s78: a slain monster sinking and fading */
+                vanim_draw_death(j, i, x, y);
 
                 /* 6. Effects */
                 vulture_put_tile(x, y,
@@ -988,6 +1271,42 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
 {
     point mouse, mappos;
 
+    /* s79: middle-mouse drag grabs the map (Dota 2 style): the map follows
+     * the mouse, i.e. the camera moves the opposite way.  Whole tiles of
+     * drag become view shifts; the remainder is a pixel offset. */
+    if (state & SDL_BUTTON_MMASK) {
+        extern int vulture_render_scale;
+        int sc = vulture_render_scale > 0 ? vulture_render_scale : 1;
+
+        vpan_px += xrel * sc;
+        vpan_py += yrel * sc;
+        for (int guard = 0; guard < 64; guard++) {
+            double a = (vpan_px / V_MAP_XMOD + vpan_py / V_MAP_YMOD) / 2.0;
+            double b = (vpan_py / V_MAP_YMOD - vpan_px / V_MAP_XMOD) / 2.0;
+            int ra = (int) floor(a + 0.5), rb = (int) floor(b + 0.5);
+            int mdx, mdy, ovx = view_x, ovy = view_y;
+
+            if (!ra && !rb)
+                break;
+            v_rot(ra, rb, vulture_view_rot, &mdx, &mdy);
+            view_x -= mdx;
+            view_y -= mdy;
+            view_x = (view_x < 0) ? 0 : (view_x > COLNO) ? COLNO : view_x;
+            view_y = (view_y < 0) ? 0 : (view_y > ROWNO) ? ROWNO : view_y;
+            vpan_px -= V_MAP_XMOD * (ra - rb);
+            vpan_py -= V_MAP_YMOD * (ra + rb);
+            if (view_x == ovx && view_y == ovy) { /* hit the map edge */
+                vpan_px = vpan_py = 0.0;
+                break;
+            }
+        }
+        /* panning is not movement: don't let the tween animate it */
+        if (!vtw_pending && !vtw_animating)
+            vtw_snap_vx = view_x, vtw_snap_vy = view_y;
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+    }
+
     mouse = vulture_get_mouse_pos();
     mappos = mouse_to_map(mouse);
 
@@ -1050,6 +1369,14 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
                                      int state)
 {
     point mouse, mappos;
+
+    /* s79: releasing a middle-mouse drag snaps the leftover pixels away, so
+     * clicks map to squares exactly again */
+    if (button == SDL_BUTTON_MIDDLE) {
+        vpan_px = vpan_py = 0.0;
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+    }
 
     mouse = vulture_get_mouse_pos();
     mappos = mouse_to_map(mouse);

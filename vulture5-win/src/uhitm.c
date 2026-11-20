@@ -562,6 +562,11 @@ do_attack(struct monst *mtmp)
         return FALSE;
     }
 
+    {
+        extern void vulture_anim_attack(int, int, int, int);
+
+        vulture_anim_attack(u.ux, u.uy, mtmp->mx, mtmp->my); /* s78 */
+    }
     if (Upolyd)
         (void) hmonas(mtmp);
     else

@@ -228,7 +228,7 @@ vpline(const char *line, va_list the_args)
     /* Vulture s70/s75: local-LLM rewording of EVERY line (meaning kept,
        wording fresh each time); sound effects still match the original.
        Exact-text messages (no-repeat, history-suppressed, cursor) stay. */
-    if (*iflags.llmchat
+    if (*iflags.llmchat && iflags.llmreword /* s78: opt-in, it's slow */
         && !(gp.pline_flags & (PLINE_NOREPEAT | OVERRIDE_MSGTYPE
                                | SUPPRESS_HISTORY | NO_CURS_ON_U))) {
         extern void vulture_msg_sound_original(const char *);

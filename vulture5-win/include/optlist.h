@@ -444,6 +444,11 @@ static int optfn_##a(int, int, boolean, char *, char *);
     NHOPTB(llmtalk, Advanced, 0, opt_in, set_in_game,
            Off, Yes, No, No, NoAlias, &iflags.llmtalk, Term_False,
            "#chat lets you type what you say (needs llmchat)")
+    /* local addition (IMPLEMENTATION_LOG s78): with llmchat, reword every
+       message (slow: one model call per line).  Off by default. */
+    NHOPTB(llmreword, Advanced, 0, opt_in, set_in_game,
+           Off, Yes, No, No, NoAlias, &iflags.llmreword, Term_False,
+           "llmchat rewords every message (slow)")
     NHOPTB(lootabc, Advanced, 0, opt_in, set_in_game,
            Off, Yes, No, No, NoAlias, &flags.lootabc, Term_False,
            "use a/b/c rather than o/i/c when looting")

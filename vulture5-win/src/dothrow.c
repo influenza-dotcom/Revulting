@@ -1514,6 +1514,7 @@ throwit(
                           * wielded weapon returns */
     struct obj *oldslot) /* for thrown-and-return used with !fixinv */
 {
+    vulture_sfx("throw"); /* Vulture s80: action sound */
     struct monst *mon;
     int range, urange;
     const struct throw_and_return_weapon *arw = autoreturn_weapon(obj);

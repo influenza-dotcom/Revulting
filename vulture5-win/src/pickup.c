@@ -1930,6 +1930,7 @@ pickup_object(
 struct obj *
 pick_obj(struct obj *otmp)
 {
+    vulture_sfx("pickup"); /* Vulture s80: action sound */
     struct obj *result;
     coordxy ox, oy;
     boolean robshop, fromfloor = otmp->where == OBJ_FLOOR;
@@ -3008,6 +3009,7 @@ use_container(
     boolean held,
     boolean more_containers) /* True iff #loot multiple and this isn't last */
 {
+    vulture_sfx("loot"); /* Vulture s80: action sound */
     struct obj *otmp, *obj = *objp;
     boolean quantum_cat, cursed_mbag, loot_out, loot_in, loot_in_first,
         stash_one, inokay, outokay, outmaybe;

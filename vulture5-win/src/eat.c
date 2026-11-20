@@ -2021,6 +2021,7 @@ eatcorpse(struct obj *otmp)
 staticfn void
 start_eating(struct obj *otmp, boolean already_partly_eaten)
 {
+    vulture_sfx("crunch"); /* Vulture s80: action sound */
     const char *old_nomovemsg, *save_nomovemsg;
     static char msgbuf[BUFSZ];
 
