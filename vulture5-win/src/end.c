@@ -1178,6 +1178,7 @@ really_done(int how)
     if (how < PANICKED) { /* Vulture s89: died for good - let it go quiet */
         extern void vulture_music_silence(void);
 
+        vulture_sfx(flags.female ? "die_f" : "die_m"); /* s96: death cry */
         vulture_music_silence();
         vulture_replay_play(); /* s92: the death-cam */
     }

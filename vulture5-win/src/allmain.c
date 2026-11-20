@@ -742,6 +742,9 @@ vulture_qol_pass(void)
         outdoors = (!Deaf && !Underwater && svl.level.flags.arboreal
                     && levl[u.ux][u.uy].roomno == NO_ROOM);
         vulture_ambient(4, outdoors, 0, -3);
+        /* s96: heartbeat below a quarter of HP */
+        vulture_ambient(5, !Deaf && hp > 0 && hpmax > 0 && hp * 4 < hpmax,
+                        0, 0);
     }
 
     /* s91: monsters you can't see that moved within 9 squares are heard -
@@ -827,6 +830,13 @@ vulture_qol_pass(void)
             hurt_at = svm.moves;
             flush_screen(1);
             vulture_screen_shake(str > 8 ? 8 : str);
+            if (!Deaf) { /* s96: the hero's pain */
+                extern void vulture_hurt_vocal(int, int);
+
+                vulture_hurt_vocal(flags.female ? 1 : 0,
+                                   dmg * 4 >= hpmax ? 2
+                                   : dmg * 10 >= hpmax ? 1 : 0);
+            }
         }
         last_hp = hp, last_hpmax = hpmax;
         last_poly = Upolyd ? TRUE : FALSE;

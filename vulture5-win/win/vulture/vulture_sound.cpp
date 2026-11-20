@@ -63,7 +63,7 @@ void vulture_init_sound(void)
 	}
 
 	Mix_AllocateChannels(16); /* s74: footsteps + effects overlap */
-	Mix_ReserveChannels(6);   /* s88: 0 = speech, 1-5 = ambient loops */
+	Mix_ReserveChannels(7);   /* s88/s96: 0 speech, 1-6 ambient loops */
 	Mix_VolumeMusic(MIX_MAX_VOLUME * 55 / 100); /* s74: quieter music */
 
 	/* Create the sound cache */
@@ -455,12 +455,12 @@ extern "C" void vulture_sfx_at(const char *name, int dx, int dy)
  * source of each kind; a loop fades in when one appears, follows it around
  * the stereo field, and fades out when it's gone.
  */
-#define VAMB_N 5
+#define VAMB_N 6
 static const char *const vamb_file[VAMB_N] = {
 	"amb_lava.wav", "amb_water.wav", "amb_fountain.wav", "amb_sink.wav",
-	"amb_wind.wav"
+	"amb_wind.wav", "amb_heart.wav" /* s96: low-HP heartbeat */
 };
-static const int vamb_vol[VAMB_N] = { 80, 55, 60, 50, 45 }; /* of 128 */
+static const int vamb_vol[VAMB_N] = { 80, 55, 60, 50, 45, 100 }; /* of 128 */
 static Mix_Chunk *vamb_chunk[VAMB_N];
 static int vamb_on[VAMB_N];
 
@@ -505,7 +505,7 @@ extern "C" void vulture_music_silence(void)
 	if (!vulture_sound_inited)
 		return;
 	Mix_FadeOutMusic(1200);
-	for (ch = 1; ch <= 5; ch++)
+	for (ch = 1; ch <= 6; ch++)
 		Mix_FadeOutChannel(ch, 1200);
 }
 
@@ -514,5 +514,27 @@ extern "C" void vulture_sfx_at_vol(const char *name, int dx, int dy, int vol)
 {
 	vsnd_vol_pending = vol;
 	vulture_sfx_at(name, dx, dy);
+	vsnd_vol_pending = -1;
+}
+
+/* s96: the hero's pain - Piper-voiced grunts (hurt_m1-4 / hurt_f1-4).
+ * severity 0 small (grunts only sometimes), 1 normal, 2 big (louder).
+ * A short cooldown keeps a flurry of hits from stacking grunts. */
+extern "C" void vulture_hurt_vocal(int female, int severity)
+{
+	static Uint32 last = 0;
+	Uint32 now = SDL_GetTicks();
+	char name[16];
+
+	if (!vulture_sound_inited || !vulture_opts.play_effects)
+		return;
+	if (now - last < 450)
+		return;
+	if (severity <= 0 && rand() % 10 >= 4)
+		return;
+	last = now;
+	snprintf(name, sizeof name, "hurt_%c%d", female ? 'f' : 'm', 1 + rand() % 4);
+	vsnd_vol_pending = severity >= 2 ? MIX_MAX_VOLUME : severity == 1 ? 100 : 75;
+	vulture_sfx(name);
 	vsnd_vol_pending = -1;
 }

@@ -2301,6 +2301,18 @@ otherwise transform into a black box).  No crash events since 10:41
   from doengrave; message lines for tin/magic whistle, tooled horn,
   bugle, drum, guard footsteps, throne-room conversation, snoring snakes.
 
+## 96. Hurt sounds: grunts, heartbeat, death cry (2026-11-20)
+
+Grunts voiced by the installed Piper voices (Ryan / Amy: "Ugh!",
+"Argh!", "Oof!", "Agh!", death "Aaaargh, no!"), silence-trimmed
+(hurt_prep.py) -> sound/hurt_m1-4, hurt_f1-4, die_m, die_f.
+vulture_hurt_vocal(female, severity) from the HP-loss branch of
+vulture_qol_pass (next to the shake): severity 2 at >= 1/4 max HP (full
+volume), 1 at >= 1/10, else 0 (40% chance); 450 ms cooldown; not while
+Deaf.  Heartbeat (synthesized amb_heart.wav, ~80 bpm) is ambient loop 6
+(7 reserved channels now) while hp < 1/4 max.  Death cry from really_done
+before the music fades.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
