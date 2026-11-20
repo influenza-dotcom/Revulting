@@ -1493,6 +1493,68 @@ familiar_level_msg(void)
 }
 
 /*
+ * Vulture s92: OPTIONS=rivals.  Arriving on a level for the first time
+ * (depth 3+, not in Sokoban, the endgame or on special quest/Ludios
+ * levels), there's a 1-in-8 chance another adventurer is already there: a
+ * player-monster of a random role (mk_mplayer: real class kit, picks up
+ * loot), at about your depth's level (never more than yours + 3), placed
+ * out of sight 8+ squares away, with a generated name.  Same-alignment
+ * rivals are peaceful half the time (#chat with them).  The hero only
+ * hears that someone is about.
+ */
+staticfn void
+vulture_rival_name(char *buf)
+{
+    static const char *const a[] = { "Al", "Bran", "Cor", "Da", "Ed", "Fen",
+        "Gar", "Hal", "Is", "Jor", "Kae", "Lu", "Mor", "Ny", "Os", "Pell",
+        "Quen", "Ro", "Sae", "Tor", "Ul", "Vex", "Wy", "Zan" };
+    static const char *const b[] = { "a", "en", "ric", "wyn", "dra", "lis",
+        "mar", "nok", "ra", "thas", "vin", "ys", "gar", "ion", "ella", "ok" };
+
+    Sprintf(buf, "%s%s", a[rn2(SIZE(a))], b[rn2(SIZE(b))]);
+}
+
+staticfn void
+vulture_maybe_rival(boolean newlevel)
+{
+    struct monst *mtmp;
+    int tries, pm, lvl, dep = depth(&u.uz);
+    coordxy x = 0, y = 0;
+    char nm[PL_NSIZ];
+
+    if (!iflags.rivals || !newlevel || dep < 3 || In_sokoban(&u.uz)
+        || In_endgame(&u.uz) || Is_knox(&u.uz) || In_quest(&u.uz)
+        || svl.level.flags.noteleport || rn2(8))
+        return;
+    for (tries = 0; tries < 200; tries++) {
+        x = rn1(COLNO - 3, 2), y = rn2(ROWNO);
+        if (goodpos(x, y, (struct monst *) 0, 0) && !couldsee(x, y)
+            && distmin(x, y, u.ux, u.uy) >= 8 && ACCESSIBLE(levl[x][y].typ))
+            break;
+    }
+    if (tries >= 200)
+        return;
+    pm = rn1(PM_WIZARD - PM_ARCHEOLOGIST + 1, PM_ARCHEOLOGIST);
+    if (!(mtmp = mk_mplayer(&mons[pm], x, y, FALSE)))
+        return;
+    lvl = dep + rn2(5) - 2;
+    if (lvl > u.ulevel + 3)
+        lvl = u.ulevel + 3;
+    if (lvl < 1)
+        lvl = 1;
+    mtmp->m_lev = lvl;
+    mtmp->mhp = mtmp->mhpmax = d(lvl, 8) + 10;
+    vulture_rival_name(nm);
+    mtmp = christen_monst(mtmp, nm);
+    if (sgn(mtmp->data->maligntyp) == sgn(u.ualign.type) && rn2(2)) {
+        mtmp->mpeaceful = 1;
+        set_malign(mtmp);
+    }
+    if (!Deaf)
+        You_hear("someone else moving about on this level.");
+}
+
+/*
  * Vulture s84: OPTIONS=autosokoban.  Arriving on a Sokoban level whose
  * puzzle isn't solved yet finishes it: the level's own pits and holes are
  * removed - deltrap() runs maybe_finish_sokoban(), which lifts the Sokoban
@@ -2060,6 +2122,7 @@ goto_level(
     }
 
     vulture_autosokoban(); /* Vulture s84 */
+    vulture_maybe_rival(new); /* Vulture s92 */
     (void) pickup(1);
     return;
 }

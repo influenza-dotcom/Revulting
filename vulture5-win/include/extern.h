@@ -418,6 +418,8 @@ extern void vulture_anim_drop(int, int);
 extern void vulture_sfx_at(const char *, int, int);
 extern void vulture_ambient(int, int, int, int);
 extern void vulture_sfx_at_vol(const char *, int, int, int);
+extern void vulture_replay_capture(void);
+extern void vulture_replay_play(void);
 extern boolean llm_free_talk(struct monst *);
 extern void llm_pet_name_pass(void);
 extern int dobuild(void);

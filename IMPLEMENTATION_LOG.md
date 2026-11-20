@@ -2240,6 +2240,36 @@ since most are culled.
   sound resets its channel to full volume, and the focus-mute flag is now
   shared so a sound can't unmute a channel while alt-tabbed.
 
+## 92. Death-cam; rival adventurers (2026-11-20)
+
+- vulture_replay_capture() (from vulture_qol_pass, once per turn) copies
+  the map window at 1/3 size into a 40-turn ring; vulture_replay_play()
+  (really_done, deaths only, after the music fades) plays it back sepia,
+  oldest first, slowing at the end, "Your last moments...", any key skips.
+- OPTIONS=rivals (iflags): goto_level -> vulture_maybe_rival(new): first
+  visit, depth 3+, not Sokoban/endgame/Ludios/quest/no-teleport levels,
+  1 in 8: mk_mplayer of a random role placed out of sight >= 8 squares
+  away, m_lev = depth +-2 capped at u.ulevel+3, hp d(lvl,8)+10, syllable
+  name; same-alignment rivals peaceful half the time; "You hear someone
+  else moving about on this level."
+
+## 93. Blood stains (2026-11-20)
+
+vst_*: every blood spurt (vfx_hit with blood) adds 1, every visible
+corporeal death adds 2, to a per-level (dnum*1000+dlevel) stain store
+(session only - not in the save); drawn as one of 4 procedural dark-red
+splats on the floor layer, alpha by level (max 3), under traps/objects/
+monsters.  Not on water/lava or non-floor.
+
+## Main-menu crash (open, 2026-11-20)
+
+User: the game crashes at startup unless the main menu is skipped.  Event
+log: two access violations at RVA 0x363b08 in the 00:27 build (deleted -
+can't symbolise).  Off-screen run of the current build (SDL dummy video/
+audio) reaches the menu without crashing, so it likely needs the real
+display.  An unstripped twin of each build (relink without -s; identical
+.text) is kept as vulture5-win/binary/NetHackV-syms.exe for addr2line.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -262,6 +262,7 @@ struct instance_flags {
     boolean heroquips;     /* local: the hero remarks on things */
     boolean llmreword;     /* local: llmchat rewords EVERY message */
     boolean autosokoban;   /* local: Sokoban puzzles come pre-solved */
+    boolean rivals;        /* local: rival adventurers roam new levels */
     boolean autoid;        /* local: name items from shop prices, sink
                             * rings and wand engraving (shk.c, do.c,
                             * engrave.c; autoid_call() in do_name.c) */

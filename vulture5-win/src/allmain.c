@@ -711,6 +711,7 @@ vulture_qol_pass(void)
     }
     llm_pet_name_pass(); /* s70: LLM name for an unnamed starting pet */
     llm_hero_quip_pass(); /* s76: the hero remarks on things */
+    vulture_replay_capture(); /* s92: a frame for the death-cam */
 
     /* s88: environmental loops - the nearest KNOWN (seen) lava, water,
        fountain and sink within 9 squares, heard from its direction; wind

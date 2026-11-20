@@ -38,6 +38,7 @@ static int v_rot_door(int tile); /* s62 */
 #define VULTURE_CLIPMARGIN 200
 
 levelwin *levwin;
+static void vst_add(int, int, int); /* s93: blood stains, defined below */
 static double vpan_px = 0.0, vpan_py = 0.0; /* s79: MMB drag residual */
 int vulture_map_draw_msecs = 0;
 int vulture_map_draw_lastmove = 0;
@@ -683,6 +684,12 @@ vulture_anim_death(int x, int y)
     vanim_deaths[vanim_ndeaths].x = x;
     vanim_deaths[vanim_ndeaths].y = y;
     vanim_deaths[vanim_ndeaths].tile = tile;
+    {
+        struct monst *dm = m_at(x, y);
+
+        if (!dm || !noncorporeal(dm->data))
+            vst_add(x, y, 2); /* s93: a death leaves a pool */
+    }
     vanim_ndeaths++;
 }
 
@@ -844,6 +851,117 @@ vanim_draw_death(int j, int i, int x, int y)
 
 
 /*
+ * IMPLEMENTATION_LOG s93: blood stains.  Wherever blood is spilled (a hit
+ * that draws blood - the same moments as the blood spurts - or a death)
+ * the floor keeps a dark splat, drawn under items and creatures, darker
+ * with each new bleed (3 steps).  Stored per level for the session (not in
+ * the save file, which would change its format): coming back to a level
+ * shows its old stains.
+ */
+struct vst_ent {
+    unsigned char x, y, level, seed;
+};
+static std::map<int, std::vector<vst_ent> > vst_store;
+static SDL_Surface *vst_art[4];
+
+static int
+vst_key(void)
+{
+    return u.uz.dnum * 1000 + u.uz.dlevel;
+}
+
+static void
+vst_make_art(void)
+{
+    int k, i, w = V_MAP_XMOD * 2, h = V_MAP_YMOD * 2;
+    unsigned r = 12345;
+
+    for (k = 0; k < 4; k++) {
+        SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32,
+                                                        SDL_PIXELFORMAT_ARGB8888);
+        if (!s)
+            continue;
+        SDL_FillRect(s, NULL, 0);
+        SDL_LockSurface(s);
+        /* a few overlapping flattened blobs + droplets */
+        for (i = 0; i < 9 + k * 2; i++) {
+            int cx, cy, rad, x, y;
+
+            r = r * 1103515245u + 12345u;
+            cx = w / 2 + (int) ((r >> 8) % (w / 2)) - w / 4;
+            r = r * 1103515245u + 12345u;
+            cy = h / 2 + (int) ((r >> 8) % (h / 2)) - h / 4;
+            r = r * 1103515245u + 12345u;
+            rad = i < 4 ? 6 + (int) ((r >> 8) % 9) : 1 + (int) ((r >> 8) % 3);
+            for (y = cy - rad; y <= cy + rad; y++)
+                for (x = cx - rad * 2; x <= cx + rad * 2; x++) {
+                    double dx = (x - cx) / (2.0 * rad), dy = (y - cy) / (double) rad;
+
+                    if (x < 0 || y < 0 || x >= w || y >= h || dx * dx + dy * dy > 1.0)
+                        continue;
+                    ((Uint32 *) ((Uint8 *) s->pixels + y * s->pitch))[x]
+                        = SDL_MapRGBA(s->format, 95, 6, 8, 210);
+                }
+        }
+        SDL_UnlockSurface(s);
+        SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+        vst_art[k] = s;
+    }
+}
+
+static void
+vst_add(int x, int y, int amount)
+{
+    std::vector<vst_ent> &v = vst_store[vst_key()];
+    size_t i;
+
+    if (!isok(x, y) || !ACCESSIBLE(levl[x][y].typ) || is_pool_or_lava(x, y))
+        return;
+    for (i = 0; i < v.size(); i++)
+        if (v[i].x == x && v[i].y == y) {
+            v[i].level = (unsigned char) (v[i].level + amount > 3 ? 3 : v[i].level + amount);
+            return;
+        }
+    if (v.size() < 400) {
+        vst_ent e;
+
+        e.x = (unsigned char) x, e.y = (unsigned char) y;
+        e.level = (unsigned char) (amount > 3 ? 3 : amount);
+        e.seed = (unsigned char) ((x * 31 + y * 17) & 3);
+        v.push_back(e);
+    }
+}
+
+/* draw the stain (if any) of map square (j,i) centred at screen (x,y) */
+static void
+vst_draw(int j, int i, int x, int y)
+{
+    std::map<int, std::vector<vst_ent> >::iterator it = vst_store.find(vst_key());
+    size_t k;
+
+    if (it == vst_store.end())
+        return;
+    for (k = 0; k < it->second.size(); k++) {
+        vst_ent &e = it->second[k];
+
+        if (e.x != j || e.y != i)
+            continue;
+        if (!vst_art[0])
+            vst_make_art();
+        if (vst_art[e.seed]) {
+            SDL_Rect d;
+
+            d.x = x - V_MAP_XMOD, d.y = y - V_MAP_YMOD;
+            d.w = V_MAP_XMOD * 2, d.h = V_MAP_YMOD * 2;
+            SDL_SetSurfaceAlphaMod(vst_art[e.seed],
+                                   (Uint8) (e.level == 1 ? 110 : e.level == 2 ? 170 : 225));
+            SDL_BlitSurface(vst_art[e.seed], NULL, vulture_screen, &d);
+        }
+        return;
+    }
+}
+
+/*
  * IMPLEMENTATION_LOG s85: Stoneshard-style combat feedback.
  *  - Damage numbers: any visible monster that loses HP between frames
  *    gets a number rising off it (white); the hero gets red ones when hurt
@@ -883,6 +1001,7 @@ vfx_hit(int x, int y, int amount, Uint8 r, Uint8 g, Uint8 b, bool blood)
     vfx_list.push_back(e);
     if (!blood)
         return;
+    vst_add(x, y, 1); /* s93: the floor remembers */
     memset(&e, 0, sizeof e);
     e.kind = 2, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = 500;
     for (k = 0; k < 10; k++) {
@@ -1311,6 +1430,99 @@ vw_photo(levelwin *lw)
 }
 
 /*
+ * IMPLEMENTATION_LOG s92: death-cam.  Once per turn the screen as it stands
+ * is copied, at a third of its size, into a ring of the last 40 turns.
+ * When the hero dies for good, really_done() plays the ring back - sepia,
+ * oldest to newest, "Your last moments..." - before the end-of-game
+ * questions.  Any key or click skips it.
+ */
+#define VRP_N 40
+static SDL_Surface *vrp_frame[VRP_N];
+static int vrp_head = 0, vrp_count = 0;
+static d_level vrp_lev = { -1, -1 };
+
+extern "C" void
+vulture_replay_capture(void)
+{
+    static long last = -1L;
+    SDL_Surface *f;
+    SDL_Rect src, dst;
+
+    if (!levwin || vulture_windows_inited != TRUE || svm.moves == last)
+        return;
+    last = svm.moves;
+    if (!on_level(&vrp_lev, &u.uz)) { /* new level: keep going, it's a story */
+        vrp_lev = u.uz;
+    }
+    src.x = levwin->abs_x, src.y = levwin->abs_y;
+    src.w = levwin->w, src.h = levwin->h;
+    if (src.w < 3 || src.h < 3)
+        return;
+    f = vrp_frame[vrp_head];
+    if (!f || f->w != src.w / 3 || f->h != src.h / 3) {
+        if (f)
+            SDL_FreeSurface(f);
+        f = SDL_CreateRGBSurfaceWithFormat(0, src.w / 3, src.h / 3, 32,
+                                           SDL_PIXELFORMAT_ARGB8888);
+        vrp_frame[vrp_head] = f;
+        if (!f)
+            return;
+    }
+    dst.x = dst.y = 0, dst.w = f->w, dst.h = f->h;
+    SDL_BlitScaled(vulture_screen, &src, f, &dst);
+    vrp_head = (vrp_head + 1) % VRP_N;
+    if (vrp_count < VRP_N)
+        vrp_count++;
+}
+
+extern "C" void
+vulture_replay_play(void)
+{
+    int k, start;
+    SDL_Rect d;
+    SDL_Surface *win;
+
+    if (!levwin || vulture_windows_inited != TRUE || vrp_count < 3)
+        return;
+    vulture_replay_capture(); /* the final moment too */
+    start = (vrp_head - vrp_count + VRP_N) % VRP_N;
+    d.x = levwin->abs_x, d.y = levwin->abs_y, d.w = levwin->w, d.h = levwin->h;
+    SDL_PumpEvents();
+    SDL_FlushEvent(SDL_KEYDOWN);
+    SDL_FlushEvent(SDL_MOUSEBUTTONDOWN);
+    for (k = 0; k < vrp_count; k++) {
+        SDL_Surface *f = vrp_frame[(start + k) % VRP_N];
+        const char *cap = "Your last moments...";
+
+        if (!f)
+            continue;
+        SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        SDL_SetSurfaceColorMod(f, 225, 195, 150); /* sepia-ish */
+        SDL_BlitScaled(f, NULL, vulture_screen, &d);
+        SDL_SetSurfaceColorMod(f, 255, 255, 255);
+        vulture_put_text_shadow(V_FONT_LARGE, cap, vulture_screen,
+                                d.x + d.w / 2 - vulture_text_length(V_FONT_LARGE, cap) / 2,
+                                d.y + d.h - 60,
+                                SDL_MapRGB(vulture_screen->format, 235, 215, 170),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        win = SDL_GetWindowSurface(vulture_sdl_window);
+        nhUse(win);
+        vulture_refresh();
+        /* slow toward the end */
+        SDL_Delay(k > vrp_count - 6 ? 260 : 120);
+        if (vanim_input_waiting())
+            break;
+    }
+    SDL_PumpEvents();
+    SDL_FlushEvent(SDL_KEYDOWN);
+    SDL_FlushEvent(SDL_MOUSEBUTTONDOWN);
+    vrp_count = 0;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    vulture_refresh_window_region();
+}
+
+/*
  * IMPLEMENTATION_LOG s82: floating and flying monsters bob.  Floaters
  * (eyes, lights) drift slowly and hover a little above the floor; flyers
  * flutter faster.  Each has its own phase (from m_id) so a flock doesn't
@@ -1732,6 +1944,9 @@ levelwin::draw()
                 vulture_put_tile(x, y,
                                  v_rot_door(map_data->get_glyph(
                                      MAP_FURNITURE, j, i)));
+
+                /* s93: blood stains on the floor */
+                vst_draw(j, i, x, y);
 
                 /* 3. Traps */
                 vulture_put_tile(x, y, map_data->get_glyph(MAP_TRAP, j, i));

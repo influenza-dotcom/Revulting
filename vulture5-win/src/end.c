@@ -1179,6 +1179,7 @@ really_done(int how)
         extern void vulture_music_silence(void);
 
         vulture_music_silence();
+        vulture_replay_play(); /* s92: the death-cam */
     }
     /* in case of a subsequent panic(), there's no point trying to save */
     program_state.something_worth_saving = 0;

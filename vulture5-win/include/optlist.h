@@ -661,6 +661,11 @@ static int optfn_##a(int, int, boolean, char *, char *);
     NHOPTB(reroll, Advanced, 0, opt_in, set_in_config,
            Off, Yes, No, No, NoAlias, &u.uroleplay.reroll, Term_False,
            "allow rerolling of starting inventory and items")
+    /* local addition (IMPLEMENTATION_LOG s92): another adventurer is
+       sometimes exploring a level you arrive on (do.c) */
+    NHOPTB(rivals, Advanced, 0, opt_in, set_in_game,
+           Off, Yes, No, No, NoAlias, &iflags.rivals, Term_False,
+           "rival adventurers sometimes roam new levels")
     NHOPTB(rest_on_space, Advanced, 0, opt_in, set_in_game, Off,
            Yes, No, No, NoAlias, &flags.rest_on_space, Term_False,
            "space bar is bound to the rest-command")
