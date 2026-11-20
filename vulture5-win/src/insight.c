@@ -2447,6 +2447,23 @@ record_achievement(schar achidx)
     if (program_state.gameover)
         return;
 
+    /* Vulture s100: an achievement card slides in */
+    {
+        extern void vulture_toast(const char *, const char *);
+        char tb[BUFSZ];
+
+        if (absidx >= ACH_RNK1 && absidx <= ACH_RNK8) {
+            Sprintf(tb, "%s", rank_of(rank_to_xlev(absidx - (ACH_RNK1 - 1)),
+                                      Role_switch, (achidx < 0) ? TRUE : FALSE));
+            tb[0] = highc(tb[0]);
+            vulture_toast("NEW RANK", tb);
+        } else if (absidx < SIZE(achieve_msg) && *achieve_msg[absidx].msg) {
+            Sprintf(tb, "%s", achieve_msg[absidx].msg);
+            tb[0] = highc(tb[0]);
+            vulture_toast("ACHIEVEMENT UNLOCKED", tb);
+        }
+    }
+
     if (absidx >= ACH_RNK1 && absidx <= ACH_RNK8) {
         livelog_printf(achieve_msg[absidx].llflag,
                        "attained the rank of %s (level %d)",

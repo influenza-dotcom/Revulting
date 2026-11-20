@@ -352,6 +352,13 @@ pluslvl(
               u.ulevel);
         if (u.ulevelmax < u.ulevel)
             u.ulevelmax = u.ulevel;
+        { /* Vulture s100 */
+            extern void vulture_toast(const char *, const char *);
+            char tb[40];
+
+            Sprintf(tb, "Experience level %d", u.ulevel);
+            vulture_toast("LEVEL UP", tb);
+        }
         adjabil(u.ulevel - 1, u.ulevel); /* give new intrinsics */
         SoundAchievement(0, sa2_xplevelup, 0);
         old_ach_cnt = count_achievements();

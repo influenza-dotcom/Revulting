@@ -709,6 +709,15 @@ vulture_qol_pass(void)
         llm_warmed = TRUE;
         vulture_llm_warmup(iflags.llmchat);
     }
+    { /* s100: title card for wherever the session starts */
+        static boolean carded = FALSE;
+        extern void vulture_place_card(boolean);
+
+        if (!carded) {
+            carded = TRUE;
+            vulture_place_card(TRUE);
+        }
+    }
     llm_pet_name_pass(); /* s70: LLM name for an unnamed starting pet */
     llm_hero_quip_pass(); /* s76: the hero remarks on things */
     vulture_replay_capture(); /* s92: a frame for the death-cam */

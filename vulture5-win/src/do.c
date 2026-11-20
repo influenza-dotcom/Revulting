@@ -1502,6 +1502,70 @@ familiar_level_msg(void)
  * rivals are peaceful half the time (#chat with them).  The hero only
  * hears that someone is about.
  */
+/* Vulture s100: a GTA-style title card for somewhere new - the dungeon's
+   name big, the special place (or the depth) under it.  Shown on a new
+   level, on changing dungeon, and once at the start of a session. */
+void vulture_place_card(boolean);
+void
+vulture_place_card(boolean newlevel)
+{
+    extern void vulture_location_card(const char *, const char *);
+    static int last_dnum = -1;
+    const char *dn = svd.dungeons[u.uz.dnum].dname, *special = 0;
+    char title[64], sub[64];
+    int i;
+
+    if (!newlevel && (int) u.uz.dnum == last_dnum)
+        return;
+    last_dnum = (int) u.uz.dnum;
+    if (Is_oracle_level(&u.uz))
+        special = "The Oracle";
+    else if (svl.level.flags.has_town)
+        special = "Minetown";
+    else if (Is_bigroom(&u.uz))
+        special = "The Big Room";
+    else if (Is_rogue_level(&u.uz))
+        special = "A Primitive Place";
+    else if (Is_medusa_level(&u.uz))
+        special = "Medusa's Island";
+    else if (Is_stronghold(&u.uz))
+        special = "The Castle";
+    else if (Is_valley(&u.uz))
+        special = "The Valley of the Dead";
+    else if (Is_mineend_level(&u.uz))
+        special = "Mines' End";
+    else if (Is_sokoend_level(&u.uz))
+        special = "The Treasure Zoo";
+    else if (Is_knox(&u.uz))
+        special = "The Fort";
+    else if (Is_qstart(&u.uz))
+        special = "Home";
+    else if (Is_nemesis(&u.uz))
+        special = "The Nemesis' Lair";
+    else if (Is_wiz1_level(&u.uz) || Is_wiz2_level(&u.uz) || Is_wiz3_level(&u.uz))
+        special = "The Wizard's Tower";
+    else if (Is_sanctum(&u.uz))
+        special = "The Sanctum";
+    else if (Is_astralevel(&u.uz))
+        special = "The Astral Plane";
+    else if (Is_earthlevel(&u.uz))
+        special = "The Plane of Earth";
+    else if (Is_airlevel(&u.uz))
+        special = "The Plane of Air";
+    else if (Is_firelevel(&u.uz))
+        special = "The Plane of Fire";
+    else if (Is_waterlevel(&u.uz))
+        special = "The Plane of Water";
+    for (i = 0; dn[i] && i < (int) sizeof title - 1; i++)
+        title[i] = highc(dn[i]);
+    title[i] = 0;
+    if (special)
+        Strcpy(sub, special);
+    else
+        Sprintf(sub, "Level %d", depth(&u.uz));
+    vulture_location_card(title, sub);
+}
+
 staticfn void
 vulture_rival_name(char *buf)
 {
@@ -2123,6 +2187,7 @@ goto_level(
 
     vulture_autosokoban(); /* Vulture s84 */
     vulture_maybe_rival(new); /* Vulture s92 */
+    vulture_place_card(new); /* Vulture s100 */
     (void) pickup(1);
     return;
 }

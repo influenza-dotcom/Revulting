@@ -1715,6 +1715,358 @@ vulture_tween_run(void)
 #include <math.h>
 
 /*
+ * IMPLEMENTATION_LOG s100: the 2027 HUD.
+ *  - Toasts: achievement / level-up cards slide in on the right, hold,
+ *    and slide back out (vulture_toast, from insight.c and exper.c).
+ *  - Location card: a big title fades in mid-screen on arriving somewhere
+ *    new - "THE GNOMISH MINES / Minetown" (vulture_location_card, do.c).
+ *  - Heat: up to five wanted stars when the law is after you (angry
+ *    shopkeeper, watch, priest, vault guard; angry god; the Wizard's
+ *    harassment).  They pulse when the heat rises.
+ *  - Waypoint: a bobbing marker over the remembered way onward (down
+ *    stairs; up stairs while carrying the Amulet), or an arrow at the edge
+ *    of the view pointing toward it when it is off-screen.
+ */
+struct vhud_toast {
+    std::string title, body;
+    Uint32 born;
+};
+static std::vector<vhud_toast> vhud_toasts;
+static std::string vhud_card_title, vhud_card_sub;
+static Uint32 vhud_card_born = 0;
+static bool vhud_card_pending = false;
+static int vhud_heat_last = 0;
+static Uint32 vhud_heat_rose = 0;
+static SDL_Surface *vhud_dark = NULL, *vhud_star[2] = { NULL, NULL };
+
+extern "C" void
+vulture_toast(const char *title, const char *body)
+{
+    vhud_toast t;
+
+    t.title = title ? title : "";
+    t.body = body ? body : "";
+    t.born = 0; /* the clock starts when it first appears */
+    if (vhud_toasts.size() >= 8)
+        vhud_toasts.erase(vhud_toasts.begin());
+    vhud_toasts.push_back(t);
+}
+
+extern "C" void
+vulture_location_card(const char *title, const char *sub)
+{
+    vhud_card_title = title ? title : "";
+    vhud_card_sub = sub ? sub : "";
+    vhud_card_pending = true;
+}
+
+/* a translucent dark box (one cached surface, blitted clipped) */
+static void
+vhud_box(int x, int y, int w, int h, int alpha)
+{
+    SDL_Rect s, d;
+
+    if (!vhud_dark) {
+        vhud_dark = SDL_CreateRGBSurfaceWithFormat(0, 640, 160, 32,
+                                                   SDL_PIXELFORMAT_ARGB8888);
+        if (!vhud_dark)
+            return;
+        SDL_FillRect(vhud_dark, NULL, SDL_MapRGBA(vhud_dark->format, 8, 6, 10, 255));
+        SDL_SetSurfaceBlendMode(vhud_dark, SDL_BLENDMODE_BLEND);
+    }
+    SDL_SetSurfaceAlphaMod(vhud_dark, (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
+    s.x = 0, s.y = 0, s.w = w > 640 ? 640 : w, s.h = h > 160 ? 160 : h;
+    d.x = x, d.y = y, d.w = s.w, d.h = s.h;
+    SDL_BlitSurface(vhud_dark, &s, vulture_screen, &d);
+}
+
+/* a five-pointed star, lit (gold) or unlit (dim outline-ish grey) */
+static SDL_Surface *
+vhud_star_surf(int lit)
+{
+    const int R = 11, dim = 2 * R + 2;
+    double px[10], py[10];
+    int k, x, y;
+    SDL_Surface *s;
+
+    if (vhud_star[lit])
+        return vhud_star[lit];
+    s = SDL_CreateRGBSurfaceWithFormat(0, dim, dim, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (!s)
+        return NULL;
+    for (k = 0; k < 10; k++) {
+        double a = -M_PI / 2 + k * M_PI / 5, r = (k & 1) ? R * 0.42 : R;
+
+        px[k] = dim / 2.0 + r * cos(a);
+        py[k] = dim / 2.0 + r * sin(a);
+    }
+    SDL_LockSurface(s);
+    for (y = 0; y < dim; y++)
+        for (x = 0; x < dim; x++) {
+            /* 4x supersampled point-in-polygon for smooth edges */
+            int hits = 0, sxs, sys;
+
+            for (sys = 0; sys < 2; sys++)
+                for (sxs = 0; sxs < 2; sxs++) {
+                    double tx = x + 0.25 + 0.5 * sxs, ty = y + 0.25 + 0.5 * sys;
+                    int i, j, in = 0;
+
+                    for (i = 0, j = 9; i < 10; j = i++)
+                        if (((py[i] > ty) != (py[j] > ty))
+                            && tx < (px[j] - px[i]) * (ty - py[i]) / (py[j] - py[i]) + px[i])
+                            in = !in;
+                    hits += in;
+                }
+            ((Uint32 *) ((Uint8 *) s->pixels + y * s->pitch))[x]
+                = lit ? SDL_MapRGBA(s->format, 255, 205 - y * 3, 60, (Uint8) (hits * 255 / 4))
+                      : SDL_MapRGBA(s->format, 70, 70, 78, (Uint8) (hits * 150 / 4));
+        }
+    SDL_UnlockSurface(s);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    vhud_star[lit] = s;
+    return s;
+}
+
+/* how badly the law wants you, 0..5 */
+static int
+vhud_heat(void)
+{
+    struct monst *m;
+    int heat = 0, shk = 0, watch = 0, priest = 0, guard = 0;
+
+    for (m = fmon; m; m = m->nmon) {
+        if (DEADMONSTER(m) || m->mpeaceful || m->mtame)
+            continue;
+        if (m->isshk)
+            shk = 1;
+        else if (is_watch(m->data))
+            watch = 1;
+        else if (m->ispriest)
+            priest = 1;
+        else if (m->isgd)
+            guard = 1;
+    }
+    heat = 2 * shk + 2 * watch + priest + guard;
+    if (u.ugangr)
+        heat += u.ugangr > 3 ? 2 : 1;
+    if (u.uevent.udemigod)
+        heat += 2; /* the Wizard keeps coming back */
+    return heat > 5 ? 5 : heat;
+}
+
+/* the remembered way onward on this level, or false */
+static bool
+vhud_waypoint(int *wx, int *wy)
+{
+    stairway *st, *best = NULL;
+    bool up = u.uhave.amulet ? true : false;
+
+    for (st = gs.stairs; st; st = st->next) {
+        if ((st->up ? true : false) != up || !isok(st->sx, st->sy)
+            || !levl[st->sx][st->sy].seenv)
+            continue;
+        /* prefer the main way on in this dungeon over a branch */
+        if (!best || (st->tolev.dnum == u.uz.dnum && best->tolev.dnum != u.uz.dnum))
+            best = st;
+    }
+    if (!best || u_at(best->sx, best->sy))
+        return false;
+    *wx = best->sx, *wy = best->sy;
+    return true;
+}
+
+static void
+vhud_draw(int cx, int cy, int vx, int vy, int x0, int y0, int w, int h)
+{
+    Uint32 now = SDL_GetTicks();
+    Uint32 black = SDL_MapRGB(vulture_screen->format, 0, 0, 0);
+    int rightx = x0 + w - 16, k;
+
+    /* ---- waypoint ---- */
+    {
+        int wx, wy, sx, sy;
+        bool hostiles = false;
+        struct monst *m;
+
+        for (m = fmon; m; m = m->nmon)
+            if (!DEADMONSTER(m) && !m->mpeaceful && !m->mtame && canspotmon(m)
+                && couldsee(m->mx, m->my)) {
+                hostiles = true;
+                break;
+            }
+        if (!hostiles && !Blind && !Hallucination && !u.uswallow
+            && vhud_waypoint(&wx, &wy)) {
+            Uint32 cyan = SDL_MapRGB(vulture_screen->format, 120, 230, 255);
+            const char *lbl = u.uhave.amulet ? "Up" : "Down";
+            int margin = 48, ex, ey;
+
+            vfx_square_screen(wx, wy, cx, cy, vx, vy, &sx, &sy);
+            sy -= 46 + (int) (5 * sin(now / 260.0)); /* float above the tile */
+            if (sx > x0 + margin && sx < x0 + w - margin && sy > y0 + margin
+                && sy < y0 + h - margin) {
+                /* on screen: a bobbing chevron with a label */
+                for (k = 0; k < 7; k++) {
+                    vfx_dot(sx - 7 + k, sy + k, 2, black);
+                    vfx_dot(sx + 7 - k, sy + k, 2, black);
+                }
+                for (k = 0; k < 7; k++) {
+                    vfx_dot(sx - 7 + k, sy - 1 + k, 2, cyan);
+                    vfx_dot(sx + 7 - k, sy - 1 + k, 2, cyan);
+                }
+                vulture_put_text_shadow(V_FONT_SMALL, lbl, vulture_screen,
+                                        sx - vulture_text_length(V_FONT_SMALL, lbl) / 2,
+                                        sy - 18, cyan, black);
+            } else {
+                /* off screen: clamp to the view edge, arrow pointing at it */
+                int mx = x0 + w / 2, my = y0 + h / 2;
+                double dx = sx - mx, dy = sy - my, len = sqrt(dx * dx + dy * dy);
+                double sc, ux, uy;
+                int dist = distmin(u.ux, u.uy, wx, wy);
+                char buf[40];
+
+                if (len < 1)
+                    len = 1;
+                ux = dx / len, uy = dy / len;
+                sc = fabs(ux) * (h / 2 - margin) > fabs(uy) * (w / 2 - margin)
+                         ? (w / 2 - margin) / fabs(ux)
+                         : (h / 2 - margin) / fabs(uy);
+                ex = mx + (int) (ux * sc), ey = my + (int) (uy * sc);
+                for (k = 0; k < 14; k++) {
+                    /* a solid triangle: tip at +14 along the direction */
+                    double t = k / 13.0, half = 8 * (1 - t);
+                    int bx = ex + (int) (ux * k), by = ey + (int) (uy * k), s2;
+
+                    for (s2 = -(int) half; s2 <= (int) half; s2++)
+                        vfx_dot(bx + (int) (-uy * s2), by + (int) (ux * s2), 2, cyan);
+                }
+                snprintf(buf, sizeof buf, "%s %d", lbl, dist);
+                vulture_put_text_shadow(V_FONT_SMALL, buf, vulture_screen,
+                                        ex - (int) (ux * 26) - vulture_text_length(V_FONT_SMALL, buf) / 2,
+                                        ey - (int) (uy * 26) - 7, cyan, black);
+            }
+        }
+    }
+
+    /* ---- heat stars ---- */
+    {
+        int heat = vhud_heat(), sw = 24, total = 5 * sw;
+        int sx0 = rightx - total, sy0 = y0 + h * 27 / 100;
+        bool pulse;
+
+        if (heat > vhud_heat_last) {
+            vhud_heat_rose = now ? now : 1;
+            vulture_sfx("whistle");
+        }
+        vhud_heat_last = heat;
+        pulse = vhud_heat_rose && now - vhud_heat_rose < 2400;
+        if (heat > 0) {
+            for (k = 0; k < 5; k++) {
+                bool lit = k < heat;
+                SDL_Surface *st = vhud_star_surf(lit ? 1 : 0);
+                SDL_Rect d;
+
+                /* lit stars flash on and off while the heat is rising */
+                if (lit && pulse && ((now - vhud_heat_rose) / 200) % 2)
+                    st = vhud_star_surf(0);
+                if (!st)
+                    continue;
+                d.x = sx0 + k * sw, d.y = sy0, d.w = st->w, d.h = st->h;
+                SDL_BlitSurface(st, NULL, vulture_screen, &d);
+            }
+        } else {
+            vhud_heat_rose = 0;
+        }
+    }
+
+    /* ---- toasts ---- */
+    {
+        const Uint32 life = 4800, slide = 260;
+        int ty = y0 + h * 27 / 100 + 34, tw = 300, th = 50, shown = 0;
+        Uint32 gold = SDL_MapRGB(vulture_screen->format, 255, 200, 70);
+        Uint32 body = SDL_MapRGB(vulture_screen->format, 235, 232, 225);
+
+        for (k = 0; k < (int) vhud_toasts.size() && shown < 3;) {
+            vhud_toast &t = vhud_toasts[k];
+            Uint32 age;
+            double in;
+            int x;
+
+            if (!t.born) {
+                t.born = now ? now : 1;
+                vulture_sfx("chime");
+            }
+            age = now - t.born;
+            if (age >= life) {
+                vhud_toasts.erase(vhud_toasts.begin() + k);
+                continue;
+            }
+            /* ease in from the right, ease back out at the end */
+            in = age < slide ? (double) age / slide
+                 : age > life - slide ? (double) (life - age) / slide : 1.0;
+            in = 1 - (1 - in) * (1 - in) * (1 - in);
+            x = rightx - (int) (tw * in);
+            vhud_box(x, ty, tw + 16, th, 200);
+            SDL_Rect bar;
+
+            bar.x = x, bar.y = ty, bar.w = 4, bar.h = th;
+            SDL_FillRect(vulture_screen, &bar, gold);
+            vulture_put_text_shadow(V_FONT_SMALL, t.title, vulture_screen,
+                                    x + 14, ty + 7, gold, black);
+            vulture_put_text_shadow(V_FONT_LARGE, t.body, vulture_screen,
+                                    x + 14, ty + 23, body, black);
+            ty += th + 8;
+            shown++;
+            k++;
+        }
+    }
+
+    /* ---- location card ---- */
+    if (vhud_card_pending) {
+        vhud_card_pending = false;
+        vhud_card_born = now ? now : 1;
+    }
+    if (vhud_card_born) {
+        const Uint32 life = 3600;
+        Uint32 age = now - vhud_card_born;
+
+        if (age >= life) {
+            vhud_card_born = 0;
+        } else {
+            /* letter-spaced title, sliding apart a touch as it plays */
+            double in = age < 400 ? age / 400.0 : age > life - 500 ? (life - age) / 500.0 : 1.0;
+            int spacing = 4 + (int) (age / 900);
+            int tl = 0, x, cy0 = y0 + h * 22 / 100;
+            size_t c;
+            Uint32 tcol = SDL_MapRGB(vulture_screen->format, 255, 236, 200);
+            Uint32 scol = SDL_MapRGB(vulture_screen->format, 220, 180, 110);
+
+            for (c = 0; c < vhud_card_title.size(); c++)
+                tl += vulture_text_length(V_FONT_LARGE, std::string(1, vhud_card_title[c])) + spacing;
+            vhud_box(x0 + w / 2 - tl / 2 - 30, cy0 - 8, tl + 60, 56, (int) (150 * in));
+            if (in > 0.35) {
+                SDL_Rect line;
+
+                x = x0 + w / 2 - tl / 2;
+                for (c = 0; c < vhud_card_title.size(); c++) {
+                    std::string ch(1, vhud_card_title[c]);
+
+                    vulture_put_text_shadow(V_FONT_LARGE, ch, vulture_screen, x, cy0, tcol, black);
+                    x += vulture_text_length(V_FONT_LARGE, ch) + spacing;
+                }
+                line.w = (int) ((tl + 20) * in), line.h = 1;
+                line.x = x0 + w / 2 - line.w / 2, line.y = cy0 + 22;
+                SDL_FillRect(vulture_screen, &line, scol);
+                if (!vhud_card_sub.empty())
+                    vulture_put_text_shadow(V_FONT_SMALL, vhud_card_sub, vulture_screen,
+                                            x0 + w / 2 - vulture_text_length(V_FONT_SMALL, vhud_card_sub) / 2,
+                                            cy0 + 28, scol, black);
+            }
+        }
+    }
+}
+
+
+/*
  * IMPLEMENTATION_LOG s74: low-HP vignette.  Below half HP the map's edges
  * darken to blood red, stronger as HP falls.  Drawn at the end of the map
  * draw (which repaints the whole map), so the UI windows on top stay
@@ -2088,6 +2440,8 @@ levelwin::draw()
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
     vulture_draw_vignette(this->abs_x, this->abs_y, this->w, this->h); /* s74 */
+    vhud_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
+              this->abs_y, this->w, this->h); /* s100: toasts, card, heat, waypoint */
 
     /* Restore drawing region */
     vulture_set_draw_region(0, 0, vulture_screen->w - 1,
