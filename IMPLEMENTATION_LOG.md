@@ -2313,6 +2313,19 @@ Deaf.  Heartbeat (synthesized amb_heart.wav, ~80 bpm) is ambient loop 6
 (7 reserved channels now) while hp < 1/4 max.  Death cry from really_done
 before the music fades.
 
+## 97. Harder shake, impact sounds (2026-11-20)
+
+"It crashes again" (12:16): no crash event for the current build; that
+startup ended without creating game windows and the next one went
+straight into play - the main menu's relaunch into a roster hero, which
+looks like a crash (window closes and reopens).  The game was running
+fine afterwards (tween ~170 ms a step).
+Shake: amp 4 + 3*strength (was 2 + 2*strength), 10 frames, stronger red
+flash.  vulture_impact(severity) plays with every HP loss, before the
+shake: impact_light (< 1/10 max HP), impact_mid (>= 1/10), impact_heavy
+bone-crunch (>= 1/4), heavy + impact_slam deep boom (>= 1/2); synthesized
+(synth_impact.py).  Layered with the Piper grunt (s96).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

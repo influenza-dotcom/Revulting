@@ -829,6 +829,12 @@ vulture_qol_pass(void)
 
             hurt_at = svm.moves;
             flush_screen(1);
+            if (!Deaf) { /* s97: the impact, before the jolt */
+                extern void vulture_impact(int);
+
+                vulture_impact(dmg * 2 >= hpmax ? 3 : dmg * 4 >= hpmax ? 2
+                               : dmg * 10 >= hpmax ? 1 : 0);
+            }
             vulture_screen_shake(str > 8 ? 8 : str);
             if (!Deaf) { /* s96: the hero's pain */
                 extern void vulture_hurt_vocal(int, int);

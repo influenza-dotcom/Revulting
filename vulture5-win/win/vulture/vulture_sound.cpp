@@ -538,3 +538,26 @@ extern "C" void vulture_hurt_vocal(int female, int severity)
 	vulture_sfx(name);
 	vsnd_vol_pending = -1;
 }
+
+/* s97: the impact of a hit you take, layered by severity:
+ * 0 light smack, 1 solid thud, 2 bone-crunch, 3 crunch + deep slam */
+extern "C" void vulture_impact(int severity)
+{
+	if (!vulture_sound_inited || !vulture_opts.play_effects)
+		return;
+	switch (severity) {
+	case 0:
+		vulture_sfx("impact_light");
+		break;
+	case 1:
+		vulture_sfx("impact_mid");
+		break;
+	case 2:
+		vulture_sfx("impact_heavy");
+		break;
+	default:
+		vulture_sfx("impact_heavy");
+		vulture_sfx("impact_slam");
+		break;
+	}
+}

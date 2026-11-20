@@ -1153,7 +1153,7 @@ void vulture_refresh(void)
 extern "C" void vulture_screen_shake(int strength)
 {
 	SDL_Surface *win, *copy, *red;
-	int f, frames = 8, amp;
+	int f, frames = 10, amp; /* s97: 10 frames (was 8) */
 
 	if (!vulture_sdl_window || strength <= 0)
 		return;
@@ -1171,7 +1171,7 @@ extern "C" void vulture_screen_shake(int strength)
 	}
 	if (strength > 8)
 		strength = 8;
-	amp = 2 + strength * 2;
+	amp = 4 + strength * 3; /* s97: about 3x the old jolt for a small hit */
 	for (f = 0; f < frames; f++) {
 		double k = 1.0 - (double) f / frames;
 		SDL_Rect d;
@@ -1185,7 +1185,7 @@ extern "C" void vulture_screen_shake(int strength)
 		d.h = win->h + 2 * amp;
 		SDL_BlitScaled(copy, NULL, win, &d);
 		if (red) {
-			SDL_SetSurfaceAlphaMod(red, (Uint8) ((40 + 12 * strength) * k));
+			SDL_SetSurfaceAlphaMod(red, (Uint8) ((60 + 15 * strength) * k));
 			SDL_BlitSurface(red, NULL, win, NULL);
 		}
 		SDL_UpdateWindowSurface(vulture_sdl_window);
