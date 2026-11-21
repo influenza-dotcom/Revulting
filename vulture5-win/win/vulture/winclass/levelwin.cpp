@@ -189,6 +189,20 @@ levelwin::set_view(int x, int y)
     vpan_px = vpan_py = 0.0; /* s79: a recentre ends any drag offset */
 }
 
+/* s117: the hero has left the visible map (the free camera's rescue) */
+bool
+levelwin::hero_off_view(int map_x, int map_y)
+{
+    int sx, sy;
+
+    v_rot(map_x - view_x, map_y - view_y, 4 - vulture_view_rot, &map_x,
+          &map_y);
+    sx = vulture_screen->w / 2 + V_MAP_XMOD * (map_x - map_y) + (int) vpan_px;
+    sy = vulture_screen->h / 2 + V_MAP_YMOD * (map_x + map_y) + (int) vpan_py;
+    return sx < V_MAP_XMOD || sx > vulture_screen->w - V_MAP_XMOD
+           || sy < V_MAP_YMOD * 2 || sy > vulture_screen->h * 5 / 6;
+}
+
 /* check whether the map needs recentering */
 bool
 levelwin::need_recenter(int map_x, int map_y)
@@ -224,6 +238,45 @@ levelwin::force_redraw(void)
 }
 
 #include <map>
+#include "statuswin.h"
+
+/* s117: the hero portrait left of the status panel (statuswin.cpp s110):
+   click = centre the camera on the hero, double-click = lock it there */
+static bool
+vpt_hit(int mx, int my)
+{
+    int ps, px, py;
+
+    if (!stwin || !stwin->visible)
+        return false;
+    ps = stwin->h, px = stwin->abs_x - V_UI(4) - ps, py = stwin->abs_y;
+    return px >= 0 && mx >= px && mx < px + ps && my >= py && my < py + ps;
+}
+
+extern "C" void vulture_toast(const char *, const char *);
+
+static void
+vpt_click(void)
+{
+    static Uint32 last = 0;
+    Uint32 now = SDL_GetTicks();
+
+    if (last && now - last < 400) {
+        last = 0;
+        vulture_opts.recenter = !vulture_opts.recenter;
+        vulture_write_userconfig();
+        vulture_toast(vulture_opts.recenter ? "CAMERA LOCKED" : "CAMERA FREE",
+                      vulture_opts.recenter
+                          ? "It follows you. Double-click the portrait to free it."
+                          : "Click the portrait to jump back to yourself.");
+    } else {
+        last = now;
+    }
+    if (levwin) {
+        levwin->set_view(u.ux, u.uy);
+        levwin->force_redraw();
+    }
+}
 
 /*
  * IMPLEMENTATION_LOG s75: tweening + facing.
@@ -256,6 +309,8 @@ static signed char vtw_face[ROWNO][COLNO];
 static int vtw_gx = 0, vtw_gy = 0;
 static int vtw_last_vx = -1, vtw_last_vy = -1;
 static double vtw_te = 1.0;               /* s79: eased tween time */
+static bool vtw_linear = false;           /* s117: walking glide, no easing */
+int vulture_tween_ate_ms = 0;             /* s117: delay_output skips this */
 static char vtw_mv[ROWNO][COLNO];         /* s79: square holds a mover */
 #define VTW_HERO 0xFFFFFFFFu
 
@@ -343,7 +398,7 @@ vtw_prepare(int vx, int vy)
     }
 
     t = vtw_t;
-    te = t * t * (3.0 - 2.0 * t); /* smoothstep */
+    te = vtw_linear ? t : t * t * (3.0 - 2.0 * t); /* smoothstep */
     vtw_te = te;
     for (it = vtw_cur.begin(); it != vtw_cur.end(); ++it) {
         int x = it->second.x, y = it->second.y;
@@ -361,7 +416,8 @@ vtw_prepare(int vx, int vy)
             /* s78/s79: a hop on each step - airborne for the first 0.8,
                then a landing squash (drawn in levelwin::draw) */
             vtw_oy[y][x] = (short) ((1.0 - te) * sy
-                                    - 12.0 * sin(3.14159265358979 * (te < 0.8 ? te / 0.8 : 1.0)));
+                                    - (vtw_linear ? 5.0 : 12.0)
+                                      * sin(3.14159265358979 * (te < 0.8 ? te / 0.8 : 1.0)));
             vtw_mv[y][x] = 1;
         }
     }
@@ -1006,6 +1062,8 @@ struct vfx_ent {
     Uint32 t0, dur;
     char txt[40]; /* s113: room for a bark line */
     Uint8 r, g, b;
+    int sub;                  /* s117: marker kind / bubble text slot */
+    unsigned mid;             /* s117: bubble speaker (0 = hero); marker: up */
     float vx[10], vy[10];
 };
 static std::vector<vfx_ent> vfx_list;
@@ -1171,61 +1229,186 @@ vfx_glowdot(int x, int y, Uint8 r, Uint8 g, Uint8 b, int alpha)
     SDL_BlitSurface(dot, NULL, vulture_screen, &d);
 }
 
-/* s108: Dota-style click marker on map square (x, y) */
+/* s108: Dota-style click marker on map square (x, y).  s117: its shape
+   and colour say what the click sends the hero to do */
+enum { VCK_MOVE, VCK_ATTACK, VCK_ALLY, VCK_ITEM, VCK_DOOR, VCK_STAIRS,
+       VCK_DRINK };
+
 static void
-vfx_click(int x, int y, bool attack)
+vfx_click(int x, int y, int sub, bool up)
 {
+    static const Uint8 col[7][3] = {
+        { 90, 255, 120 },  /* move: green */
+        { 255, 70, 60 },   /* attack: red */
+        { 110, 180, 255 }, /* pet / peaceful: blue */
+        { 255, 205, 70 },  /* item: gold */
+        { 255, 145, 50 },  /* door: amber */
+        { 190, 120, 255 }, /* stairs: violet */
+        { 80, 225, 255 },  /* fountain / sink: cyan */
+    };
     vfx_ent e;
 
-    if (!isok(x, y))
+    if (!isok(x, y) || sub < 0 || sub > VCK_DRINK)
         return;
     memset(&e, 0, sizeof e);
-    e.kind = 3, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = 520;
-    if (attack)
-        e.r = 255, e.g = 70, e.b = 60;
-    else
-        e.r = 90, e.g = 255, e.b = 120;
+    e.kind = 3, e.x = x, e.y = y, e.t0 = SDL_GetTicks();
+    e.dur = sub == VCK_STAIRS ? 750 : (sub == VCK_ITEM || sub == VCK_DRINK) ? 650 : 520;
+    e.sub = sub, e.mid = up ? 1 : 0;
+    e.r = col[sub][0], e.g = col[sub][1], e.b = col[sub][2];
     vfx_list.push_back(e);
 }
 
-/* draw one click marker: a ring that pops then shrinks into the square,
-   four arrows closing in, all fading out (flattened for the iso floor) */
-static void
-vfx_draw_click(const vfx_ent &e, double age, int sx, int sy)
-{
-    double pop = age < 0.18 ? age / 0.18 : 1.0;
-    double rad = (age < 0.18 ? 16 + 14 * pop : 30 - 22 * (age - 0.18) / 0.82);
-    double ease = 1 - (1 - age) * (1 - age);
-    int alpha = (int) (255 * (age < 0.6 ? 1.0 : (1.0 - age) / 0.4));
-    int k, n = 32;
+#define VCK_PI 3.14159265358979
 
-    /* ring (with a dark under-ring so it reads on bright floors) */
+/* a flattened ring of glow dots (with a dark under-ring so it reads on
+   bright floors) */
+static void
+vfx_ring(int sx, int sy, double rad, const vfx_ent &e, int alpha)
+{
+    int k, n = rad > 14 ? 32 : 20;
+
     for (k = 0; k < n; k++) {
-        double a = 2 * 3.14159265358979 * k / n;
+        double a = 2 * VCK_PI * k / n;
         int px = sx + (int) (rad * cos(a)), py = sy + (int) (rad * 0.5 * sin(a));
 
         vfx_glowdot(px, py + 1, 0, 0, 0, alpha / 2);
         vfx_glowdot(px, py, e.r, e.g, e.b, alpha);
     }
-    /* four chevrons sliding inward on the diagonals */
-    for (k = 0; k < 4; k++) {
-        double a = 3.14159265358979 / 4 + k * 3.14159265358979 / 2;
-        double ux = cos(a), uy = sin(a) * 0.5;
-        double dist = 46 - 30 * ease, len = 7;
-        int j;
+}
 
-        for (j = -3; j <= 3; j++) {
-            /* a "V" pointing at the centre: arms go back and out */
-            double t = fabs((double) j) / 3.0;
-            double bx = sx + ux * (dist + len * t), by = sy + uy * (dist + len * t);
-            double pxo = -uy * 2, pyo = ux * 0.5 * 2; /* perpendicular, iso-flattened */
-            double nrm = sqrt(pxo * pxo + pyo * pyo);
+/* a dotted line */
+static void
+vfx_dline(double x0, double y0, double x1, double y1, const vfx_ent &e, int alpha)
+{
+    double len = sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+    int k, n = (int) (len / 2.2) + 1;
 
-            if (nrm > 0)
-                pxo /= nrm, pyo /= nrm;
-            vfx_glowdot((int) (bx + pxo * j * 2.2), (int) (by + pyo * j * 2.2),
-                        e.r, e.g, e.b, alpha);
+    for (k = 0; k <= n; k++) {
+        double f = (double) k / n;
+
+        vfx_glowdot((int) (x0 + (x1 - x0) * f), (int) (y0 + (y1 - y0) * f),
+                    e.r, e.g, e.b, alpha);
+    }
+}
+
+/* draw one click marker (flattened for the iso floor), fading out */
+static void
+vfx_draw_click(const vfx_ent &e, double age, int sx, int sy)
+{
+    double pop = age < 0.18 ? age / 0.18 : 1.0;
+    double ease = 1 - (1 - age) * (1 - age);
+    int alpha = (int) (255 * (age < 0.6 ? 1.0 : (1.0 - age) / 0.4));
+    int k, j;
+
+    switch (e.sub) {
+    case VCK_ATTACK: {
+        /* a red ring snapping shut, crosshair ticks spinning in, then an X */
+        double rad = 34 - 24 * ease, rot = (1 - ease) * 1.4;
+
+        vfx_ring(sx, sy, rad, e, alpha);
+        for (k = 0; k < 4; k++) {
+            double a = rot + k * VCK_PI / 2, d = 42 - 26 * ease;
+
+            vfx_dline(sx + d * cos(a), sy + d * 0.5 * sin(a),
+                      sx + (d + 9) * cos(a), sy + (d + 9) * 0.5 * sin(a), e, alpha);
         }
+        if (age > 0.25) {
+            double s = 7 * (age < 0.4 ? (age - 0.25) / 0.15 : 1.0);
+
+            vfx_dline(sx - s, sy - s * 0.6, sx + s, sy + s * 0.6, e, alpha);
+            vfx_dline(sx - s, sy + s * 0.6, sx + s, sy - s * 0.6, e, alpha);
+        }
+        break;
+    }
+    case VCK_ALLY:
+        /* two soft blue ripples spreading out */
+        for (k = 0; k < 2; k++) {
+            double a2 = (age - 0.22 * k) / (1.0 - 0.22 * k);
+
+            if (a2 > 0)
+                vfx_ring(sx, sy, 8 + 28 * a2, e, (int) (alpha * (1.0 - a2 * 0.6)));
+        }
+        vfx_glowdot(sx, sy, e.r, e.g, e.b, alpha);
+        break;
+    case VCK_ITEM: {
+        /* gold ring, sparkles rising, a bobbing "grab it" arrow */
+        double ay = sy - 34 + 5 * sin(age * 4 * VCK_PI);
+
+        vfx_ring(sx, sy, 20 - 6 * ease, e, alpha);
+        for (k = 0; k < 6; k++) {
+            double a = k * VCK_PI / 3 + age * 2;
+
+            vfx_glowdot(sx + (int) (18 * cos(a)), sy + (int) (9 * sin(a) - 38 * age),
+                        255, 245, 200, alpha * 2 / 3);
+        }
+        vfx_dline(sx, ay - 12, sx, ay, e, alpha);
+        vfx_dline(sx - 6, ay - 6, sx, ay, e, alpha);
+        vfx_dline(sx + 6, ay - 6, sx, ay, e, alpha);
+        break;
+    }
+    case VCK_DOOR: {
+        /* a door frame whose two leaves swing apart */
+        double gap = 3 + 12 * ease;
+
+        vfx_ring(sx, sy, 22 - 6 * ease, e, alpha / 2);
+        vfx_dline(sx - gap, sy - 30, sx - gap, sy - 4, e, alpha);
+        vfx_dline(sx + gap, sy - 30, sx + gap, sy - 4, e, alpha);
+        vfx_dline(sx - 16, sy - 33, sx + 16, sy - 33, e, alpha / 2);
+        break;
+    }
+    case VCK_STAIRS: {
+        /* a spiral winding down (or up) the stairs */
+        double dir = e.mid ? -1.0 : 1.0;
+
+        for (k = 0; k < 26; k++) {
+            double f = k / 26.0, a = f * 4 * VCK_PI + age * 7;
+            double r = 30 * (1 - f) * (1 - 0.45 * ease) + 3;
+
+            vfx_glowdot(sx + (int) (r * cos(a)),
+                        sy + (int) (r * 0.5 * sin(a) + dir * (f * 14 * ease - 4)),
+                        e.r, e.g, e.b, (int) (alpha * (0.4 + 0.6 * (1 - f))));
+        }
+        break;
+    }
+    case VCK_DRINK:
+        /* droplets fall into a rippling pool */
+        vfx_ring(sx, sy, 14 + 10 * age, e, alpha / 2);
+        for (j = 0; j < 3; j++) {
+            double f = age * 1.7 - j * 0.25;
+
+            if (f > 0 && f < 1)
+                vfx_glowdot(sx + (j - 1) * 5, sy - 40 + (int) (40 * f * f),
+                            e.r, e.g, e.b, alpha);
+            else if (f >= 1 && f < 1.4)
+                vfx_ring(sx + (j - 1) * 5, sy, 4 + 14 * (f - 1), e,
+                         (int) (alpha * (1.4 - f) / 0.4));
+        }
+        break;
+    default: {
+        /* move: a ring that pops then shrinks into the square, four
+           chevrons closing in on the diagonals */
+        double rad = (age < 0.18 ? 16 + 14 * pop : 30 - 22 * (age - 0.18) / 0.82);
+
+        vfx_ring(sx, sy, rad, e, alpha);
+        for (k = 0; k < 4; k++) {
+            double a = VCK_PI / 4 + k * VCK_PI / 2;
+            double ux = cos(a), uy = sin(a) * 0.5;
+            double dist = 46 - 30 * ease, len = 7;
+
+            for (j = -3; j <= 3; j++) {
+                double t = fabs((double) j) / 3.0;
+                double bx = sx + ux * (dist + len * t), by = sy + uy * (dist + len * t);
+                double pxo = -uy * 2, pyo = ux * 0.5 * 2;
+                double nrm = sqrt(pxo * pxo + pyo * pyo);
+
+                if (nrm > 0)
+                    pxo /= nrm, pyo /= nrm;
+                vfx_glowdot((int) (bx + pxo * j * 2.2), (int) (by + pyo * j * 2.2),
+                            e.r, e.g, e.b, alpha);
+            }
+        }
+        break;
+    }
     }
 }
 
@@ -1332,6 +1515,27 @@ static int vbark_kind_prev[VB_COUNT] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
                                          -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 static Uint32 vbark_last = 0;
 
+/* s117: say a line in the hero's voice (s114/s116 voices) */
+static void
+vbark_speak(const char *line)
+{
+    int voice, speaker;
+    double factor, rf;
+
+    if (!iflags.voices || Deaf)
+        return;
+    vbark_voice(&voice, &factor, &speaker);
+    /* a real speaker needs only the race nudge; the full factor is
+       for faking voices out of the three single-speaker models */
+    rf = Race_if(PM_DWARF) ? 0.96 : Race_if(PM_ORC) ? 0.95
+         : Race_if(PM_GNOME) ? 1.07 : Race_if(PM_ELF) ? 1.03 : 1.0;
+    if (speaker >= 0)
+        vulture_tts_speak_speaker(line, speaker, rf, voice, factor,
+                                  flags.female ? 1 : 0);
+    else
+        vulture_tts_speak_voice(line, voice, factor, flags.female ? 1 : 0);
+}
+
 extern "C" void
 vulture_bark(int kind)
 {
@@ -1366,22 +1570,7 @@ vulture_bark(int kind)
     snprintf(e.txt, sizeof e.txt, "%s", bk->lines[k]);
     e.r = 245, e.g = 240, e.b = 220;
     vfx_list.push_back(e);
-    if (iflags.voices && !Deaf) {
-        int voice, speaker;
-        double factor, rf;
-
-        vbark_voice(&voice, &factor, &speaker); /* s114/s116 */
-        /* a real speaker needs only the race nudge; the full factor is
-           for faking voices out of the three single-speaker models */
-        rf = Race_if(PM_DWARF) ? 0.96 : Race_if(PM_ORC) ? 0.95
-             : Race_if(PM_GNOME) ? 1.07 : Race_if(PM_ELF) ? 1.03 : 1.0;
-        if (speaker >= 0)
-            vulture_tts_speak_speaker(bk->lines[k], speaker, rf, voice,
-                                      factor, flags.female ? 1 : 0);
-        else
-            vulture_tts_speak_voice(bk->lines[k], voice, factor,
-                                    flags.female ? 1 : 0);
-    }
+    vbark_speak(bk->lines[k]);
 }
 
 static void
@@ -1390,17 +1579,182 @@ vbark_move(void)
     vulture_bark(VB_MOVE);
 }
 
-/* called from the map click handler */
+/* s117: speech bubbles - the hero's muttering and what monsters say
+   float over their heads instead of filling the message window */
+static std::string vsay_txt[16];
+static int vsay_next = 0;
+
+extern "C" int
+vulture_say_above(unsigned mid, int x, int y, const char *text)
+{
+    Uint32 now = SDL_GetTicks();
+    size_t i, len;
+    vfx_ent e;
+
+    if (!text || !*text || !levwin || vulture_windows_inited != TRUE
+        || !isok(x, y))
+        return 0;
+    for (i = 0; i < vfx_list.size(); i++)
+        if (vfx_list[i].kind == 5 && vfx_list[i].mid == mid)
+            vfx_list[i].t0 = now - 10, vfx_list[i].dur = 1; /* one each */
+    len = strlen(text);
+    memset(&e, 0, sizeof e);
+    e.kind = 5, e.x = x, e.y = y, e.t0 = now, e.mid = mid;
+    e.dur = (Uint32) (1800 + 65 * len);
+    if (e.dur > 9000)
+        e.dur = 9000;
+    e.sub = vsay_next;
+    vsay_txt[vsay_next] = text;
+    vsay_next = (vsay_next + 1) % 16;
+    if (mid)
+        e.r = 205, e.g = 230, e.b = 255;
+    else
+        e.r = 255, e.g = 244, e.b = 214;
+    vfx_list.push_back(e);
+    return 1;
+}
+
+/* the hero says something: a bubble plus their bark voice */
+extern "C" int
+vulture_hero_say(const char *text)
+{
+    if (!vulture_say_above(0, u.ux, u.uy, text))
+        return 0;
+    vbark_speak(text);
+    return 1;
+}
+
+static void
+vsay_draw(const vfx_ent &e, double age, int cx, int cy, int vx, int vy)
+{
+    const std::string &s = vsay_txt[e.sub];
+    std::vector<std::string> lines;
+    std::string cur, word;
+    int maxw = vulture_text_length(V_FONT_SMALL, "abcdefghijklmnopqrstuvwxyzabcd");
+    int lh = vulture_get_lineheight(V_FONT_SMALL), bw = 0, bh, bx, by, sx, sy;
+    int x = e.x, y = e.y, fade;
+    size_t i;
+    SDL_Surface *box;
+    SDL_Rect d;
+
+    if (!e.mid) {
+        x = u.ux, y = u.uy;
+    } else {
+        struct monst *m;
+
+        for (m = fmon; m; m = m->nmon)
+            if (m->m_id == e.mid)
+                break;
+        if (!m || DEADMONSTER(m) || !canspotmon(m))
+            return;
+        x = m->mx, y = m->my;
+    }
+    for (i = 0; i <= s.size(); i++) { /* word wrap */
+        if (i == s.size() || s[i] == ' ') {
+            std::string trial = cur.empty() ? word : cur + " " + word;
+
+            if (!cur.empty() && vulture_text_length(V_FONT_SMALL, trial) > maxw) {
+                lines.push_back(cur);
+                cur = word;
+            } else {
+                cur = trial;
+            }
+            word.clear();
+        } else {
+            word += s[i];
+        }
+    }
+    if (!cur.empty())
+        lines.push_back(cur);
+    if (lines.empty())
+        return;
+    for (i = 0; i < lines.size(); i++) {
+        int w = vulture_text_length(V_FONT_SMALL, lines[i]);
+
+        if (w > bw)
+            bw = w;
+    }
+    bw += 14, bh = (int) lines.size() * lh + 8;
+    vfx_square_screen(x, y, cx, cy, vx, vy, &sx, &sy);
+    bx = sx - bw / 2, by = sy - 100 - bh;
+    if (!e.mid) /* above a bark line, if one is showing */
+        for (i = 0; i < vfx_list.size(); i++)
+            if (vfx_list[i].kind == 4
+                && SDL_GetTicks() - vfx_list[i].t0 < vfx_list[i].dur)
+                by -= lh + 6;
+    if (bx < 4)
+        bx = 4;
+    if (bx + bw > vulture_screen->w - 4)
+        bx = vulture_screen->w - 4 - bw;
+    if (by < 4)
+        by = 4;
+    fade = age > 0.92 ? (int) (255 * (1.0 - age) / 0.08) : 255;
+    box = SDL_CreateRGBSurfaceWithFormat(0, bw, bh, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (box) {
+        SDL_Rect r;
+        Uint32 edge = SDL_MapRGBA(box->format, e.r, e.g, e.b, (Uint8) (fade * 3 / 5));
+
+        SDL_FillRect(box, NULL, SDL_MapRGBA(box->format, 14, 12, 18, (Uint8) (fade * 2 / 3)));
+        r.x = 0, r.y = 0, r.w = bw, r.h = 1;
+        SDL_FillRect(box, &r, edge);
+        r.y = bh - 1;
+        SDL_FillRect(box, &r, edge);
+        r.y = 0, r.w = 1, r.h = bh;
+        SDL_FillRect(box, &r, edge);
+        r.x = bw - 1;
+        SDL_FillRect(box, &r, edge);
+        SDL_SetSurfaceBlendMode(box, SDL_BLENDMODE_BLEND);
+        d.x = bx, d.y = by, d.w = bw, d.h = bh;
+        SDL_BlitSurface(box, NULL, vulture_screen, &d);
+        SDL_FreeSurface(box);
+    }
+    vfx_glowdot(sx, by + bh + 3, e.r, e.g, e.b, fade * 2 / 3);
+    vfx_glowdot(sx, by + bh + 9, e.r, e.g, e.b, fade / 3);
+    if (fade < 60)
+        return;
+    for (i = 0; i < lines.size(); i++) {
+        int w = vulture_text_length(V_FONT_SMALL, lines[i]);
+
+        vulture_put_text_shadow(V_FONT_SMALL, lines[i], vulture_screen,
+                                bx + (bw - w) / 2, by + 4 + (int) i * lh,
+                                SDL_MapRGB(vulture_screen->format, e.r, e.g, e.b),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    }
+}
+
+/* called from the map click handler: what is the hero being sent to do? */
 static void
 vfx_click_at(int x, int y)
 {
-    bool attack;
+    int g, sub = VCK_MOVE, cm = -1;
+    bool up = false;
+    struct monst *m;
 
     if (!isok(x, y) || u_at(x, y) || !levl[x][y].seenv)
         return;
-    attack = glyph_is_monster(glyph_at(x, y)) || glyph_is_invisible(glyph_at(x, y));
-    vfx_click(x, y, attack);
-    if (!attack)
+    g = glyph_at(x, y);
+    if (glyph_is_cmap(g))
+        cm = glyph_to_cmap(g);
+    if (glyph_is_monster(g) || glyph_is_invisible(g)) {
+        m = m_at(x, y);
+        sub = (glyph_is_pet(g)
+               || (m && canspotmon(m) && (m->mtame || m->mpeaceful)))
+                  ? VCK_ALLY : VCK_ATTACK;
+    } else if (glyph_is_object(g) && glyph_to_obj(g) != BOULDER) {
+        sub = VCK_ITEM;
+    } else if (cm == S_vcdoor || cm == S_hcdoor) {
+        sub = VCK_DOOR;
+    } else if (cm == S_dnstair || cm == S_dnladder || cm == S_brdnstair
+               || cm == S_brdnladder) {
+        sub = VCK_STAIRS;
+    } else if (cm == S_upstair || cm == S_upladder || cm == S_brupstair
+               || cm == S_brupladder) {
+        sub = VCK_STAIRS, up = true;
+    } else if (cm == S_fountain || cm == S_sink) {
+        sub = VCK_DRINK;
+    }
+    vfx_click(x, y, sub, up);
+    if (sub == VCK_MOVE)
         vbark_move(); /* s109 */
 }
 
@@ -1438,6 +1792,10 @@ vfx_draw(int cx, int cy, int vx, int vy)
         if (age < 1.0 && e.kind == 3) { /* s108 */
             vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
             vfx_draw_click(e, age, sx, sy);
+            continue;
+        }
+        if (age < 1.0 && e.kind == 5) { /* s117: a speech bubble */
+            vsay_draw(e, age, cx, cy, vx, vy);
             continue;
         }
         if (age < 1.0 && e.kind == 4) { /* s109: a bark over the hero's head */
@@ -1481,17 +1839,22 @@ static void
 vfx_breathe(int j, int i, double *xs, double *ys)
 {
     struct monst *m;
-    double ph, s;
+    double ph, s, amp = 1.0, rate = 2.4;
 
-    if (u_at(j, i))
+    if (u_at(j, i)) {
         ph = 0.3;
-    else if ((m = m_at(j, i)) != 0 && canspotmon(m))
+        if (u.usleep) /* s119 */
+            amp = 0.4, rate = 1.0;
+    } else if ((m = m_at(j, i)) != 0 && canspotmon(m)) {
         ph = m->m_id * 0.7;
-    else
+        if (m->msleeping || !m->mcanmove) /* s119: slow, shallow sleep breaths */
+            amp = 0.4, rate = 1.0;
+    } else {
         return;
-    s = sin(SDL_GetTicks() / 1000.0 * 2.4 + ph);
-    *ys *= 1.0 + 0.03 * s;
-    *xs *= 1.0 - 0.015 * s;
+    }
+    s = sin(SDL_GetTicks() / 1000.0 * rate + ph);
+    *ys *= 1.0 + 0.03 * amp * s;
+    *xs *= 1.0 - 0.015 * amp * s;
 }
 
 
@@ -1987,6 +2350,13 @@ vbob_offset(int j, int i)
         return 0;
     t = SDL_GetTicks() / 1000.0;
     ph = m->m_id * 1.618;
+    if (m->msleeping || !m->mcanmove) { /* s119: asleep - settle, barely drift */
+        if (is_floater(m->data))
+            return (int) (-3.0 - 1.5 * sin(t * 0.8 + ph));
+        if (is_flyer(m->data))
+            return (int) (-1.0 - 1.0 * sin(t * 1.0 + ph));
+        return 0;
+    }
     if (is_floater(m->data))
         return (int) (-6.0 - 5.0 * sin(t * 2.6 + ph));
     if (is_flyer(m->data))
@@ -2045,6 +2415,12 @@ vulture_idle_bob(bool at_map)
     levwin->force_redraw();
     ROOTWIN->draw_windows();
     vulture_refresh_window_region();
+    /* s117: the redraw painted over the hover tooltip - put it back (it
+       used to flash up and vanish within ~80 ms) */
+    vulture_mouse_draw();
+    vulture_refresh_window_region();
+    vulture_mouse_refresh();
+    vulture_mouse_restore_bg();
     /* keep idle drawing to about a third of the time at most */
     took = SDL_GetTicks() - now;
     vidle_interval = took * 3 > 80 ? (took * 3 > 400 ? 400 : took * 3) : 80;
@@ -2078,7 +2454,40 @@ vulture_tween_run(void)
         }
         vtw_fast = fast;
     }
-    if (vtw_pending) {
+    if (vtw_pending && vtw_fast && flags.runmode != RUN_TPORT) {
+        /* s117: a walking run / travel step is one continuous, linear
+           glide that fills the step's display delay (vulture_delay_output
+           then skips the time the glide used) - not a quick hop followed
+           by a frozen pause, which read as stutter-teleporting */
+        Uint32 t0 = SDL_GetTicks(), el;
+        Uint32 dur = flags.runmode == RUN_CRAWL ? 240 : 90;
+
+        vtw_animating = true;
+        vtw_linear = true;
+        for (;;) {
+            el = SDL_GetTicks() - t0;
+            vtw_t = el >= dur ? 1.0 : (double) el / dur;
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            vulture_refresh_window_region();
+            if (vtw_t >= 1.0)
+                break;
+            if (vanim_input_waiting()) {
+                vtw_t = 1.0;
+                levwin->force_redraw();
+                ROOTWIN->draw_windows();
+                vulture_refresh_window_region();
+                break;
+            }
+            SDL_Delay(2);
+        }
+        vulture_tween_ate_ms = (int) (SDL_GetTicks() - t0);
+        vtw_linear = false;
+        vtw_t = 1.0;
+        vtw_pending = false;
+        vtw_animating = false;
+        vtw_commit(vtw_last_vx, vtw_last_vy);
+    } else if (vtw_pending) {
         Uint32 t0 = SDL_GetTicks();
 
         vtw_animating = true;
@@ -2847,6 +3256,16 @@ levelwin::handle_timer_event(window *target, void *result, int time)
     if (time < HOVERTIMEOUT)
         return V_EVENT_HANDLED_NOREDRAW;
 
+    {
+        point mp = vulture_get_mouse_pos();
+
+        if (vpt_hit(mp.x, mp.y)) { /* s117 */
+            vulture_mouse_set_tooltip(vulture_opts.recenter
+                ? "Camera locked on you - double-click to free it"
+                : "Click: center camera - double-click: lock it on you");
+            return V_EVENT_HANDLED_NOREDRAW;
+        }
+    }
     if (target != this && !target->caption.empty())
         vulture_mouse_set_tooltip(target->caption);
     else {
@@ -2974,6 +3393,11 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
     mouse = vulture_get_mouse_pos();
     mappos = mouse_to_map(mouse);
 
+    if (vpt_hit(mouse.x, mouse.y)) { /* s117: the portrait drives the camera */
+        if (button == SDL_BUTTON_LEFT)
+            vpt_click();
+        return V_EVENT_HANDLED_REDRAW;
+    }
     if (button == SDL_BUTTON_LEFT) { /* s108: Dota-style click marker */
         vfx_click_at(mappos.x, mappos.y);
         force_redraw();

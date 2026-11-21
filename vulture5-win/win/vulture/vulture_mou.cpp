@@ -331,7 +331,7 @@ void vulture_mouse_invalidate_tooltip(int force)
 									cursor.ymod - cursor.h)) > V_UI(4)) {
 		vulture_tooltip.valid = 0;
 		vulture_tooltip.cur.x = -1;
-		vulture_tooltip.cur.x = -1;
+		vulture_tooltip.cur.y = -1;
 	}
 }
 

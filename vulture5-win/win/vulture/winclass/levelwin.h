@@ -68,6 +68,7 @@ class levelwin : public window, public mapviewer
     void toggle_uiwin(int menuid, bool enabled);
     void set_view(int x, int y);
     bool need_recenter(int map_x, int map_y);
+    bool hero_off_view(int map_x, int map_y); /* s117 */
     void force_redraw(void);
     void set_wall_style(int style);
 

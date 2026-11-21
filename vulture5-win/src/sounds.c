@@ -1737,6 +1737,32 @@ llm_no_new_nouns(const char *ctx, const char *fresh)
 
 static char llm_quip_ctx[2048];
 
+extern int vulture_hero_say(const char *);
+extern int vulture_say_above(unsigned, int, int, const char *);
+
+/* s117: a spoken line from a monster the hero can see goes into a bubble
+   over its head (levelwin.cpp) - TRUE if it did */
+boolean
+llm_bubble_line(const char *line)
+{
+    struct monst *spk;
+    char buf[BUFSZ];
+    size_t len = strlen(line);
+
+    if (len < 3 || len >= sizeof buf || !llm_tts_mid
+        || llm_tts_moves != svm.moves || llm_tts_deity)
+        return FALSE;
+    spk = find_mid(llm_tts_mid, FM_FMON);
+    if (!spk || !canspotmon(spk) || !isok(spk->mx, spk->my))
+        return FALSE;
+    Strcpy(buf, line);
+    if (buf[0] == '"' && buf[len - 1] == '"') {
+        buf[len - 1] = '\0';
+        (void) memmove(buf, buf + 1, len - 1);
+    }
+    return vulture_say_above(spk->m_id, spk->mx, spk->my, buf) ? TRUE : FALSE;
+}
+
 /* s81: show a remark that came back from the background */
 staticfn void
 llm_quip_poll(void)
@@ -1749,6 +1775,9 @@ llm_quip_poll(void)
     llm_unquote(resp);
     if (strlen(resp) < 3 || strlen(resp) > 140
         || !llm_no_new_nouns(llm_quip_ctx, resp) || Hallucination)
+        return;
+    /* s117: over the hero's head (in their bark voice) when the map is up */
+    if (vulture_hero_say(resp))
         return;
     llm_skip_spoken = TRUE; /* already model-written */
     pline("You mutter, \"%s\"", resp);

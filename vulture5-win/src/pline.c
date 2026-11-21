@@ -292,7 +292,11 @@ vpline(const char *line, va_list the_args)
     if (u.ux)
         flush_screen((gp.pline_flags & NO_CURS_ON_U) ? 0 : 1); /* %% */
 
-    putmesg(line);
+    /* Vulture s117: a line someone visible says floats over their head
+       instead (prices also stay in the message window) */
+    if (!((gp.pline_flags & PLINE_VERBALIZE) && llm_bubble_line(line))
+        || strstri(line, "zorkmid"))
+        putmesg(line);
 
     execplinehandler(line);
 

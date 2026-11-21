@@ -411,6 +411,7 @@ extern int doautoexplore(void);
 extern boolean llm_rewrite_line(const char *, char *, size_t, boolean);
 extern void llm_note_speaker(struct monst *, int);
 extern void llm_tts_line(const char *);
+extern boolean llm_bubble_line(const char *);
 extern void llm_hero_quip_pass(void);
 extern void llm_name_hero(void);
 extern void vulture_sfx(const char *);

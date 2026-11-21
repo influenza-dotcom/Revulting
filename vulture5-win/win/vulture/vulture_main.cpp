@@ -352,9 +352,22 @@ static void vulture_display_nhmap(window *win, vulture_event *result, boolean bl
 		* you can't actually go there, the astral levels have negative numbers */
 
 		/* Center the view on the hero, if necessary */
-		if (!vulture_whatis_active && 
-		    (vulture_opts.recenter || !levwin->need_recenter(u.ux, u.uy)))
-			levwin->set_view(u.ux, u.uy);
+		/* s117: the camera follows the hero only while it's locked
+		   (double-click the portrait).  Free, it stays put - except on
+		   arriving on a level, or when the hero walks right out of view */
+		{
+			static d_level cam_lev = { -1, -1 };
+			static int cam_hx = -1, cam_hy = -1;
+			bool newlev = !on_level(&cam_lev, &u.uz);
+			bool moved = (u.ux != cam_hx || u.uy != cam_hy);
+
+			if (!vulture_whatis_active
+			    && (vulture_opts.recenter || newlev
+			        || (moved && levwin->hero_off_view(u.ux, u.uy))))
+				levwin->set_view(u.ux, u.uy);
+			cam_lev = u.uz;
+			cam_hx = u.ux, cam_hy = u.uy;
+		}
 
 		if (mapwin)
 			mapwin->need_redraw = 1;
@@ -1096,6 +1109,31 @@ int vulture_doprev_message(void)
 
 /* delay output is _supposed to_ simply pause for a bit; unfortunately that
 * would cause the mouse to freeze, because the eventloop would also pause */
+/* s118: Esc stops a click-travel (or run / multi-step walk) mid-way.
+   Only peeks at the queue - nothing else is eaten unless Esc is there. */
+static void vulture_esc_cancels_travel(void)
+{
+	SDL_Event ev[32];
+	int n, i;
+	bool esc = false;
+
+	if (!svc.context.travel && !svc.context.run && !svc.context.mv
+	    && gm.multi <= 0)
+		return;
+	SDL_PumpEvents();
+	n = SDL_PeepEvents(ev, 32, SDL_PEEKEVENT, SDL_KEYDOWN, SDL_KEYDOWN);
+	for (i = 0; i < n; i++)
+		if (ev[i].key.keysym.sym == SDLK_ESCAPE)
+			esc = true;
+	if (!esc)
+		return;
+	SDL_FlushEvent(SDL_KEYDOWN); /* the Esc must not open a menu too */
+	SDL_FlushEvent(SDL_TEXTINPUT);
+	nomul(0); /* ends running and travel */
+}
+
+extern int vulture_tween_ate_ms; /* s117: levelwin.cpp */
+
 void vulture_delay_output(void)
 {
 	int delay = 50, origdelay;
@@ -1105,6 +1143,7 @@ void vulture_delay_output(void)
 	int funcstart, funcend;
 	int loops = 0;
 
+	vulture_esc_cancels_travel(); /* s118 */
 	funcstart = SDL_GetTicks();
 	
 	/* the time it took to draw the map is subtracted from the delay time;
@@ -1116,11 +1155,19 @@ void vulture_delay_output(void)
 			delay = 1;
 		vulture_map_draw_msecs = 0;
 	}
+	/* s117: a walking glide already spent this step's time on screen */
+	if (vulture_tween_ate_ms > 0) {
+		delay -= vulture_tween_ate_ms;
+		vulture_tween_ate_ms = 0;
+		if (delay < 1)
+			delay = 1;
+	}
 	origdelay = delay;
 
 	/* delay in small increments and run the eventloop in between */
 	while (delay > 10) {
 		starttick = SDL_GetTicks();
+		vulture_esc_cancels_travel(); /* s118 */
 
 #ifdef TRAVEL_HACK
 		if (vulture_event_dispatcher_nonblocking(&result, NULL))
@@ -1194,6 +1241,7 @@ void vulture_curs(winid window, int x, int y)
 * because a loop in the travel algorithm was detected */
 void vulture_get_nh_event(void)
 {
+	vulture_esc_cancels_travel(); /* s118 */
 #ifdef TRAVEL_HACK
 	static point lastpos[2] = {{-1,-1}, {-1,-1}};
 

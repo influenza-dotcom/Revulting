@@ -2612,6 +2612,69 @@ levelwin.cpp (vbark_tab).
   - It refuses while Steam runs, because Steam rewrites the file.
   - Dry-run on a copy: the existing entries stay byte-identical.
 
+### 117. Speech bubbles, click markers per action, free camera + portrait lock, walk glide, hover fix
+
+- **Speech bubbles:** speech floats over the speaker instead of filling
+  the message window.
+  - Covers the hero's muttering (heroquips) and any verbalize() line from
+    a monster you can see, when the speaker is known this turn (set_voice).
+  - Built from vulture_say_above / vulture_hero_say / vsay_draw (vfx kind
+    5): word-wrapped, dark translucent box, follows the speaker. Each
+    speaker has one bubble at a time, lasting 1.8 s plus 65 ms per
+    character (9 s cap).
+  - pline.c skips the message window for these lines. Lines that mention
+    "zorkmid" stay in it too, so prices are never lost. The dumplog keeps
+    everything.
+- **Click markers:** each target gets its own shape and colour:
+  - move: green chevrons
+  - attack: red closing ring, spinning crosshair and an X
+  - pet/peaceful: blue ripples
+  - item: gold ring, rising sparkles and a bobbing arrow
+  - closed door: amber leaves swinging apart
+  - stairs: violet spiral, down or up
+  - fountain/sink: cyan droplets into a pool
+- **Free camera:** recenter_after_movement is now the camera LOCK, off by
+  default.
+  - Free, the view only moves on arriving on a level, or when the hero
+    moves and walks right out of view (levelwin::hero_off_view).
+  - Clicking the portrait centres the view; double-clicking toggles the
+    lock and saves it to the user config. The portrait shows a LOCKED
+    badge, a tooltip and a toast.
+- **Walk glide:** run, travel and multi-step moves under runmode
+  walk/crawl are now one linear glide per step (90 / 240 ms) with a
+  smaller hop.
+  - vulture_delay_output subtracts the glide time (vulture_tween_ate_ms).
+  - Before, each step was a ~20 ms eased hop followed by a frozen 50 ms
+    pause, which looked like teleport-stutter.
+- **Hover tooltips:** the idle animation redraw (about 12 fps) painted
+  over the tooltip, so it flashed and vanished. vulture_idle_bob now
+  repaints it after each frame. Also fixed the cur.y reset typo in
+  vulture_mou.cpp.
+
+### 118. Esc cancels travel
+
+- vulture_esc_cancels_travel peeks the SDL queue for Esc while
+  travel/run/mv/multi is active.
+  - It runs from vulture_delay_output (per step) and get_nh_event.
+  - It flushes the key, so the Esc doesn't also open a menu, then calls
+    nomul(0).
+- The old TRAVEL_HACK was SLASHEM-only and never compiled here.
+
+### 119. Death screams; calmer sleepers
+
+- **Death screams:** mondead plays a positioned death scream from any
+  non-silent monster you can see, or one within about 10 squares.
+  Louder when closer; picked with the display RNG, so the game RNG is
+  untouched.
+  - Sets: humanoid male/female (scream_m1-4 / f1-4), small creatures
+    (scream_s1-3, pitched up) and big creatures (scream_l1-3, pitched
+    down).
+  - Voiced with Piper LibriTTS (scratchpad make_screams.py): trimmed,
+    saturated, normalised, faded, capped at 1.6 s.
+- **Calmer sleepers:** sleeping or paralysed monsters, and the hero
+  while asleep, breathe at 40% depth and under half the rate.
+  Floaters/flyers settle and barely drift.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

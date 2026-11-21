@@ -3109,6 +3109,28 @@ mondead(struct monst *mtmp)
     if (is_vampshifter(mtmp) && vamprises(mtmp))
         return;
 
+    /* Vulture s119: a death scream from anything with a voice - seen, or
+       close enough to hear; positioned, louder the nearer it is */
+    if (!Deaf && !is_silent(mtmp->data) && isok(mtmp->mx, mtmp->my)) {
+        extern void vulture_sfx_at_vol(const char *, int, int, int);
+        struct permonst *pd = mtmp->data;
+        int d2 = distu(mtmp->mx, mtmp->my);
+
+        if (canspotmon(mtmp) || d2 <= 100) {
+            char nm[16];
+
+            if (humanoid(pd) && pd->msize <= MZ_LARGE)
+                Sprintf(nm, "scream_%c%d", mtmp->female ? 'f' : 'm',
+                        1 + rn2_on_display_rng(4));
+            else if (bigmonst(pd))
+                Sprintf(nm, "scream_l%d", 1 + rn2_on_display_rng(3));
+            else
+                Sprintf(nm, "scream_s%d", 1 + rn2_on_display_rng(3));
+            vulture_sfx_at_vol(nm, mtmp->mx - u.ux, mtmp->my - u.uy,
+                               d2 <= 8 ? 128 : d2 <= 40 ? 100 : 70);
+        }
+    }
+
     if (be_sad)
         You("have a sad feeling for a moment, then it passes.");
 
