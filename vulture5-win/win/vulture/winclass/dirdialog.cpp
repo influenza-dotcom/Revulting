@@ -15,6 +15,10 @@
 /* for defs of V_MAP_XMOD and V_MAP_YMOD */
 #include "levelwin.h"
 
+extern void vulture_aim_set(bool on, int x, int y); /* s125: levelwin.cpp */
+extern char vulture_aim_key(int tx, int ty);
+extern bool vulture_aim_ok(void);
+
 dirdialog::dirdialog(window *p, std::string ques) : mainwin(p)
 {
     int arrows_w, arrows_h;
@@ -49,12 +53,49 @@ dirdialog::dirdialog(window *p, std::string ques) : mainwin(p)
 
     arr = new hotspot(this, arroffset_x, arroffset_y, arrows_w, arrows_h, 0,
                       "");
+
+    /* s125: during play, aim with the mouse instead - this dialog becomes
+       a transparent layer over the whole screen (so it gets every click)
+       with a banner at the top, and the map draws the aim line */
+    aim = false;
+    if (vulture_aim_ok() && parent) {
+        point mp = vulture_get_mouse_pos(), sq;
+
+        aim = true;
+        x = y = 0;
+        w = parent->get_w(), h = parent->get_h();
+        abs_x = parent->abs_x, abs_y = parent->abs_y;
+        arr->visible = false;
+        sq = levwin->mouse_to_map(mp);
+        vulture_aim_set(true, sq.x, sq.y);
+        levwin->force_redraw();
+    }
 }
+
+dirdialog::~dirdialog()
+{
+    if (aim) {
+        vulture_aim_set(false, -1, -1);
+        if (levwin)
+            levwin->force_redraw();
+    }
+}
+
 
 eventresult
 dirdialog::handle_mousemotion_event(window *target, void *result, int xrel,
                                     int yrel, int state)
 {
+    if (aim && levwin) { /* s125: move the aim line with the pointer */
+        point sq = levwin->mouse_to_map(vulture_get_mouse_pos());
+
+        vulture_set_mcursor(V_CURSOR_TARGET_RED);
+        vulture_aim_set(true, sq.x, sq.y);
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        vulture_refresh_window_region();
+        return V_EVENT_HANDLED_NOREDRAW;
+    }
     vulture_set_mcursor(V_CURSOR_NORMAL);
     return V_EVENT_HANDLED_NOREDRAW;
 }
@@ -86,6 +127,23 @@ dirdialog::handle_mousebuttonup_event(window *target, void *result,
     const int xmod = V_UI(V_MAP_XMOD);
     const int ymod = V_UI(V_MAP_YMOD);
 
+    if (aim && levwin) { /* s125: click fires toward the pointer */
+        point sq;
+
+        if (button == SDL_BUTTON_RIGHT) {
+            *(char *) result = -1; /* cancel, like Esc */
+            return V_EVENT_HANDLED_FINAL;
+        }
+        if (button != SDL_BUTTON_LEFT)
+            return V_EVENT_HANDLED_NOREDRAW;
+        sq = levwin->mouse_to_map(vulture_get_mouse_pos());
+        choice = vulture_aim_key(sq.x, sq.y);
+        if (choice) {
+            *(char *) result = choice;
+            return V_EVENT_HANDLED_FINAL;
+        }
+        return V_EVENT_HANDLED_NOREDRAW;
+    }
     if (button != SDL_BUTTON_LEFT || target != first_child)
         return V_EVENT_HANDLED_NOREDRAW;
 
@@ -153,6 +211,28 @@ dirdialog::handle_resize_event(window *target, void *result, int res_w,
 bool
 dirdialog::draw()
 {
+    if (aim) { /* s125: just a banner; the map shows through */
+        std::string hint = caption + "   Click to aim  -  right-click or Esc to cancel";
+        int tw = vulture_text_length(V_FONT_HEADLINE, hint) + 40;
+        int bx = abs_x + (w - tw) / 2, by = abs_y + V_UI(46);
+        SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, tw, vulture_get_lineheight(V_FONT_HEADLINE) + 14,
+                                                        32, SDL_PIXELFORMAT_ARGB8888);
+
+        if (s) {
+            SDL_Rect d;
+
+            SDL_FillRect(s, NULL, SDL_MapRGBA(s->format, 10, 8, 12, 200));
+            SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+            d.x = bx, d.y = by, d.w = s->w, d.h = s->h;
+            SDL_BlitSurface(s, NULL, vulture_screen, &d);
+            vulture_invalidate_region(bx, by, s->w, s->h);
+            SDL_FreeSurface(s);
+        }
+        vulture_put_text_shadow(V_FONT_HEADLINE, hint, vulture_screen, bx + 20, by + 7,
+                                SDL_MapRGB(vulture_screen->format, 255, 215, 120),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        return false;
+    }
     mainwin::draw();
 
     vulture_set_draw_region(arr->abs_x, arr->abs_y, arr->abs_x + arr->w - 1,

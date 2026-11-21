@@ -2405,6 +2405,8 @@ vulture_idle_wait_ms(bool at_map)
 
 /* one idle frame for bobbing, breathing and combat effects (called from
    the input loop while the map waits for a command) */
+static void vselftest(void); /* s126 probe */
+
 void
 vulture_idle_bob(bool at_map)
 {
@@ -2425,6 +2427,7 @@ vulture_idle_bob(bool at_map)
             return;
     }
     last = now;
+    vselftest(); /* s126 probe (VULTURE_SELFTEST only) */
     (void) vfx_alive();
     levwin->force_redraw();
     ROOTWIN->draw_windows();
@@ -2861,6 +2864,926 @@ vulture_draw_vignette(int x0, int y0, int w, int h)
     SDL_BlitSurface(vg_surf, NULL, vulture_screen, &d);
 }
 
+static SDL_Rect vhb_rect = { 0, 0, 0, 0 }; /* s126: ability bar on screen */
+
+/*
+ * IMPLEMENTATION_LOG s125: modern hover and aim (Brogue / Cogmind).
+ *  - Travel preview: hovering the map shows the path the hero would walk
+ *    (marching dots, step count), over the terrain the hero knows.
+ *  - Hover cards: a monster under the pointer gets a card - name, a threat
+ *    word from its difficulty against your level, asleep/fleeing/trapped
+ *    tags, and a health bar once it's hurt (or for pets).
+ *  - Aim: while the game asks for a direction, a line runs from the hero
+ *    toward the pointer (snapped to the 8 directions NetHack shoots in):
+ *    green when the first creature in line is hostile, red when it's a pet
+ *    or a peaceful, amber when it hits nothing.
+ *  - Ground card: "Things that are here" shows as a card beside the map
+ *    instead of a window you have to dismiss.
+ */
+static point vhv = { -1, -1 };     /* map square under the pointer */
+static Uint32 vhv_since = 0;       /* when the pointer settled there */
+static bool vaim_on = false;       /* a direction prompt is up */
+static point vaim_at = { -1, -1 }; /* aim cursor square */
+
+/* can the hero (as far as they know) walk onto (x, y)? */
+static bool
+vmv_pass(int x, int y)
+{
+    int g, cm;
+
+    if (!isok(x, y) || !levl[x][y].seenv)
+        return false;
+    g = glyph_at(x, y);
+    if (glyph_is_unexplored(g) || glyph_is_nothing(g))
+        return false;
+    if (glyph_is_object(g) && glyph_to_obj(g) == BOULDER)
+        return false;
+    if (glyph_is_cmap(g)) {
+        cm = glyph_to_cmap(g);
+        if (cm <= S_trwall || cm == S_vcdoor || cm == S_hcdoor || cm == S_bars
+            || cm == S_tree || cm == S_pool || cm == S_lava
+            || cm == S_lavawall || cm == S_water)
+            return false;
+    }
+    return true;
+}
+
+/* an (open) door square: no diagonal moves in or out */
+static bool
+vmv_door(int x, int y)
+{
+    return isok(x, y) && levl[x][y].seenv && IS_DOOR(levl[x][y].typ)
+           && (levl[x][y].doormask & ~(D_NODOOR | D_BROKEN)) != 0;
+}
+
+/* walls and rock stop an aim line */
+static bool
+vmv_solid(int x, int y)
+{
+    int g, cm;
+
+    if (!isok(x, y))
+        return true;
+    if (!levl[x][y].seenv)
+        return false; /* unknown: keep going */
+    g = glyph_at(x, y);
+    if (!glyph_is_cmap(g))
+        return false;
+    cm = glyph_to_cmap(g);
+    return cm <= S_trwall || cm == S_vcdoor || cm == S_hcdoor || cm == S_tree;
+}
+
+/* shortest known path hero -> (tx, ty), written target-first into out[];
+   returns its length (0 = no path) */
+static int
+vpath_find(int tx, int ty, point *out, int maxn)
+{
+    static short px[ROWNO][COLNO], py[ROWNO][COLNO];
+    static char seen[ROWNO][COLNO];
+    static short qx[COLNO * ROWNO], qy[COLNO * ROWNO];
+    int h = 0, t = 0, n = 0, k, x, y;
+
+    if (!isok(tx, ty) || !vmv_pass(tx, ty))
+        return 0;
+    memset(seen, 0, sizeof seen);
+    seen[u.uy][u.ux] = 1;
+    qx[t] = u.ux, qy[t++] = u.uy;
+    while (h < t) {
+        x = qx[h], y = qy[h++];
+        if (x == tx && y == ty)
+            break;
+        for (k = 0; k < N_DIRS; k++) {
+            int nx = x + xdir[k], ny = y + ydir[k];
+
+            if (!isok(nx, ny) || seen[ny][nx] || !vmv_pass(nx, ny))
+                continue;
+            if (xdir[k] && ydir[k] && (vmv_door(x, y) || vmv_door(nx, ny)))
+                continue;
+            seen[ny][nx] = 1;
+            px[ny][nx] = (short) x, py[ny][nx] = (short) y;
+            qx[t] = (short) nx, qy[t++] = (short) ny;
+        }
+    }
+    if (!seen[ty][tx])
+        return 0;
+    x = tx, y = ty;
+    while (!(x == u.ux && y == u.uy) && n < maxn) {
+        int ox = px[y][x];
+
+        out[n].x = x, out[n].y = y, n++;
+        y = py[y][x], x = ox;
+    }
+    return n;
+}
+
+/* is the pointer over the map itself (not a panel on top of it)? */
+static bool
+vhv_over_map(void)
+{
+    point mp = vulture_get_mouse_pos();
+    window *w = ROOTWIN ? ROOTWIN->get_window_from_point(mp) : NULL;
+
+    return w && levwin && (w == (window *) levwin || w->parent == (window *) levwin);
+}
+
+/* NetHack shoots in 8 directions: snap a target square to one */
+void
+vulture_aim_snap(int tx, int ty, int *sdx, int *sdy)
+{
+    int dx = tx - u.ux, dy = ty - u.uy, adx = abs(dx), ady = abs(dy);
+
+    if (!dx && !dy) {
+        *sdx = *sdy = 0;
+    } else if (adx > 2 * ady) {
+        *sdx = sgn(dx), *sdy = 0;
+    } else if (ady > 2 * adx) {
+        *sdx = 0, *sdy = sgn(dy);
+    } else {
+        *sdx = sgn(dx), *sdy = sgn(dy);
+    }
+}
+
+/* the direction key for aiming at (tx, ty) - '.' for yourself */
+char
+vulture_aim_key(int tx, int ty)
+{
+    int sdx, sdy, dd;
+
+    vulture_aim_snap(tx, ty, &sdx, &sdy);
+    if (!sdx && !sdy)
+        return gc.Cmd.spkeys[NHKF_GETDIR_SELF];
+    dd = xytodir(sdx, sdy);
+    return dd == DIR_ERR ? 0 : gc.Cmd.dirchars[dd];
+}
+
+/* is there a map and a hero to aim from? */
+bool
+vulture_aim_ok(void)
+{
+    return levwin && vulture_windows_inited == TRUE && u.ux;
+}
+
+void
+vulture_aim_set(bool on, int x, int y)
+{
+    vaim_on = on;
+    vaim_at.x = x, vaim_at.y = y;
+}
+
+static void
+vfx_ringc(int sx, int sy, double rad, Uint8 r, Uint8 g, Uint8 b, int alpha)
+{
+    vfx_ent e;
+
+    memset(&e, 0, sizeof e);
+    e.r = r, e.g = g, e.b = b;
+    vfx_ring(sx, sy, rad, e, alpha);
+}
+
+/* the travel preview, drawn with the map */
+static void
+vpath_draw(int cx, int cy, int vx, int vy)
+{
+    static point pts[COLNO * ROWNO];
+    int n, i, sx, sy;
+    double ph;
+    char num[16];
+
+    if (vaim_on || !isok(vhv.x, vhv.y) || u_at(vhv.x, vhv.y)
+        || svc.context.travel || svc.context.run || gm.multi
+        || vulture_whatis_active || u.uswallow || !vhv_over_map())
+        return;
+    if (distmin(u.ux, u.uy, vhv.x, vhv.y) < 2)
+        return; /* a plain step */
+    n = vpath_find(vhv.x, vhv.y, pts, COLNO * ROWNO);
+    if (n < 2)
+        return;
+    ph = SDL_GetTicks() / 140.0;
+    {
+        /* a dotted line hero -> target: 3 dots per step, a brighter one on
+           each square, a soft pulse marching toward the target */
+        int px0, py0;
+
+        vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &px0, &py0);
+        for (i = n - 1; i >= 0; i--) {
+            int k = n - 1 - i, j, a = 150 + (int) (90 * (0.5 + 0.5 * sin(ph - k * 0.9)));
+
+            vfx_square_screen(pts[i].x, pts[i].y, cx, cy, vx, vy, &sx, &sy);
+            for (j = 1; j <= 3; j++) {
+                int qx = px0 + (sx - px0) * j / 3, qy = py0 + (sy - py0) * j / 3;
+
+                vfx_glowdot(qx, qy + 1, 0, 0, 0, a / 2);
+                vfx_glowdot(qx, qy, 255, 228, 140, j == 3 ? a : a * 2 / 3);
+            }
+            px0 = sx, py0 = sy;
+        }
+    }
+    vfx_square_screen(pts[0].x, pts[0].y, cx, cy, vx, vy, &sx, &sy);
+    vfx_ringc(sx, sy, 12 + 2 * sin(ph * 0.6), 255, 228, 140, 220);
+    snprintf(num, sizeof num, "%d", n);
+    vulture_put_text_shadow(V_FONT_SMALL, num, vulture_screen, sx + 16, sy - 20,
+                            SDL_MapRGB(vulture_screen->format, 235, 240, 205),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+}
+
+/* the aim line, drawn with the map */
+static void
+vaim_draw(int cx, int cy, int vx, int vy)
+{
+    int sdx, sdy, k, last = 0, sx, sy, ex, ey, hx, hy, tgt = 0;
+    Uint8 r = 255, g = 200, b = 90;
+    double ph = SDL_GetTicks() / 120.0;
+
+    if (!vaim_on || !isok(vaim_at.x, vaim_at.y))
+        return;
+    vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &hx, &hy);
+    vulture_aim_snap(vaim_at.x, vaim_at.y, &sdx, &sdy);
+    if (!sdx && !sdy) { /* yourself */
+        vfx_ringc(hx, hy, 16 + 3 * sin(ph), r, g, b, 220);
+        return;
+    }
+    for (k = 1; k <= 13; k++) {
+        int x = u.ux + sdx * k, y = u.uy + sdy * k;
+        struct monst *m;
+
+        if (vmv_solid(x, y))
+            break;
+        last = k;
+        if (!tgt && (m = m_at(x, y)) != 0 && canspotmon(m)) {
+            tgt = k;
+            if (m->mtame || m->mpeaceful)
+                r = 255, g = 80, b = 70;   /* careful: a friend in the way */
+            else
+                r = 110, g = 255, b = 140; /* clear shot at a hostile */
+        }
+    }
+    if (!last) { /* blocked right away: a small red cross */
+        vfx_ent e;
+
+        memset(&e, 0, sizeof e);
+        e.r = 255, e.g = 70, e.b = 60;
+        vfx_square_screen(u.ux + sdx, u.uy + sdy, cx, cy, vx, vy, &sx, &sy);
+        vfx_dline(sx - 7, sy - 4, sx + 7, sy + 4, e, 230);
+        vfx_dline(sx - 7, sy + 4, sx + 7, sy - 4, e, 230);
+        return;
+    }
+    vfx_square_screen(u.ux + sdx * last, u.uy + sdy * last, cx, cy, vx, vy, &ex, &ey);
+    for (k = 0; k <= last * 4; k++) {
+        double f = (double) k / (last * 4);
+        int a = 120 + (int) (100 * (0.5 + 0.5 * sin(ph - k * 0.5)));
+
+        sx = hx + (int) ((ex - hx) * f), sy = hy + (int) ((ey - hy) * f);
+        vfx_glowdot(sx, sy + 1, 0, 0, 0, a / 2);
+        vfx_glowdot(sx, sy, r, g, b, a);
+    }
+    if (tgt) {
+        vfx_square_screen(u.ux + sdx * tgt, u.uy + sdy * tgt, cx, cy, vx, vy, &sx, &sy);
+        vfx_ringc(sx, sy, 15 - 2 * sin(ph), r, g, b, 235);
+        vfx_ringc(sx, sy, 8, r, g, b, 160);
+    }
+}
+
+/* a dark box of any size */
+static void
+vbox(int x, int y, int w, int h, int alpha)
+{
+    int yy, xx;
+
+    for (yy = 0; yy < h; yy += 160)
+        for (xx = 0; xx < w; xx += 640)
+            vhud_box(x + xx, y + yy, w - xx > 640 ? 640 : w - xx,
+                     h - yy > 160 ? 160 : h - yy, alpha);
+}
+
+/* the hover card over a monster (crisp: drawn after the zoom) */
+static void
+vcard_draw(const std::string &name)
+{
+    struct monst *m;
+    point mp = vulture_get_mouse_pos();
+    Uint32 now = SDL_GetTicks(), age;
+    const char *threat;
+    Uint8 tr, tg, tb;
+    std::string tags, title = name;
+    int lh = vulture_get_lineheight(V_FONT_SMALL), bw, bh, bx, by, d, fade;
+    bool bar;
+    SDL_Rect rc;
+
+    if (vaim_on || !isok(vhv.x, vhv.y) || u_at(vhv.x, vhv.y) || Hallucination
+        || vulture_whatis_active || !vhv_over_map() || name.empty())
+        return;
+    m = m_at(vhv.x, vhv.y);
+    if (!m || DEADMONSTER(m) || !canspotmon(m))
+        return;
+    age = now - vhv_since;
+    if (age < 160)
+        return;
+    fade = age < 280 ? (int) (255 * (age - 160) / 120.0) : 255;
+    d = (int) m->data->difficulty - (int) u.ulevel;
+    if (m->mtame)
+        threat = "Ally", tr = 120, tg = 230, tb = 140;
+    else if (m->mpeaceful)
+        threat = "Peaceful", tr = 130, tg = 190, tb = 255;
+    else if (d <= -4)
+        threat = "Trivial", tr = 170, tg = 170, tb = 170;
+    else if (d <= 0)
+        threat = "Fair fight", tr = 220, tg = 230, tb = 150;
+    else if (d <= 3)
+        threat = "Dangerous", tr = 255, tg = 160, tb = 60;
+    else
+        threat = "Deadly", tr = 255, tg = 70, tb = 60;
+    tags = threat;
+    if (m->msleeping)
+        tags += "  -  asleep";
+    else if (!m->mcanmove)
+        tags += "  -  helpless";
+    if (m->mflee)
+        tags += "  -  fleeing";
+    if (m->mtrapped)
+        tags += "  -  trapped";
+    if (!title.empty())
+        title[0] = (char) toupper((unsigned char) title[0]);
+    bar = m->mtame || m->mhp < m->mhpmax;
+    bw = vulture_text_length(V_FONT_SMALL, title);
+    if (vulture_text_length(V_FONT_SMALL, tags) > bw)
+        bw = vulture_text_length(V_FONT_SMALL, tags);
+    bw += 26;
+    if (bw < 150)
+        bw = 150;
+    bh = 2 * lh + 14 + (bar ? 10 : 0);
+    bx = mp.x + 20, by = mp.y + 24;
+    if (bx + bw > vulture_screen->w - 4)
+        bx = mp.x - 20 - bw;
+    if (by + bh > vulture_screen->h - 4)
+        by = mp.y - 12 - bh;
+    vbox(bx, by, bw, bh, fade * 215 / 255);
+    rc.x = bx, rc.y = by, rc.w = 3, rc.h = bh;
+    SDL_FillRect(vulture_screen, &rc, SDL_MapRGB(vulture_screen->format, tr, tg, tb));
+    if (fade < 120)
+        return;
+    vulture_put_text_shadow(V_FONT_SMALL, title, vulture_screen, bx + 12, by + 6,
+                            SDL_MapRGB(vulture_screen->format, 245, 240, 230),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    vulture_put_text_shadow(V_FONT_SMALL, tags, vulture_screen, bx + 12, by + 6 + lh,
+                            SDL_MapRGB(vulture_screen->format, tr, tg, tb),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    if (bar) {
+        int full = bw - 24, fill = m->mhpmax > 0 ? full * m->mhp / m->mhpmax : 0;
+        int pct = m->mhpmax > 0 ? 100 * m->mhp / m->mhpmax : 0;
+
+        rc.x = bx + 12, rc.y = by + 10 + 2 * lh, rc.w = full, rc.h = 5;
+        SDL_FillRect(vulture_screen, &rc, SDL_MapRGB(vulture_screen->format, 40, 20, 20));
+        rc.w = fill < 0 ? 0 : fill;
+        SDL_FillRect(vulture_screen, &rc,
+                     pct > 60 ? SDL_MapRGB(vulture_screen->format, 90, 210, 90)
+                     : pct > 30 ? SDL_MapRGB(vulture_screen->format, 230, 190, 60)
+                     : SDL_MapRGB(vulture_screen->format, 220, 60, 50));
+    }
+}
+
+/* ground card: what's lying here */
+static std::vector<std::string> vhere_lines;
+static std::string vhere_title;
+static Uint32 vhere_born = 0;
+static int vhere_x = -1, vhere_y = -1;
+
+void
+vulture_here_card(const std::string &title, const std::vector<std::string> &lines)
+{
+    vhere_title = title;
+    vhere_lines = lines;
+    vhere_born = SDL_GetTicks();
+    if (!vhere_born)
+        vhere_born = 1;
+    vhere_x = u.ux, vhere_y = u.uy;
+}
+
+static void
+vhere_draw(int ax, int ay, int w, int h)
+{
+    Uint32 now = SDL_GetTicks(), age;
+    const Uint32 life = 7000;
+    int lh = vulture_get_lineheight(V_FONT_SMALL), n, i, bw, bh, bx, by, fade;
+    char more[40];
+
+    if (!vhere_born)
+        return;
+    age = now - vhere_born;
+    if (age >= life || u.ux != vhere_x || u.uy != vhere_y) {
+        vhere_born = 0;
+        return;
+    }
+    fade = age > life - 500 ? (int) (255 * (life - age) / 500.0) : 255;
+    n = (int) vhere_lines.size() > 8 ? 7 : (int) vhere_lines.size();
+    bw = vulture_text_length(V_FONT_SMALL, vhere_title);
+    for (i = 0; i < n; i++)
+        if (vulture_text_length(V_FONT_SMALL, vhere_lines[i]) > bw)
+            bw = vulture_text_length(V_FONT_SMALL, vhere_lines[i]);
+    bw += 28;
+    if (bw > w / 2)
+        bw = w / 2;
+    bh = (n + 1 + ((int) vhere_lines.size() > n ? 1 : 0)) * lh + 14;
+    bx = ax + 14;
+    by = (vhb_rect.w ? vhb_rect.y : stwin && stwin->visible ? stwin->abs_y
+                                                            : ay + h - 120) - bh - 12;
+    if (by < ay + 60)
+        by = ay + 60;
+    vbox(bx, by, bw, bh, fade * 210 / 255);
+    {
+        SDL_Rect rc;
+
+        rc.x = bx, rc.y = by, rc.w = 3, rc.h = bh;
+        SDL_FillRect(vulture_screen, &rc, SDL_MapRGB(vulture_screen->format, 255, 200, 70));
+    }
+    if (fade < 120)
+        return;
+    vulture_put_text_shadow(V_FONT_SMALL, vhere_title, vulture_screen, bx + 12, by + 6,
+                            SDL_MapRGB(vulture_screen->format, 255, 200, 70),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    for (i = 0; i < n; i++)
+        vulture_put_text_shadow(V_FONT_SMALL, vhere_lines[i], vulture_screen,
+                                bx + 12, by + 6 + (i + 1) * lh,
+                                SDL_MapRGB(vulture_screen->format, 235, 232, 225),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    if ((int) vhere_lines.size() > n) {
+        snprintf(more, sizeof more, "+%d more  (press , to pick up)",
+                 (int) vhere_lines.size() - n);
+        vulture_put_text_shadow(V_FONT_SMALL, more, vulture_screen, bx + 12,
+                                by + 6 + (n + 1) * lh,
+                                SDL_MapRGB(vulture_screen->format, 170, 165, 150),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    }
+}
+
+/*
+ * IMPLEMENTATION_LOG s126: the ability bar (Dota's item slots, Stoneshard's
+ * belt).  Ten slots above the status panel hold items or spells: click a
+ * slot or press 1-0 to use it (quaff / read / zap / eat / put on / wear /
+ * throw / wield / apply, or cast), right-click to change it, click an empty
+ * slot to fill it.  A used-up stack refills from another of the same kind.
+ * Saved per character next to the save files.
+ */
+struct vhb_slot {
+    int kind; /* 0 empty, 1 item, 2 spell */
+    unsigned oid;
+    int otyp;
+    int spell;
+};
+static vhb_slot vhb[10];
+static char vhb_owner[PL_NSIZ + 4] = "";
+static Uint32 vhb_flash[10];
+extern "C" {
+extern boolean vulture_click_consumed; /* cmd.c s72 */
+}
+
+static std::string
+vhb_path(void)
+{
+    const char *la = getenv("LOCALAPPDATA");
+    char name[PL_NSIZ + 4], buf[700];
+    int i;
+
+    for (i = 0; svp.plname[i] && i < PL_NSIZ; i++)
+        name[i] = isalnum((unsigned char) svp.plname[i]) ? svp.plname[i] : '_';
+    name[i] = 0;
+    snprintf(buf, sizeof buf, "%s\\NetHack\\5.0\\hotbar-%s.txt", la ? la : ".", name);
+    return buf;
+}
+
+static void
+vhb_save(void)
+{
+    FILE *fp = fopen(vhb_path().c_str(), "w");
+    int i;
+
+    if (!fp)
+        return;
+    for (i = 0; i < 10; i++)
+        fprintf(fp, "%d %u %d %d\n", vhb[i].kind, vhb[i].oid, vhb[i].otyp, vhb[i].spell);
+    fclose(fp);
+}
+
+static void
+vhb_load(void)
+{
+    FILE *fp;
+    int i;
+
+    if (!svp.plname[0] || !strcmp(vhb_owner, svp.plname))
+        return;
+    snprintf(vhb_owner, sizeof vhb_owner, "%s", svp.plname);
+    memset(vhb, 0, sizeof vhb);
+    if ((fp = fopen(vhb_path().c_str(), "r")) != NULL) {
+        for (i = 0; i < 10; i++)
+            if (fscanf(fp, "%d %u %d %d", &vhb[i].kind, &vhb[i].oid,
+                       &vhb[i].otyp, &vhb[i].spell) != 4) {
+                vhb[i].kind = 0;
+                break;
+            }
+        fclose(fp);
+    }
+}
+
+static struct obj *
+vhb_obj(int i)
+{
+    struct obj *o;
+
+    if (vhb[i].kind != 1)
+        return 0;
+    for (o = gi.invent; o; o = o->nobj)
+        if (o->o_id == vhb[i].oid)
+            return o;
+    for (o = gi.invent; o; o = o->nobj) /* refill from the same kind */
+        if (o->otyp == vhb[i].otyp) {
+            vhb[i].oid = o->o_id;
+            return o;
+        }
+    return 0;
+}
+
+static int
+vhb_spell(int i)
+{
+    int s;
+
+    if (vhb[i].kind != 2)
+        return -1;
+    if (vhb[i].spell >= 0 && vhb[i].spell < MAXSPELL
+        && svs.spl_book[vhb[i].spell].sp_id == vhb[i].otyp)
+        return vhb[i].spell;
+    for (s = 0; s < MAXSPELL && svs.spl_book[s].sp_id != NO_SPELL; s++)
+        if (svs.spl_book[s].sp_id == vhb[i].otyp)
+            return vhb[i].spell = s;
+    return -1;
+}
+
+/* queue the slot's action for the core (picked up by readchar_core as an
+   already-handled click) */
+static bool
+vhb_use(int i)
+{
+    int (*ec)(void) = 0;
+
+    if (vhb[i].kind == 2) {
+        int s = vhb_spell(i);
+
+        if (s < 0)
+            return false;
+        cmdq_add_ec(CQ_CANNED, docast);
+        cmdq_add_key(CQ_CANNED, (char) (s < 26 ? 'a' + s : 'A' + s - 26));
+    } else if (vhb[i].kind == 1) {
+        struct obj *o = vhb_obj(i);
+
+        if (!o)
+            return false;
+        switch (o->oclass) {
+        case POTION_CLASS:
+            ec = dodrink;
+            break;
+        case SCROLL_CLASS:
+        case SPBOOK_CLASS:
+            ec = doread;
+            break;
+        case WAND_CLASS:
+            ec = dozap;
+            break;
+        case FOOD_CLASS:
+            ec = doeat;
+            break;
+        case RING_CLASS:
+        case AMULET_CLASS:
+            ec = o->owornmask ? doremring : doputon;
+            break;
+        case ARMOR_CLASS:
+            ec = o->owornmask ? dotakeoff : dowear;
+            break;
+        case WEAPON_CLASS:
+            /* missiles and ammo are thrown (ammo is shot when its
+               launcher is wielded); anything else is wielded */
+            if (is_missile(o) || is_ammo(o) || (o->quan > 1 && o != uwep))
+                ec = dothrow;
+            else
+                ec = dowield;
+            break;
+        case GEM_CLASS:
+            ec = dothrow;
+            break;
+        default:
+            ec = doapply;
+            break;
+        }
+        cmdq_add_ec(CQ_CANNED, ec);
+        cmdq_add_key(CQ_CANNED, o->invlet);
+    } else {
+        return false;
+    }
+    vulture_click_consumed = TRUE;
+    vhb_flash[i] = SDL_GetTicks();
+    return true;
+}
+
+static int
+vhb_slot_size(void)
+{
+    return V_LISTITEM_HEIGHT;
+}
+
+static int
+vhb_hit(int mx, int my)
+{
+    int S = vhb_slot_size(), gap = V_UI(4), i;
+
+    if (!vhb_rect.w || my < vhb_rect.y || my >= vhb_rect.y + S
+        || mx < vhb_rect.x || mx >= vhb_rect.x + vhb_rect.w)
+        return -1;
+    i = (mx - vhb_rect.x) / (S + gap);
+    if ((mx - vhb_rect.x) % (S + gap) >= S || i > 9)
+        return -1;
+    return i;
+}
+
+/* the picker: what goes in this slot? */
+static void
+vhb_pick(int slot)
+{
+    contextmenu *menu;
+    std::vector<struct obj *> objs;
+    struct obj *o;
+    int result = 0, i, n = 0;
+    char buf[BUFSZ];
+
+    vhb_load();
+    menu = new contextmenu(levwin);
+    for (o = gi.invent; o && objs.size() < 30; o = o->nobj) {
+        switch (o->oclass) {
+        case POTION_CLASS: case SCROLL_CLASS: case WAND_CLASS:
+        case RING_CLASS: case AMULET_CLASS: case FOOD_CLASS:
+        case TOOL_CLASS: case WEAPON_CLASS: case GEM_CLASS:
+        case SPBOOK_CLASS: case ARMOR_CLASS:
+            break;
+        default:
+            continue;
+        }
+        snprintf(buf, sizeof buf, "%c - %s", o->invlet, doname(o));
+        if (strlen(buf) > 56)
+            strcpy(buf + 53, "...");
+        menu->add_item(buf, 100 + (int) objs.size());
+        objs.push_back(o);
+        n++;
+    }
+    for (i = 0; i < MAXSPELL && svs.spl_book[i].sp_id != NO_SPELL; i++) {
+        snprintf(buf, sizeof buf, "Spell: %s (%d Pw)",
+                 OBJ_NAME(objects[svs.spl_book[i].sp_id]),
+                 SPELL_LEV_PW(svs.spl_book[i].sp_lev));
+        menu->add_item(buf, 1000 + i);
+        n++;
+    }
+    if (vhb[slot].kind) {
+        menu->add_item("Clear this slot", 9999);
+        n++;
+    }
+    if (!n) {
+        delete menu;
+        return;
+    }
+    menu->layout();
+    vulture_event_dispatcher(&result, V_RESPOND_INT, menu);
+    delete menu;
+    if (result == 9999) {
+        vhb[slot].kind = 0;
+    } else if (result >= 1000 && result < 1000 + MAXSPELL) {
+        vhb[slot].kind = 2;
+        vhb[slot].spell = result - 1000;
+        vhb[slot].otyp = svs.spl_book[result - 1000].sp_id;
+        vhb[slot].oid = 0;
+    } else if (result >= 100 && result < 100 + (int) objs.size()) {
+        vhb[slot].kind = 1;
+        vhb[slot].oid = objs[result - 100]->o_id;
+        vhb[slot].otyp = objs[result - 100]->otyp;
+        vhb[slot].spell = -1;
+    } else {
+        return;
+    }
+    for (i = 0; i < 10; i++) /* one slot per thing */
+        if (i != slot && vhb[slot].kind && vhb[i].kind == vhb[slot].kind
+            && vhb[i].otyp == vhb[slot].otyp
+            && (vhb[i].kind == 2 || vhb[i].oid == vhb[slot].oid))
+            vhb[i].kind = 0;
+    vhb_save();
+}
+
+/* the tooltip text for a slot */
+static std::string
+vhb_tip(int i)
+{
+    char buf[BUFSZ + 80];
+    struct obj *o;
+    int s;
+
+    vhb_load();
+    if (!vhb[i].kind)
+        return "Empty slot - click to put an item or spell here";
+    if (vhb[i].kind == 2) {
+        s = vhb_spell(i);
+        if (s < 0)
+            return "Spell no longer known - right-click to change";
+        snprintf(buf, sizeof buf, "[%d] Cast %s (%d Pw)  -  right-click to change",
+                 (i + 1) % 10, OBJ_NAME(objects[svs.spl_book[s].sp_id]),
+                 SPELL_LEV_PW(svs.spl_book[s].sp_lev));
+        return buf;
+    }
+    o = vhb_obj(i);
+    if (!o)
+        return "None left - right-click to change";
+    snprintf(buf, sizeof buf, "[%d] %s  -  right-click to change", (i + 1) % 10, doname(o));
+    return buf;
+}
+
+static void
+vhb_draw(int ax, int ay, int w, int h)
+{
+    int S = vhb_slot_size(), gap = V_UI(4), total = 10 * S + 9 * gap, i, x0, y0;
+    Uint32 now = SDL_GetTicks();
+    point mp = vulture_get_mouse_pos();
+    int hov = -1;
+    Uint32 black = SDL_MapRGB(vulture_screen->format, 0, 0, 0);
+
+    if (vulture_windows_inited != TRUE || !svp.plname[0] || !u.ux)
+        return;
+    vhb_load();
+    if (stwin && stwin->visible) {
+        x0 = stwin->abs_x;
+        y0 = stwin->abs_y - S - V_UI(8);
+    } else {
+        x0 = ax + (w - total) / 2;
+        y0 = ay + h - S - V_UI(10);
+    }
+    if (x0 + total > ax + w - 4)
+        x0 = ax + w - 4 - total;
+    if (x0 < ax + 4)
+        x0 = ax + 4;
+    vhb_rect.x = x0, vhb_rect.y = y0, vhb_rect.w = total, vhb_rect.h = S;
+    hov = vhb_hit(mp.x, mp.y);
+    for (i = 0; i < 10; i++) {
+        int sx = x0 + i * (S + gap), tile = -1;
+        bool dim = false, flash = vhb_flash[i] && now - vhb_flash[i] < 260;
+        struct obj *o = 0;
+        SDL_Rect rc;
+        Uint32 edge;
+        char lab[16];
+
+        vbox(sx, y0, S, S, 185);
+        if (vhb[i].kind == 1) {
+            o = vhb_obj(i);
+            if (o)
+                tile = vulture_object_to_tile(o->otyp, -1, -1, o);
+            else
+                tile = vulture_object_to_tile(vhb[i].otyp, -1, -1, NULL), dim = true;
+        } else if (vhb[i].kind == 2) {
+            int s = vhb_spell(i);
+
+            tile = vulture_object_to_tile(vhb[i].otyp, -1, -1, NULL);
+            if (s < 0 || u.uen < SPELL_LEV_PW(svs.spl_book[s].sp_lev))
+                dim = true;
+        }
+        if (tile >= 0) {
+            if (TILE_IS_OBJECT(tile))
+                vulture_put_tile_ui(sx + V_UI(2), y0 + V_UI(2),
+                                    tile - OBJTILEOFFSET + ICOTILEOFFSET);
+            else
+                vulture_put_tile_ui(sx + S / 2, y0 + S * 3 / 4, tile);
+        }
+        if (dim)
+            vbox(sx, y0, S, S, 150);
+        edge = flash ? SDL_MapRGB(vulture_screen->format, 255, 245, 200)
+               : i == hov ? SDL_MapRGB(vulture_screen->format, 255, 200, 70)
+               : SDL_MapRGB(vulture_screen->format, 90, 82, 66);
+        rc.x = sx, rc.y = y0, rc.w = S, rc.h = 1;
+        SDL_FillRect(vulture_screen, &rc, edge);
+        rc.y = y0 + S - 1;
+        SDL_FillRect(vulture_screen, &rc, edge);
+        rc.y = y0, rc.w = 1, rc.h = S;
+        SDL_FillRect(vulture_screen, &rc, edge);
+        rc.x = sx + S - 1;
+        SDL_FillRect(vulture_screen, &rc, edge);
+        snprintf(lab, sizeof lab, "%d", (i + 1) % 10);
+        vulture_put_text_shadow(V_FONT_SMALL, lab, vulture_screen, sx + V_UI(3), y0 + V_UI(1),
+                                SDL_MapRGB(vulture_screen->format, 200, 190, 160), black);
+        lab[0] = 0;
+        if (o && o->oclass == WAND_CLASS && o->known)
+            snprintf(lab, sizeof lab, "%d", o->spe);
+        else if (o && o->quan > 1)
+            snprintf(lab, sizeof lab, "%ld", (long) o->quan);
+        else if (vhb[i].kind == 2 && vhb_spell(i) >= 0)
+            snprintf(lab, sizeof lab, "%d", SPELL_LEV_PW(svs.spl_book[vhb_spell(i)].sp_lev));
+        if (lab[0]) {
+            int tw = vulture_text_length(V_FONT_SMALL, lab);
+
+            vulture_put_text_shadow(V_FONT_SMALL, lab, vulture_screen,
+                                    sx + S - tw - V_UI(3),
+                                    y0 + S - vulture_get_lineheight(V_FONT_SMALL),
+                                    vhb[i].kind == 2 ? SDL_MapRGB(vulture_screen->format, 120, 170, 255)
+                                                     : SDL_MapRGB(vulture_screen->format, 245, 240, 230),
+                                    black);
+        }
+    }
+}
+
+/* s126 probe: VULTURE_SELFTEST=<dir> stages the modern-UI pieces (bar,
+   travel preview, ground card, hover card, aim line) off-screen and saves
+   a screenshot of each into <dir>.  Off unless the variable is set. */
+static void
+vselftest(void)
+{
+    static int stage = 0;
+    static Uint32 t0 = 0;
+    const char *dir = getenv("VULTURE_SELFTEST");
+    char path[700];
+    struct monst *m;
+    int x, y, bx = -1, by = -1, bd = 999;
+
+    if (!dir || !*dir || stage > 3 || !levwin || !u.ux)
+        return;
+    if (!t0)
+        t0 = SDL_GetTicks();
+    if (SDL_GetTicks() - t0 < 1500 + 700u * stage)
+        return;
+    switch (stage) {
+    case 0: {
+        struct obj *o;
+        int i = 0;
+        std::vector<std::string> lines;
+
+        vhb_load();
+        for (o = gi.invent; o && i < 6; o = o->nobj)
+            if (o->oclass != COIN_CLASS) {
+                vhb[i].kind = 1, vhb[i].oid = o->o_id, vhb[i].otyp = o->otyp;
+                i++;
+            }
+        if (svs.spl_book[0].sp_id != NO_SPELL)
+            vhb[i].kind = 2, vhb[i].otyp = svs.spl_book[0].sp_id, vhb[i].spell = 0;
+        for (x = 1; x < COLNO; x++)
+            for (y = 0; y < ROWNO; y++) {
+                int d = distmin(u.ux, u.uy, x, y);
+
+                if (d >= 4 && d < bd && vmv_pass(x, y) && vpath_find(x, y, NULL, 0) >= 0) {
+                    static point tmp[COLNO * ROWNO];
+
+                    if (vpath_find(x, y, tmp, COLNO * ROWNO) >= 4)
+                        bd = d, bx = x, by = y;
+                }
+            }
+        if (bx >= 0) {
+            point sq, mp;
+
+            sq.x = bx, sq.y = by;
+            mp = levwin->map_to_mouse(sq);
+            vulture_set_mouse_pos(mp.x, mp.y);
+            vhv = sq;
+            vhv_since = SDL_GetTicks() - 1000;
+        }
+        lines.push_back("a +0 dagger");
+        lines.push_back("2 uncursed food rations");
+        lines.push_back("a scroll labeled ELBIB YLOH");
+        vulture_here_card("Things that are here", lines);
+        break;
+    }
+    case 1:
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(path, sizeof path, "%s\\selftest_hover.bmp", dir);
+        SDL_SaveBMP(vulture_screen, path);
+        for (m = fmon; m; m = m->nmon)
+            if (!DEADMONSTER(m) && canspotmon(m)) {
+                point sq, mp;
+
+                sq.x = m->mx, sq.y = m->my;
+                mp = levwin->map_to_mouse(sq);
+                vulture_set_mouse_pos(mp.x, mp.y);
+                vhv = sq;
+                vhv_since = SDL_GetTicks() - 1000;
+                break;
+            }
+        break;
+    case 2:
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(path, sizeof path, "%s\\selftest_card.bmp", dir);
+        SDL_SaveBMP(vulture_screen, path);
+        vulture_aim_set(true, u.ux - 6, u.uy - 1);
+        break;
+    case 3:
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(path, sizeof path, "%s\\selftest_aim.bmp", dir);
+        SDL_SaveBMP(vulture_screen, path);
+        vulture_aim_set(false, -1, -1);
+        break;
+    }
+    stage++;
+}
+
 /*
  * IMPLEMENTATION_LOG s121: mouse-wheel zoom.  Zooming in scales the drawn
  * map up around the window centre (bilinear) just before the vignette and
@@ -3273,10 +4196,16 @@ levelwin::draw()
     vw_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
+    vpath_draw(map_centre_x, map_centre_y, view_x, view_y); /* s125 */
+    vaim_draw(map_centre_x, map_centre_y, view_x, view_y);  /* s125 */
     vzoom_apply(this->abs_x, this->abs_y, this->w, this->h); /* s121 */
     vulture_draw_vignette(this->abs_x, this->abs_y, this->w, this->h); /* s74 */
     vhud_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
               this->abs_y, this->w, this->h); /* s100: toasts, card, waypoint */
+    vhb_draw(this->abs_x, this->abs_y, this->w, this->h);   /* s126 */
+    vhere_draw(this->abs_x, this->abs_y, this->w, this->h); /* s125 */
+    if (isok(vhv.x, vhv.y) && !vaim_on) /* s125: monster hover card */
+        vcard_draw(map_data->map_square_description(vhv, 0));
 
     /* Restore drawing region */
     vulture_set_draw_region(0, 0, vulture_screen->w - 1,
@@ -3405,6 +4334,16 @@ levelwin::handle_timer_event(window *target, void *result, int time)
 
         if (vpt_hit(mp.x, mp.y)) /* s123: no tooltip over the portrait */
             return V_EVENT_HANDLED_NOREDRAW;
+        if (vhb_hit(mp.x, mp.y) >= 0) { /* s126 */
+            vulture_mouse_set_tooltip(vhb_tip(vhb_hit(mp.x, mp.y)));
+            return V_EVENT_HANDLED_NOREDRAW;
+        }
+    }
+    {
+        struct monst *hm = isok(mappos.x, mappos.y) ? m_at(mappos.x, mappos.y) : 0;
+
+        if (hm && canspotmon(hm) && !u_at(mappos.x, mappos.y) && !Hallucination)
+            return V_EVENT_HANDLED_NOREDRAW; /* s125: hover card instead */
     }
     if (target != this && !target->caption.empty())
         vulture_mouse_set_tooltip(target->caption);
@@ -3471,6 +4410,16 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
     mouse = vulture_get_mouse_pos();
     mappos = mouse_to_map(mouse);
 
+    if (vhb_hit(mouse.x, mouse.y) >= 0 || vpt_hit(mouse.x, mouse.y)) { /* s126 */
+        vulture_set_mcursor(V_CURSOR_NORMAL);
+        if (vhv.x != -1) {
+            vhv.x = vhv.y = -1;
+            force_redraw();
+            return V_EVENT_HANDLED_REDRAW;
+        }
+        return V_EVENT_HANDLED_NOREDRAW;
+    }
+
     if (target != this && target->menu_id) {
         /* show a map scroll cursor if the mouse is in the edge zone */
         switch (target->menu_id) {
@@ -3504,6 +4453,14 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
     } else
         /* select a cursor for the current position */
         vulture_set_mcursor(get_map_cursor(mappos));
+
+    /* s125: the hovered square drives the travel preview and hover card */
+    if (mappos.x != vhv.x || mappos.y != vhv.y) {
+        vhv = mappos;
+        vhv_since = SDL_GetTicks();
+        force_redraw();
+        need_redraw = 1;
+    }
 
     /* if the highlight option is on, store the map position of the mouse
      * and refresh the current and previous positions */
@@ -3547,6 +4504,24 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
     mouse = vulture_get_mouse_pos();
     mappos = mouse_to_map(mouse);
 
+    { /* s126: the ability bar */
+        int hs = vhb_hit(mouse.x, mouse.y);
+
+        if (hs >= 0) {
+            if (button == SDL_BUTTON_LEFT && vhb[hs].kind && vhb_use(hs)) {
+                ((vulture_event *) result)->num = 0;
+                ((vulture_event *) result)->x = u.ux;
+                ((vulture_event *) result)->y = u.uy;
+                force_redraw();
+                return V_EVENT_HANDLED_FINAL;
+            }
+            if (button == SDL_BUTTON_RIGHT
+                || (button == SDL_BUTTON_LEFT && !vhb[hs].kind))
+                vhb_pick(hs);
+            force_redraw();
+            return V_EVENT_HANDLED_REDRAW;
+        }
+    }
     if (vpt_hit(mouse.x, mouse.y)) { /* s117: the portrait drives the camera */
         if (button == SDL_BUTTON_LEFT)
             vpt_click();
@@ -3662,6 +4637,21 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
 
     default:
         break;
+    }
+
+    /* s126: 1-0 use the ability bar's slot, if it's filled */
+    if (sym >= SDLK_0 && sym <= SDLK_9
+        && !(mod & (KMOD_CTRL | KMOD_ALT | KMOD_SHIFT | KMOD_GUI))) {
+        int hs = sym == SDLK_0 ? 9 : sym - SDLK_1;
+
+        vhb_load();
+        if (vhb[hs].kind && vhb_use(hs)) {
+            ((vulture_event *) result)->num = 0;
+            ((vulture_event *) result)->x = u.ux;
+            ((vulture_event *) result)->y = u.uy;
+            force_redraw();
+            return V_EVENT_HANDLED_FINAL;
+        }
     }
 
     /* all other keys are converted and passed to the core */

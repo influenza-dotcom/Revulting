@@ -2729,6 +2729,72 @@ levelwin.cpp (vbark_tab).
   view" rescue stops pulling you back. It resets on a portrait click or a
   level change.
 
+### 125. Modern hover and aim (Brogue / Cogmind), condensed messages, ground card
+
+Research notes:
+- **Brogue:** hovering highlights the travel path, a click walks it, and
+  Esc aborts.
+- **Cogmind:** the line of fire turns green/red when the path is
+  clear/blocked, info windows are animated, and the HUD aims for
+  "immediate visual access without opening windows".
+- **Message-log designs:** condense duplicates; only stop for unseen
+  messages. Vulture never had --More-- in the log; its blocking point is
+  pop-up windows.
+
+What was built:
+- **Travel preview:** hovering a map square at least 2 away draws the
+  path the hero would walk, with a step count.
+  - vpath_find does a BFS over KNOWN terrain: seen squares, glyph-based
+    walls/water/lava/boulders, no diagonals through doors.
+  - Drawn as a gold dotted line with a marching pulse.
+  - Hidden while travelling, during prompts, or when the pointer is over
+    a panel (vhv_over_map).
+- **Hover card:** a visible monster under the pointer gets a card after
+  160 ms, fading in. The plain tooltip is suppressed for monster squares.
+  - Shows the name and a threat word from the monster's difficulty
+    against your level (Trivial / Fair fight / Dangerous / Deadly; Ally,
+    Peaceful).
+  - Tags: asleep / helpless / fleeing / trapped.
+  - Health bar for pets and hurt monsters (no new information: damage
+    numbers already showed it).
+- **Aim:** a direction prompt during play turns dirdialog into a
+  full-screen transparent layer with a banner.
+  - The map draws a line from the hero toward the pointer, snapped to 8
+    directions, stopping at walls: green when the first creature is
+    hostile, red when it's a pet or peaceful, amber when there is no
+    creature. A red cross means blocked at once.
+  - Click to fire (vulture_aim_key -> dirchars / getdir self);
+    right-click or Esc cancels. Direction keys still work.
+- **Condensed messages:** messagewin::add_message folds a repeat within
+  2 turns into "msg (xN)".
+- **Ground card:** a blocking "Things that are here:" NHW_MENU becomes a
+  non-blocking card beside the map. It lasts 7 s or until you move, and
+  shows 7 lines plus "+N more". A felt cockatrice ("..." line) stays
+  modal.
+
+### 126. The ability bar
+
+- **Layout:** 10 slots above the status panel, items or spells.
+- **Controls:**
+  - Left-click or 1-0 uses a slot. An empty slot's digit still types a
+    count.
+  - Clicking an empty slot, or right-clicking any slot, opens a picker:
+    inventory, known spells, Clear.
+- **Actions:** queued for the core through cmdq plus
+  vulture_click_consumed (as the s72 popup does):
+  - potion: quaff; scroll/book: read; wand: zap
+  - food: eat; ring/amulet: put on/remove; armour: wear/take off
+  - missile/ammo/stack, gem: throw
+  - other weapon: wield; anything else: apply; spell: cast
+- **Display:** shows quantity, known wand charges and spell Pw cost. A
+  slot dims when its item is gone or Pw is short, and flashes on use. A
+  used-up stack refills from the same otyp.
+- **Saving:** per character in
+  %LOCALAPPDATA%\NetHack\5.0\hotbar-<name>.txt.
+- **Self-test probe:** VULTURE_SELFTEST=<dir> (off unless set) stages
+  the bar, path, ground card, hover card and aim line, and saves BMPs.
+  Verified off-screen.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

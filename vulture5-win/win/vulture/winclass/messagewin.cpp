@@ -227,6 +227,32 @@ messagewin::handle_mousebuttonup_event(window *target, void *result,
 void
 messagewin::add_message(std::string str)
 {
+    /* s125: a line repeating the last one (this turn or the next couple)
+       is condensed onto it: "You hit the jackal. (x3)" */
+    if (message_top >= 0 && message_ages[message_top]) {
+        std::string &last = message_buf[message_top];
+        std::string base = last;
+        int n = 1, nowm = svm.moves ? (int) svm.moves : 1;
+        size_t p = base.rfind(" (x");
+
+        if (p != std::string::npos && !base.empty()
+            && base[base.size() - 1] == ')') {
+            n = atoi(base.c_str() + p + 3);
+            if (n > 1)
+                base = base.substr(0, p);
+            else
+                n = 1;
+        }
+        if (base == str && nowm - message_ages[message_top] <= 2) {
+            char cnt[24];
+
+            snprintf(cnt, sizeof cnt, " (x%d)", n + 1);
+            last = base + cnt;
+            message_ages[message_top] = nowm;
+            message_cur = message_top;
+            return;
+        }
+    }
     message_cur = message_top = (message_top + 1) % V_MESSAGEBUF_SIZE;
     message_buf[message_top] = str;
     /* age 0 marks an EMPTY slot (get_message), so never store 0 */

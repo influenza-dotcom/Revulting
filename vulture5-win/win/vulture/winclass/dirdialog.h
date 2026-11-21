@@ -11,6 +11,7 @@ class dirdialog : public mainwin
 {
   public:
     dirdialog(window *p, std::string ques);
+    virtual ~dirdialog();
     virtual bool draw();
     virtual eventresult handle_mousemotion_event(window *target, void *result,
                                                  int xrel, int yrel,
@@ -27,6 +28,7 @@ class dirdialog : public mainwin
   private:
     hotspot *arr;
     int arroffset_x, arroffset_y;
+    bool aim; /* s125: Cogmind-style aiming over the map */
 };
 
 #endif

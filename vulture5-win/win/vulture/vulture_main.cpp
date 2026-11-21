@@ -440,6 +440,40 @@ void vulture_display_nhwindow(int winid, boolean blocking)
 			/* else fall through */
 
 		case NHW_MENU:
+			/* s125: "Things that are here:" becomes a card beside the
+			 * map rather than a window you must dismiss (a cockatrice
+			 * corpse you just felt - the "..." line - stays modal) */
+			{
+				extern void vulture_here_card(const std::string &,
+				                              const std::vector<std::string> &);
+				std::vector<std::string> lines;
+				std::string title;
+				bool here = false, warn = false;
+
+				for (nhwindow::item_iterator it = win->items.begin();
+				     it != win->items.end(); ++it) {
+					const std::string &s = it->str;
+
+					if (!here && s.find(" here:") != std::string::npos
+					    && (s.find("hings that are") != std::string::npos
+					        || s.find("hings that you feel") != std::string::npos)) {
+						here = true;
+						title = s.substr(0, s.size() - 1);
+						continue;
+					}
+					if (here && !s.empty()) {
+						lines.push_back(s);
+						if (s.size() > 3 && s.compare(s.size() - 3, 3, "...") == 0)
+							warn = true;
+					}
+				}
+				if (here && !warn && !lines.empty() && blocking) {
+					vulture_here_card(title, lines);
+					if (levwin)
+						levwin->force_redraw();
+					break;
+				}
+			}
 			/* note that win->impl is NULL for menu windows! */
 			vulture_end_menu(winid, NULL);
 			vulture_select_menu(winid, PICK_NONE, &menu_list);
