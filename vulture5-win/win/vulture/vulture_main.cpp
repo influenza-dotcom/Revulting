@@ -344,6 +344,8 @@ void vulture_clear_nhwindow(int winid)
 }
 
 
+extern bool vulture_cam_follow;  /* s123: levelwin.cpp */
+
 /* helper called by vulture_display_nhwindow */
 static void vulture_display_nhmap(window *win, vulture_event *result, boolean blocking)
 {
@@ -362,7 +364,7 @@ static void vulture_display_nhmap(window *win, vulture_event *result, boolean bl
 			bool moved = (u.ux != cam_hx || u.uy != cam_hy);
 
 			if (!vulture_whatis_active
-			    && (vulture_opts.recenter || newlev
+			    && (vulture_cam_follow || newlev
 			        || (moved && levwin->hero_off_view(u.ux, u.uy))))
 				levwin->set_view(u.ux, u.uy);
 			cam_lev = u.uz;

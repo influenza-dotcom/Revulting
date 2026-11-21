@@ -2704,6 +2704,16 @@ levelwin.cpp (vbark_tab).
   - 1.5x uses sharp bilinear: a nearest upscale to 2x, then one small
     linear step down.
 
+### 123. Portrait camera, Dota-style
+
+- Removed the LOCKED badge, the camera toasts and the portrait tooltip
+  (the user found them unintuitive).
+- Clicking the portrait centres the view. Double-clicking sets
+  vulture_cam_follow, so the camera follows the hero.
+- Moving the camera yourself (edge scroll or middle-drag) clears it.
+- The follow is session-only: vulture_opts.recenter / the config line no
+  longer drive the camera, and nothing is written.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

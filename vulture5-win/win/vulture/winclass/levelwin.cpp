@@ -259,7 +259,10 @@ vpt_hit(int mx, int my)
     return px >= 0 && mx >= px && mx < px + ps && my >= py && my < py + ps;
 }
 
-extern "C" void vulture_toast(const char *, const char *);
+/* s123: Dota-style - double-clicking the portrait makes the camera
+   follow the hero until you move the camera yourself (edge scroll or
+   middle-drag); session only, no badge, no popup */
+bool vulture_cam_follow = false;
 
 static void
 vpt_click(void)
@@ -269,12 +272,7 @@ vpt_click(void)
 
     if (last && now - last < 400) {
         last = 0;
-        vulture_opts.recenter = !vulture_opts.recenter;
-        vulture_write_userconfig();
-        vulture_toast(vulture_opts.recenter ? "CAMERA LOCKED" : "CAMERA FREE",
-                      vulture_opts.recenter
-                          ? "It follows you. Double-click the portrait to free it."
-                          : "Click the portrait to jump back to yourself.");
+        vulture_cam_follow = true;
     } else {
         last = now;
     }
@@ -3351,6 +3349,7 @@ levelwin::handle_timer_event(window *target, void *result, int time)
         view_y = (view_y < 0) ? 0 : view_y;
         view_x = (view_x > COLNO) ? COLNO : view_x;
         view_y = (view_y > ROWNO) ? ROWNO : view_y;
+        vulture_cam_follow = false; /* s123: you moved the camera */
 
         need_redraw = 1;
         return V_EVENT_HANDLED_REDRAW;
@@ -3363,12 +3362,8 @@ levelwin::handle_timer_event(window *target, void *result, int time)
     {
         point mp = vulture_get_mouse_pos();
 
-        if (vpt_hit(mp.x, mp.y)) { /* s117 */
-            vulture_mouse_set_tooltip(vulture_opts.recenter
-                ? "Camera locked on you - double-click to free it"
-                : "Click: center camera - double-click: lock it on you");
+        if (vpt_hit(mp.x, mp.y)) /* s123: no tooltip over the portrait */
             return V_EVENT_HANDLED_NOREDRAW;
-        }
     }
     if (target != this && !target->caption.empty())
         vulture_mouse_set_tooltip(target->caption);
@@ -3409,6 +3404,7 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
             view_y -= mdy;
             view_x = (view_x < 0) ? 0 : (view_x > COLNO) ? COLNO : view_x;
             view_y = (view_y < 0) ? 0 : (view_y > ROWNO) ? ROWNO : view_y;
+            vulture_cam_follow = false; /* s123: you moved the camera */
             vpan_px -= V_MAP_XMOD * (ra - rb);
             vpan_py -= V_MAP_YMOD * (ra + rb);
             if (view_x == ovx && view_y == ovy) { /* hit the map edge */
