@@ -264,6 +264,8 @@ vpt_hit(int mx, int my)
    middle-drag); session only, no badge, no popup */
 bool vulture_cam_follow = true; /* s127: starts following the hero */
 bool vulture_cam_manual = false; /* s124: you've panned: no auto-rescue */
+bool vulture_swallow_lclick_up = false; /* s128: that click stopped travel */
+Uint32 vulture_swallow_lclick_t = 0;
 
 static void
 vpt_click(void)
@@ -4490,6 +4492,11 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
 
     /* s79: releasing a middle-mouse drag snaps the leftover pixels away, so
      * clicks map to squares exactly again */
+    if (button == SDL_BUTTON_LEFT && vulture_swallow_lclick_up) {
+        vulture_swallow_lclick_up = false; /* s128: it only stopped you */
+        if (SDL_GetTicks() - vulture_swallow_lclick_t < 1500)
+            return V_EVENT_HANDLED_NOREDRAW;
+    }
     if (button == SDL_BUTTON_WHEELUP || button == SDL_BUTTON_WHEELDOWN) {
         vzoom_step(button == SDL_BUTTON_WHEELUP ? 1 : -1); /* s121 */
         force_redraw();

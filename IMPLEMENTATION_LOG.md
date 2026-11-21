@@ -2795,6 +2795,22 @@ What was built:
   the bar, path, ground card, hover card and aim line, and saves BMPs.
   Verified off-screen.
 
+### 127. Camera starts locked; Discord hover text
+
+- vulture_cam_follow now starts true: the camera follows the hero until
+  you pan it, and a double-click on the portrait resumes following.
+- The presence large_text is "NetHack". The "Playing ..." title is the
+  Discord app name, which the user renamed in the Developer Portal.
+
+### 128. A left click stops travel
+
+- vulture_esc_cancels_travel also stops travel/run/multi/occupation on a
+  queued left-button press.
+- It flushes the mouse-button events, so the click never becomes a new
+  travel target.
+- If the button-up hasn't arrived yet, levelwin swallows the next left
+  button-up (vulture_swallow_lclick_up, expires after 1.5 s).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

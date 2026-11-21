@@ -345,6 +345,8 @@ void vulture_clear_nhwindow(int winid)
 
 
 extern bool vulture_cam_follow;  /* s123: levelwin.cpp */
+extern bool vulture_swallow_lclick_up; /* s128: levelwin.cpp */
+extern Uint32 vulture_swallow_lclick_t;
 extern bool vulture_cam_manual;  /* s124 */
 extern void vulture_travel_pan(void); /* s124 */
 
@@ -1166,10 +1168,32 @@ static void vulture_esc_cancels_travel(void)
 	for (i = 0; i < n; i++)
 		if (ev[i].key.keysym.sym == SDLK_ESCAPE)
 			esc = true;
-	if (!esc)
-		return;
-	SDL_FlushEvent(SDL_KEYDOWN); /* the Esc must not open a menu too */
-	SDL_FlushEvent(SDL_TEXTINPUT);
+	/* s128: a left click stops too - and is used up, so it doesn't send
+	   the hero somewhere new (its button-up is swallowed by levelwin if
+	   it hasn't arrived yet) */
+	if (!esc) {
+		bool down = false, up = false;
+
+		n = SDL_PeepEvents(ev, 32, SDL_PEEKEVENT, SDL_MOUSEBUTTONDOWN,
+		                   SDL_MOUSEBUTTONUP);
+		for (i = 0; i < n; i++)
+			if (ev[i].button.button == SDL_BUTTON_LEFT) {
+				if (ev[i].type == SDL_MOUSEBUTTONDOWN)
+					down = true;
+				else if (down)
+					up = true;
+			}
+		if (!down)
+			return;
+		SDL_FlushEvents(SDL_MOUSEBUTTONDOWN, SDL_MOUSEBUTTONUP);
+		if (!up) {
+			vulture_swallow_lclick_up = true;
+			vulture_swallow_lclick_t = SDL_GetTicks();
+		}
+	} else {
+		SDL_FlushEvent(SDL_KEYDOWN); /* the Esc must not open a menu too */
+		SDL_FlushEvent(SDL_TEXTINPUT);
+	}
 	/* s120: also counted waits/searches (20s) and occupations (resting,
 	   searching until disturbed, eating, digging...) */
 	if (go.occupation) {
