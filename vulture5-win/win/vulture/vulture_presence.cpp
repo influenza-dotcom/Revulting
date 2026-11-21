@@ -134,7 +134,7 @@ static DWORD WINAPI pr_worker(LPVOID)
 		json += ",\"state\":";
 		pr_json_str(json, state);
 		json += ",\"timestamps\":{\"start\":" + std::to_string(pr_start) + "}";
-		json += ",\"assets\":{\"large_image\":\"revulting\",\"large_text\":\"Revulting - NetHack 5 + Vulture\"}";
+		json += ",\"assets\":{\"large_image\":\"revulting\",\"large_text\":\"NetHack\"}";
 		json += "}},\"nonce\":\"" + std::to_string(nonce++) + "\"}";
 		if (!pr_write_frame(h, 1, json)) {
 			CloseHandle(h); /* Discord closed: reconnect next time */
