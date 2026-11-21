@@ -345,6 +345,8 @@ void vulture_clear_nhwindow(int winid)
 
 
 extern bool vulture_cam_follow;  /* s123: levelwin.cpp */
+extern bool vulture_cam_manual;  /* s124 */
+extern void vulture_travel_pan(void); /* s124 */
 
 /* helper called by vulture_display_nhwindow */
 static void vulture_display_nhmap(window *win, vulture_event *result, boolean blocking)
@@ -365,8 +367,11 @@ static void vulture_display_nhmap(window *win, vulture_event *result, boolean bl
 
 			if (!vulture_whatis_active
 			    && (vulture_cam_follow || newlev
-			        || (moved && levwin->hero_off_view(u.ux, u.uy))))
+			        || (moved && !vulture_cam_manual
+			            && levwin->hero_off_view(u.ux, u.uy))))
 				levwin->set_view(u.ux, u.uy);
+			if (newlev)
+				vulture_cam_manual = false; /* s124 */
 			cam_lev = u.uz;
 			cam_hx = u.ux, cam_hy = u.uy;
 		}
@@ -1180,6 +1185,8 @@ void vulture_delay_output(void)
 	while (delay > 10) {
 		starttick = SDL_GetTicks();
 		vulture_esc_cancels_travel(); /* s118 */
+		if (svc.context.travel || svc.context.run || gm.multi > 0)
+			vulture_travel_pan(); /* s124: drag the camera mid-travel */
 
 #ifdef TRAVEL_HACK
 		if (vulture_event_dispatcher_nonblocking(&result, NULL))

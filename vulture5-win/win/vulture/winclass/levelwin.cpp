@@ -263,6 +263,7 @@ vpt_hit(int mx, int my)
    follow the hero until you move the camera yourself (edge scroll or
    middle-drag); session only, no badge, no popup */
 bool vulture_cam_follow = false;
+bool vulture_cam_manual = false; /* s124: you've panned: no auto-rescue */
 
 static void
 vpt_click(void)
@@ -276,6 +277,7 @@ vpt_click(void)
     } else {
         last = now;
     }
+    vulture_cam_manual = false; /* s124 */
     if (levwin) {
         levwin->set_view(u.ux, u.uy);
         levwin->force_redraw();
@@ -697,10 +699,18 @@ static int vanim_ndeaths = 0, vanim_dtile = -1, vanim_dx = 0, vanim_dy = 0;
 static bool
 vanim_input_waiting(void)
 {
+    SDL_Event ev[16];
+    int n, i;
+
     SDL_PumpEvents();
-    return SDL_PeepEvents(NULL, 0, SDL_PEEKEVENT, SDL_KEYDOWN, SDL_KEYDOWN) > 0
-           || SDL_PeepEvents(NULL, 0, SDL_PEEKEVENT, SDL_MOUSEBUTTONDOWN,
-                             SDL_MOUSEBUTTONDOWN) > 0;
+    if (SDL_PeepEvents(NULL, 0, SDL_PEEKEVENT, SDL_KEYDOWN, SDL_KEYDOWN) > 0)
+        return true;
+    /* s124: a middle press is a camera drag, not a command */
+    n = SDL_PeepEvents(ev, 16, SDL_PEEKEVENT, SDL_MOUSEBUTTONDOWN, SDL_MOUSEBUTTONDOWN);
+    for (i = 0; i < n; i++)
+        if (ev[i].button.button != SDL_BUTTON_MIDDLE)
+            return true;
+    return false;
 }
 
 static void
@@ -2433,6 +2443,35 @@ vulture_idle_bob(bool at_map)
 /* play the in-between frames of a pending tween, then any queued death
    animations (vulture_win.cpp calls this after each refresh; re-entry is
    blocked while animating) */
+/* s124: while travelling the game takes no input, but a middle-button
+   drag still pans the camera: only MOUSEMOTION events are taken off the
+   queue (keys and clicks stay for the game) and fed to the drag code */
+extern int vulture_handle_global_event(SDL_Event *event);
+
+void
+vulture_travel_pan(void)
+{
+    SDL_Event ev;
+    bool moved = false;
+
+    if (!levwin || vulture_windows_inited != TRUE)
+        return;
+    SDL_PumpEvents();
+    while (SDL_PeepEvents(&ev, 1, SDL_GETEVENT, SDL_MOUSEMOTION, SDL_MOUSEMOTION) > 0) {
+        vulture_handle_global_event(&ev); /* render-space coords, pointer pos */
+        if (ev.motion.state & SDL_BUTTON_MMASK) {
+            levwin->handle_mousemotion_event(levwin, NULL, ev.motion.xrel,
+                                             ev.motion.yrel, ev.motion.state);
+            moved = true;
+        }
+    }
+    if (moved && !vtw_animating) {
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        vulture_refresh_window_region();
+    }
+}
+
 static bool vtw_fast = false; /* s112: this step is part of a run/travel */
 
 void
@@ -2476,6 +2515,7 @@ vulture_tween_run(void)
             vulture_refresh_window_region();
             if (vtw_t >= 1.0)
                 break;
+            vulture_travel_pan(); /* s124 */
             if (vanim_input_waiting()) {
                 vtw_t = 1.0;
                 levwin->force_redraw();
@@ -3350,6 +3390,7 @@ levelwin::handle_timer_event(window *target, void *result, int time)
         view_x = (view_x > COLNO) ? COLNO : view_x;
         view_y = (view_y > ROWNO) ? ROWNO : view_y;
         vulture_cam_follow = false; /* s123: you moved the camera */
+        vulture_cam_manual = true;
 
         need_redraw = 1;
         return V_EVENT_HANDLED_REDRAW;
@@ -3388,6 +3429,10 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
     if (state & SDL_BUTTON_MMASK) {
         extern int vulture_render_scale;
         int sc = vulture_render_scale > 0 ? vulture_render_scale : 1;
+        int vx0 = view_x, vy0 = view_y;
+
+        vulture_cam_follow = false; /* s123/s124: you moved the camera */
+        vulture_cam_manual = true;
 
         vpan_px += xrel * sc;
         vpan_py += yrel * sc;
@@ -3412,9 +3457,13 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
                 break;
             }
         }
-        /* panning is not movement: don't let the tween animate it */
+        /* panning is not movement: don't let the tween animate it (s124:
+           shift the snapshot by the pan, so a drag during a travel glide
+           doesn't disturb the hero's slide) */
         if (!vtw_pending && !vtw_animating)
             vtw_snap_vx = view_x, vtw_snap_vy = view_y;
+        else
+            vtw_snap_vx += view_x - vx0, vtw_snap_vy += view_y - vy0;
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
     }

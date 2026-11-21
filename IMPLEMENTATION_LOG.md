@@ -2714,6 +2714,21 @@ levelwin.cpp (vbark_tab).
 - The follow is session-only: vulture_opts.recenter / the config line no
   longer drive the camera, and nothing is written.
 
+### 124. Drag the camera while travelling
+
+- vulture_travel_pan takes only MOUSEMOTION events off the SDL queue
+  during travel/run/multi and feeds middle-held motion to the drag
+  handler.
+  - It runs from the walk-glide frames and the vulture_delay_output loop.
+  - Keys and clicks stay queued for the game.
+- vanim_input_waiting ignores middle presses, so a drag doesn't snap the
+  glides.
+- A drag mid-glide shifts the tween snapshot by the pan, so the hero's
+  slide isn't disturbed.
+- vulture_cam_manual: once you pan, the free camera's "walked out of
+  view" rescue stops pulling you back. It resets on a portrait click or a
+  level change.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
