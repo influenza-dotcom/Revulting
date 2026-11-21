@@ -2854,6 +2854,38 @@ What was built:
   - Hovering a row rings the monster on the map; clicking looks at it.
 - The old left-side "Hostiles in view" box (s86 vw_draw) is disabled.
 
+### 131. Audio feedback pass
+
+- 26 new effects synthesized in pure Python (scratchpad make_sfx.py), so
+  there are no samples and no licensing questions. 22 kHz mono, in
+  sound/.
+- **UI:**
+  - ui_hover: a tick when the pointer moves onto another bar slot,
+    button, panel row or the portrait (rate-limited).
+  - ui_click: bar use, buttons, portrait.
+  - ui_open / ui_assign / ui_clear: the slot picker.
+  - ui_error: "No enemies in sight".
+  - ui_cancel: aim cancelled or an auto action stopped.
+  - ui_lock: camera follow.
+  - ui_zoom: wheel zoom.
+- **Click markers:** each order has its own sound:
+  - mk_move: tick-whoosh
+  - mk_attack: blade ring
+  - mk_ally: bell
+  - mk_item: sparkle
+  - mk_door: knock-knock
+  - mk_stairs: low swoosh
+  - mk_drink: bloops
+- **Aiming:** aim_ready when the aim layer or attack-move opens;
+  aim_fire on click.
+- **Combat and status:**
+  - hit_big: thump + crunch with the hit-stop.
+  - status_bad: a dissonant sting with the status pulse.
+  - alert: a two-note cue when an enemy you haven't seen on this level
+    comes into view (at most every 1.2 s).
+- **Auto actions:** amove_go, rest_start, rest_done.
+- **HUD:** rustle for the ground card, card_whoosh for the level title.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

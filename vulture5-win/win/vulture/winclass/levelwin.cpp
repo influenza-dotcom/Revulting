@@ -276,8 +276,10 @@ vpt_click(void)
     if (last && now - last < 400) {
         last = 0;
         vulture_cam_follow = true;
+        vulture_sfx("ui_lock"); /* s131 */
     } else {
         last = now;
+        vulture_sfx("ui_click");
     }
     vulture_cam_manual = false; /* s124 */
     if (levwin) {
@@ -1169,6 +1171,7 @@ vfx_scan(void)
             if (big) {
                 vfx_burst(m->mx, m->my, 255, 235, 190);
                 vhitstop_ms = 70;
+                vulture_sfx("hit_big"); /* s131 */
             }
         }
         vfx_hp[m->m_id] = m->mhp;
@@ -1302,6 +1305,11 @@ vfx_click(int x, int y, int sub, bool up)
     e.sub = sub, e.mid = up ? 1 : 0;
     e.r = col[sub][0], e.g = col[sub][1], e.b = col[sub][2];
     vfx_list.push_back(e);
+    { /* s131: each order has its own sound */
+        static const char *const mk[7] = { "mk_move", "mk_attack", "mk_ally", "mk_item",
+                                           "mk_door", "mk_stairs", "mk_drink" };
+        vulture_sfx(mk[sub]);
+    }
 }
 
 #define VCK_PI 3.14159265358979
@@ -2820,6 +2828,7 @@ vhud_draw(int cx, int cy, int vx, int vy, int x0, int y0, int w, int h)
     if (vhud_card_pending) {
         vhud_card_pending = false;
         vhud_card_born = now ? now : 1;
+        vulture_sfx("card_whoosh"); /* s131 */
     }
     if (vhud_card_born) {
         const Uint32 life = 3600;
@@ -2921,6 +2930,24 @@ vulture_draw_vignette(int x0, int y0, int w, int h)
 }
 
 static SDL_Rect vhb_rect = { 0, 0, 0, 0 }; /* s126: ability bar on screen */
+extern "C" void vulture_sfx(const char *); /* s131: sound/<name>.wav */
+
+/* s131: a soft tick when the pointer moves onto another UI element */
+static void
+vui_hover_sfx(int id)
+{
+    static int last = -1;
+    static Uint32 when = 0;
+    Uint32 now = SDL_GetTicks();
+
+    if (id == last)
+        return;
+    last = id;
+    if (id >= 0 && now - when > 45) {
+        when = now;
+        vulture_sfx("ui_hover");
+    }
+}
 
 /*
  * IMPLEMENTATION_LOG s125: modern hover and aim (Brogue / Cogmind).
@@ -3340,6 +3367,7 @@ vulture_here_card(const std::string &title, const std::vector<std::string> &line
     if (!vhere_born)
         vhere_born = 1;
     vhere_x = u.ux, vhere_y = u.uy;
+    vulture_sfx("rustle"); /* s131 */
 }
 
 static void
@@ -3564,6 +3592,7 @@ vhb_use(int i)
     }
     vulture_click_consumed = TRUE;
     vhb_flash[i] = SDL_GetTicks();
+    vulture_sfx("ui_click"); /* s131 */
     return true;
 }
 
@@ -3632,9 +3661,11 @@ vhb_pick(int slot)
         return;
     }
     menu->layout();
+    vulture_sfx("ui_open"); /* s131 */
     vulture_event_dispatcher(&result, V_RESPOND_INT, menu);
     delete menu;
     if (result == 9999) {
+        vulture_sfx("ui_clear");
         vhb[slot].kind = 0;
     } else if (result >= 1000 && result < 1000 + MAXSPELL) {
         vhb[slot].kind = 2;
@@ -3649,6 +3680,8 @@ vhb_pick(int slot)
     } else {
         return;
     }
+    if (vhb[slot].kind)
+        vulture_sfx("ui_assign"); /* s131 */
     for (i = 0; i < 10; i++) /* one slot per thing */
         if (i != slot && vhb[slot].kind && vhb[i].kind == vhb[slot].kind
             && vhb[i].otyp == vhb[slot].otyp
@@ -3945,6 +3978,7 @@ vstatus_scan(void)
             vfx_ent e;
 
             vst_pulse_t = SDL_GetTicks() | 1;
+            vulture_sfx("status_bad"); /* s131 */
             vst_r = st[i].r, vst_g = st[i].g, vst_b = st[i].b;
             memset(&e, 0, sizeof e);
             e.kind = 1, e.x = u.ux, e.y = u.uy, e.t0 = SDL_GetTicks(), e.dur = 1400;
@@ -3953,6 +3987,29 @@ vstatus_scan(void)
             vfx_list.push_back(e);
         }
     prev = mask;
+
+    { /* s131: an enemy you haven't seen on this level comes into view */
+        static std::map<unsigned, bool> seen;
+        static d_level slev = { -1, -1 };
+        static Uint32 last_alert = 0;
+        bool fresh = !on_level(&slev, &u.uz), any = false;
+        struct monst *m;
+
+        if (fresh) {
+            seen.clear();
+            slev = u.uz;
+        }
+        for (m = fmon; m; m = m->nmon)
+            if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame && !m->mpeaceful
+                && !seen.count(m->m_id)) {
+                seen[m->m_id] = true;
+                any = true;
+            }
+        if (any && !fresh && SDL_GetTicks() - last_alert > 1200) {
+            last_alert = SDL_GetTicks();
+            vulture_sfx("alert");
+        }
+    }
 }
 
 static void
@@ -4076,6 +4133,12 @@ vauto_fight(void *result)
 static void
 vauto_stop(const char *why)
 {
+    if (vauto_mode != VAUTO_NONE) { /* s131 */
+        if (why && strstr(why, "fully rested"))
+            vulture_sfx("rest_done");
+        else if (why)
+            vulture_sfx("ui_cancel");
+    }
     if (vauto_mode != VAUTO_NONE && why)
         pline("%s", why);
     vauto_mode = VAUTO_NONE;
@@ -4088,6 +4151,7 @@ vauto_start(int mode, int tx, int ty)
     vauto_to.x = tx, vauto_to.y = ty;
     vauto_moves = -1;
     vauto_idle = 0;
+    vulture_sfx(mode == VAUTO_REST ? "rest_start" : "amove_go"); /* s131 */
 }
 
 /* the input loop asks this while the map waits for a command: queue the
@@ -5001,6 +5065,13 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
     }
     if (vamove_pending)
         vulture_set_mcursor(V_CURSOR_TARGET_RED);
+    { /* s131 */
+        int hs = vhb_hit(mouse.x, mouse.y), bt = vbtn_hit(mouse.x, mouse.y),
+            pr = vmp_hit(mouse.x, mouse.y);
+
+        vui_hover_sfx(hs >= 0 ? 100 + hs : bt >= 0 ? 200 + bt : pr >= 0 ? 300 + pr
+                      : vpt_hit(mouse.x, mouse.y) ? 400 : -1);
+    }
     if (vhb_hit(mouse.x, mouse.y) >= 0 || vpt_hit(mouse.x, mouse.y)
         || vbtn_hit(mouse.x, mouse.y) >= 0 || vmp_hit(mouse.x, mouse.y) >= 0) { /* s126 */
         vulture_set_mcursor(V_CURSOR_NORMAL);
@@ -5089,6 +5160,7 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
     }
     if (button == SDL_BUTTON_WHEELUP || button == SDL_BUTTON_WHEELDOWN) {
         vzoom_step(button == SDL_BUTTON_WHEELUP ? 1 : -1); /* s121 */
+        vulture_sfx("ui_zoom"); /* s131 */
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
     }
@@ -5116,13 +5188,16 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
 
         if (bh >= 0) { /* s130: FIGHT / A-MOVE / REST */
             if (button == SDL_BUTTON_LEFT) {
+                vulture_sfx("ui_click"); /* s131 */
                 if (bh == 0) {
                     if (vauto_fight(result)) {
                         force_redraw();
                         return V_EVENT_HANDLED_FINAL;
                     }
+                    vulture_sfx("ui_error");
                     pline("No enemies in sight.");
                 } else if (bh == 1) {
+                    vulture_sfx("aim_ready");
                     vamove_pending = true;
                     pline("Attack-move: click where to go (Esc to cancel).");
                 } else {
@@ -5192,6 +5267,7 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
             force_redraw();
             return V_EVENT_HANDLED_FINAL;
         }
+        vulture_sfx("ui_error"); /* s131 */
         pline("No enemies in sight.");
         return V_EVENT_HANDLED_REDRAW;
 
@@ -5206,6 +5282,7 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
     case SDLK_a:
         if ((mod & KMOD_SHIFT) && !(mod & (KMOD_CTRL | KMOD_ALT))) {
             vamove_pending = true; /* s130: Dota's attack-move */
+            vulture_sfx("aim_ready"); /* s131 */
             pline("Attack-move: click where to go (Esc to cancel).");
             vulture_set_mcursor(V_CURSOR_TARGET_RED);
             return V_EVENT_HANDLED_REDRAW;

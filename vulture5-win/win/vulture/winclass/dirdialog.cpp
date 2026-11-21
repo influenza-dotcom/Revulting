@@ -18,6 +18,7 @@
 extern void vulture_aim_set(bool on, int x, int y); /* s125: levelwin.cpp */
 extern char vulture_aim_key(int tx, int ty);
 extern bool vulture_aim_ok(void);
+extern "C" void vulture_sfx(const char *); /* s131 */
 
 dirdialog::dirdialog(window *p, std::string ques) : mainwin(p)
 {
@@ -69,6 +70,7 @@ dirdialog::dirdialog(window *p, std::string ques) : mainwin(p)
         sq = levwin->mouse_to_map(mp);
         vulture_aim_set(true, sq.x, sq.y);
         levwin->force_redraw();
+        vulture_sfx("aim_ready"); /* s131 */
     }
 }
 
@@ -131,6 +133,7 @@ dirdialog::handle_mousebuttonup_event(window *target, void *result,
         point sq;
 
         if (button == SDL_BUTTON_RIGHT) {
+            vulture_sfx("ui_cancel"); /* s131 */
             *(char *) result = -1; /* cancel, like Esc */
             return V_EVENT_HANDLED_FINAL;
         }
@@ -139,6 +142,7 @@ dirdialog::handle_mousebuttonup_event(window *target, void *result,
         sq = levwin->mouse_to_map(vulture_get_mouse_pos());
         choice = vulture_aim_key(sq.x, sq.y);
         if (choice) {
+            vulture_sfx("aim_fire"); /* s131 */
             *(char *) result = choice;
             return V_EVENT_HANDLED_FINAL;
         }
@@ -188,8 +192,11 @@ dirdialog::handle_keydown_event(window *target, void *result, int sym,
 {
     char choice = 0;
 
-    if (sym == SDLK_ESCAPE)
+    if (sym == SDLK_ESCAPE) {
         choice = -1;
+        if (aim)
+            vulture_sfx("ui_cancel"); /* s131 */
+    }
     else
         choice = vulture_make_nh_key(sym, mod, unicode);
 
