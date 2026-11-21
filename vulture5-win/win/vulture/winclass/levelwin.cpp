@@ -1087,6 +1087,20 @@ static std::map<unsigned, int> vfx_hp;
 static int vfx_hero_hp = -1, vfx_hero_poly = -1;
 static d_level vfx_lev = { -1, -1 };
 
+/* s129: big hits freeze the frame for a beat (hit-stop) and burst */
+static int vhitstop_ms = 0;
+
+static void
+vfx_burst(int x, int y, Uint8 r, Uint8 g, Uint8 b)
+{
+    vfx_ent e;
+
+    memset(&e, 0, sizeof e);
+    e.kind = 6, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = 280;
+    e.r = r, e.g = g, e.b = b;
+    vfx_list.push_back(e);
+}
+
 static void
 vfx_hit(int x, int y, int amount, Uint8 r, Uint8 g, Uint8 b, bool blood)
 {
@@ -1125,8 +1139,14 @@ vfx_scan(void)
         vfx_hero_hp = -1;
     }
     if (vfx_hero_hp >= 0 && poly == vfx_hero_poly && hp != vfx_hero_hp && hp > 0) {
-        if (hp < vfx_hero_hp)
+        if (hp < vfx_hero_hp) {
             vfx_hit(u.ux, u.uy, vfx_hero_hp - hp, 255, 70, 60, true);
+            /* s129: a hit worth a quarter of your max HP lands hard */
+            if ((vfx_hero_hp - hp) * 4 >= (Upolyd ? u.mhmax : u.uhpmax)) {
+                vfx_burst(u.ux, u.uy, 255, 60, 50);
+                vhitstop_ms = 55;
+            }
+        }
         else
             vfx_hit(u.ux, u.uy, -(hp - vfx_hero_hp), 90, 230, 90, false);
     }
@@ -1138,9 +1158,19 @@ vfx_scan(void)
         if (DEADMONSTER(m) || !canseemon(m))
             continue;
         it = vfx_hp.find(m->m_id);
-        if (it != vfx_hp.end() && m->mhp < it->second)
-            vfx_hit(m->mx, m->my, it->second - m->mhp, 255, 245, 210,
+        if (it != vfx_hp.end() && m->mhp < it->second) {
+            int dmg = it->second - m->mhp;
+            /* s129: a blow taking 40% of its max HP is a "big hit":
+               gold number, impact burst, hit-stop */
+            bool big = dmg >= 4 && dmg * 5 >= m->mhpmax * 2;
+
+            vfx_hit(m->mx, m->my, dmg, 255, big ? 205 : 245, big ? 70 : 210,
                     !noncorporeal(m->data));
+            if (big) {
+                vfx_burst(m->mx, m->my, 255, 235, 190);
+                vhitstop_ms = 70;
+            }
+        }
         vfx_hp[m->m_id] = m->mhp;
     }
 }
@@ -1810,6 +1840,26 @@ vfx_draw(int cx, int cy, int vx, int vy)
             vfx_draw_click(e, age, sx, sy);
             continue;
         }
+        if (age < 1.0 && e.kind == 6) { /* s129: impact burst */
+            int k2, a = (int) (255 * (1.0 - age));
+            double rad = 6 + 30 * (1 - (1 - age) * (1 - age));
+
+            vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
+            for (k2 = 0; k2 < 24; k2++) {
+                double an = 2 * 3.14159265358979 * k2 / 24;
+
+                vfx_glowdot(sx + (int) (rad * cos(an)), sy - 26 + (int) (rad * 0.6 * sin(an)),
+                            e.r, e.g, e.b, a);
+            }
+            if (age < 0.35) {
+                int c = (int) (255 * (1.0 - age / 0.35));
+
+                vfx_glowdot(sx, sy - 26, 255, 255, 255, c);
+                vfx_glowdot(sx - 3, sy - 24, 255, 255, 255, c);
+                vfx_glowdot(sx + 3, sy - 28, 255, 255, 255, c);
+            }
+            continue;
+        }
         if (age < 1.0 && e.kind == 5) { /* s117: a speech bubble */
             vsay_draw(e, age, cx, cy, vx, vy);
             continue;
@@ -2042,8 +2092,8 @@ vw_draw(int cx, int cy, int vx, int vy, int x0, int y0, int w, int h)
                 SDL_MapRGB(vulture_screen->format, 135, 128, 110));
     }
 
-    /* monster panel */
-    {
+    /* monster panel - s130: replaced by the "In sight" panel */
+    if (0) {
         struct monst *m, *list[6];
         int n = 0, k, row = 18, pw = 230, ph;
         char line[BUFSZ];
@@ -2486,6 +2536,10 @@ vulture_tween_run(void)
 
     if (vtw_animating || vanim_kind || !levwin)
         return;
+    if (vhitstop_ms > 0) { /* s129: hold the frame that shows a big hit */
+        SDL_Delay(vhitstop_ms);
+        vhitstop_ms = 0;
+    }
     /* s81 snapped every step of running / travel / auto-explore (long walks
        crawled).  s112: they slide again, just quickly - 4 short frames a
        step - so the hero visibly walks instead of teleporting.  A key or
@@ -3058,9 +3112,24 @@ vpath_draw(int cx, int cy, int vx, int vy)
     if (distmin(u.ux, u.uy, vhv.x, vhv.y) < 2)
         return; /* a plain step */
     n = vpath_find(vhv.x, vhv.y, pts, COLNO * ROWNO);
-    if (n < 2)
-        return;
     ph = SDL_GetTicks() / 140.0;
+    if (n < 2) {
+        /* s129: no known way (fog, unexplored): a faint straight line and
+           the distance, so you can still judge how far it is */
+        int hx, hy, tx, ty, k, steps = distmin(u.ux, u.uy, vhv.x, vhv.y) * 3;
+
+        vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &hx, &hy);
+        vfx_square_screen(vhv.x, vhv.y, cx, cy, vx, vy, &tx, &ty);
+        for (k = 1; k <= steps; k++)
+            vfx_glowdot(hx + (tx - hx) * k / steps, hy + (ty - hy) * k / steps,
+                        200, 190, 160, 70 + (int) (40 * (0.5 + 0.5 * sin(ph - k * 0.6))));
+        vfx_ringc(tx, ty, 12, 200, 190, 160, 150);
+        snprintf(num, sizeof num, "~%d", distmin(u.ux, u.uy, vhv.x, vhv.y));
+        vulture_put_text_shadow(V_FONT_SMALL, num, vulture_screen, tx + 16, ty - 20,
+                                SDL_MapRGB(vulture_screen->format, 200, 190, 160),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        return;
+    }
     {
         /* a dotted line hero -> target: 3 dots per step, a brighter one on
            each square, a soft pulse marching toward the target */
@@ -3100,6 +3169,19 @@ vaim_draw(int cx, int cy, int vx, int vy)
         return;
     vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &hx, &hy);
     vulture_aim_snap(vaim_at.x, vaim_at.y, &sdx, &sdy);
+    { /* s129: range to the pointer, known ground or not */
+        char rng[16];
+        int px, py, dr = distmin(u.ux, u.uy, vaim_at.x, vaim_at.y);
+
+        if (dr > 0) {
+            vfx_square_screen(vaim_at.x, vaim_at.y, cx, cy, vx, vy, &px, &py);
+            vfx_ringc(px, py, 9, 255, 255, 255, 110);
+            snprintf(rng, sizeof rng, "%d", dr);
+            vulture_put_text_shadow(V_FONT_SMALL, rng, vulture_screen, px + 13, py - 18,
+                                    SDL_MapRGB(vulture_screen->format, 255, 255, 255),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        }
+    }
     if (!sdx && !sdy) { /* yourself */
         vfx_ringc(hx, hy, 16 + 3 * sin(ph), r, g, b, 220);
         return;
@@ -3787,6 +3869,483 @@ vselftest(void)
 }
 
 /*
+ * IMPLEMENTATION_LOG s129-s130: polish + modern controls.
+ *  - Status pulse: becoming confused / stunned / blind / hallucinating /
+ *    sick / stoned / slimed / strangled / weak from hunger flashes the
+ *    screen edge in that status's colour, with a label rising off the hero.
+ *  - Auto-fight (Tab), attack-move (Shift+A then click), rest until
+ *    healed (F5), each also a button beside the ability bar.  They run one
+ *    turn at a time from the input loop (vulture_auto_step), so any key or
+ *    click stops them.
+ *  - "In sight" panel: every monster you can see, threat-coloured, with a
+ *    health bar once hurt; hover to mark it on the map, click to look.
+ */
+static SDL_Surface *vtint_px = NULL;
+
+/* a translucent coloured rectangle */
+static void
+vtint(int x, int y, int w, int h, Uint8 r, Uint8 g, Uint8 b, int a)
+{
+    SDL_Rect d;
+
+    if (w <= 0 || h <= 0 || a <= 0)
+        return;
+    if (!vtint_px) {
+        vtint_px = SDL_CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_ARGB8888);
+        if (!vtint_px)
+            return;
+        SDL_FillRect(vtint_px, NULL, 0xFFFFFFFF);
+        SDL_SetSurfaceBlendMode(vtint_px, SDL_BLENDMODE_BLEND);
+    }
+    SDL_SetSurfaceColorMod(vtint_px, r, g, b);
+    SDL_SetSurfaceAlphaMod(vtint_px, (Uint8) (a > 255 ? 255 : a));
+    d.x = x, d.y = y, d.w = w, d.h = h;
+    SDL_BlitScaled(vtint_px, NULL, vulture_screen, &d);
+}
+
+static Uint32 vst_pulse_t = 0;
+static Uint8 vst_r, vst_g, vst_b;
+
+static void
+vstatus_scan(void)
+{
+    static unsigned prev = 0;
+    static bool init = false;
+    static d_level lev = { -1, -1 };
+    struct vst_def {
+        bool on;
+        const char *label;
+        Uint8 r, g, b;
+    } st[] = {
+        { Confusion != 0, "Confused!", 190, 90, 255 },
+        { Stunned != 0, "Stunned!", 255, 220, 70 },
+        { Blind != 0, "Blinded!", 140, 140, 160 },
+        { Hallucination != 0, "Hallucinating!", 255, 90, 200 },
+        { Sick != 0, "Deathly sick!", 120, 220, 60 },
+        { Stoned != 0, "Turning to stone!", 205, 200, 190 },
+        { Slimed != 0, "Turning to slime!", 90, 230, 90 },
+        { Strangled != 0, "Can't breathe!", 230, 60, 60 },
+        { u.uhs >= WEAK, "Weak with hunger!", 235, 160, 60 },
+    };
+    unsigned mask = 0;
+    int i, n = (int) (sizeof st / sizeof st[0]);
+
+    if (!u.ux)
+        return;
+    for (i = 0; i < n; i++)
+        if (st[i].on)
+            mask |= 1u << i;
+    if (!init || !on_level(&lev, &u.uz) && lev.dnum < 0) {
+        prev = mask, init = true, lev = u.uz;
+        return;
+    }
+    lev = u.uz;
+    for (i = 0; i < n; i++)
+        if ((mask & (1u << i)) && !(prev & (1u << i))) {
+            vfx_ent e;
+
+            vst_pulse_t = SDL_GetTicks() | 1;
+            vst_r = st[i].r, vst_g = st[i].g, vst_b = st[i].b;
+            memset(&e, 0, sizeof e);
+            e.kind = 1, e.x = u.ux, e.y = u.uy, e.t0 = SDL_GetTicks(), e.dur = 1400;
+            snprintf(e.txt, sizeof e.txt, "%s", st[i].label);
+            e.r = st[i].r, e.g = st[i].g, e.b = st[i].b;
+            vfx_list.push_back(e);
+        }
+    prev = mask;
+}
+
+static void
+vstatus_pulse_draw(int ax, int ay, int w, int h)
+{
+    Uint32 age;
+    int k, A, t;
+
+    if (!vst_pulse_t)
+        return;
+    age = SDL_GetTicks() - vst_pulse_t;
+    if (age > 1000) {
+        vst_pulse_t = 0;
+        return;
+    }
+    A = (int) (170 * (age < 150 ? age / 150.0 : 1.0 - (age - 150) / 850.0));
+    t = (w < h ? w : h) / 45;
+    if (t < 3)
+        t = 3;
+    for (k = 0; k < 8; k++) {
+        int a = A * (8 - k) / 16;
+
+        vtint(ax + k * t, ay + k * t, w - 2 * k * t, t, vst_r, vst_g, vst_b, a);
+        vtint(ax + k * t, ay + h - (k + 1) * t, w - 2 * k * t, t, vst_r, vst_g, vst_b, a);
+        vtint(ax + k * t, ay + (k + 1) * t, t, h - 2 * (k + 1) * t, vst_r, vst_g, vst_b, a);
+        vtint(ax + w - (k + 1) * t, ay + (k + 1) * t, t, h - 2 * (k + 1) * t,
+              vst_r, vst_g, vst_b, a);
+    }
+}
+
+/* threat word + colour for a monster (shared by the card and the panel) */
+static const char *
+vthreat(struct monst *m, Uint8 *r, Uint8 *g, Uint8 *b)
+{
+    int d = (int) m->data->difficulty - (int) u.ulevel;
+
+    if (m->mtame)
+        return *r = 120, *g = 230, *b = 140, "Ally";
+    if (m->mpeaceful)
+        return *r = 130, *g = 190, *b = 255, "Peaceful";
+    if (d <= -4)
+        return *r = 170, *g = 170, *b = 170, "Trivial";
+    if (d <= 0)
+        return *r = 220, *g = 230, *b = 150, "Fair fight";
+    if (d <= 3)
+        return *r = 255, *g = 160, *b = 60, "Dangerous";
+    return *r = 255, *g = 70, *b = 60, "Deadly";
+}
+
+/* ---- auto actions ---- */
+enum { VAUTO_NONE, VAUTO_AMOVE, VAUTO_REST };
+static int vauto_mode = VAUTO_NONE;
+static point vauto_to = { -1, -1 };
+static bool vamove_pending = false;
+static long vauto_moves = -1;
+static int vauto_idle = 0;
+
+static struct monst *
+vauto_nearest(int *dist)
+{
+    struct monst *m, *best = 0;
+    int bd = 999;
+
+    for (m = fmon; m; m = m->nmon) {
+        int d;
+
+        if (DEADMONSTER(m) || !canspotmon(m) || m->mtame || m->mpeaceful)
+            continue;
+        d = distmin(u.ux, u.uy, m->mx, m->my);
+        if (d < bd)
+            bd = d, best = m;
+    }
+    if (dist)
+        *dist = bd;
+    return best;
+}
+
+/* queue one step (an attack, if a hostile stands there) toward (tx, ty) */
+static bool
+vauto_step_toward(int tx, int ty)
+{
+    static point pts[COLNO * ROWNO];
+    int n, dx, dy, dd;
+
+    if (distmin(u.ux, u.uy, tx, ty) == 1) {
+        dx = tx - u.ux, dy = ty - u.uy;
+    } else {
+        n = vpath_find(tx, ty, pts, COLNO * ROWNO);
+        if (n < 1)
+            return false;
+        dx = pts[n - 1].x - u.ux, dy = pts[n - 1].y - u.uy;
+    }
+    dd = xytodir(dx, dy);
+    if (dd == DIR_ERR)
+        return false;
+    cmdq_add_key(CQ_CANNED, gc.Cmd.dirchars[dd]);
+    vulture_click_consumed = TRUE;
+    return true;
+}
+
+static void
+vauto_result(void *result)
+{
+    ((vulture_event *) result)->num = 0;
+    ((vulture_event *) result)->x = u.ux;
+    ((vulture_event *) result)->y = u.uy;
+}
+
+/* Tab / FIGHT: one blow (or a step) at the nearest hostile */
+static bool
+vauto_fight(void *result)
+{
+    struct monst *m = vauto_nearest(NULL);
+
+    if (!m || !vauto_step_toward(m->mx, m->my))
+        return false;
+    vauto_result(result);
+    return true;
+}
+
+static void
+vauto_stop(const char *why)
+{
+    if (vauto_mode != VAUTO_NONE && why)
+        pline("%s", why);
+    vauto_mode = VAUTO_NONE;
+}
+
+static void
+vauto_start(int mode, int tx, int ty)
+{
+    vauto_mode = mode;
+    vauto_to.x = tx, vauto_to.y = ty;
+    vauto_moves = -1;
+    vauto_idle = 0;
+}
+
+/* the input loop asks this while the map waits for a command: queue the
+   next turn of an auto action (true), or let the player act (false) */
+bool
+vulture_auto_step(void *result)
+{
+    int hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax, d;
+    struct monst *m;
+
+    if (vauto_mode == VAUTO_NONE || !levwin || vulture_whatis_active)
+        return false;
+    if (vanim_input_waiting()) { /* any key or click takes over */
+        SDL_Event ev[16];
+        int n, i;
+
+        n = SDL_PeepEvents(ev, 16, SDL_PEEKEVENT, SDL_KEYDOWN, SDL_KEYDOWN);
+        for (i = 0; i < n; i++)
+            if (ev[i].key.keysym.sym == SDLK_ESCAPE)
+                SDL_FlushEvent(SDL_KEYDOWN);
+        n = SDL_PeepEvents(ev, 16, SDL_PEEKEVENT, SDL_MOUSEBUTTONDOWN, SDL_MOUSEBUTTONDOWN);
+        for (i = 0; i < n; i++)
+            if (ev[i].button.button == SDL_BUTTON_LEFT) {
+                SDL_FlushEvents(SDL_MOUSEBUTTONDOWN, SDL_MOUSEBUTTONUP);
+                vulture_swallow_lclick_up = true;
+                vulture_swallow_lclick_t = SDL_GetTicks();
+                break;
+            }
+        vauto_stop("You stop.");
+        return false;
+    }
+    if (gm.multi || go.occupation || u.uswallow)
+        return false;
+    if (svm.moves == vauto_moves) {
+        if (++vauto_idle > 3) {
+            vauto_stop("You stop - you're not getting anywhere.");
+            return false;
+        }
+    } else {
+        vauto_idle = 0;
+    }
+    vauto_moves = svm.moves;
+    if (vauto_mode == VAUTO_REST) {
+        if (vauto_nearest(&d)) {
+            vauto_stop("You stop resting - an enemy is in view.");
+            return false;
+        }
+        if (hp >= hpmax && u.uen >= u.uenmax) {
+            vauto_stop("You feel fully rested.");
+            return false;
+        }
+        if (u.uhs >= WEAK) {
+            vauto_stop("You're too hungry to rest.");
+            return false;
+        }
+        cmdq_add_ec(CQ_CANNED, dosearch);
+        vulture_click_consumed = TRUE;
+        vauto_result(result);
+        return true;
+    }
+    /* attack-move: fight whatever shows up, else keep walking */
+    if (hp * 3 < hpmax) {
+        vauto_stop("You stop - you're badly hurt!");
+        return false;
+    }
+    if ((m = vauto_nearest(&d)) != 0 && d <= 8 && vauto_step_toward(m->mx, m->my)) {
+        vauto_result(result);
+        return true;
+    }
+    if (u.ux == vauto_to.x && u.uy == vauto_to.y) {
+        vauto_stop(NULL);
+        return false;
+    }
+    if (!vauto_step_toward(vauto_to.x, vauto_to.y)) {
+        vauto_stop("You can't find a way there.");
+        return false;
+    }
+    vauto_result(result);
+    return true;
+}
+
+/* the three buttons beside the ability bar */
+static SDL_Rect vbtn_rect[3];
+static const char *const vbtn_name[3] = { "FIGHT", "A-MOVE", "REST" };
+static const char *const vbtn_key[3] = { "Tab", "Shift+A", "F5" };
+
+static int
+vbtn_hit(int mx, int my)
+{
+    int i;
+
+    for (i = 0; i < 3; i++)
+        if (vbtn_rect[i].w && mx >= vbtn_rect[i].x && mx < vbtn_rect[i].x + vbtn_rect[i].w
+            && my >= vbtn_rect[i].y && my < vbtn_rect[i].y + vbtn_rect[i].h)
+            return i;
+    return -1;
+}
+
+static void
+vbtn_draw(void)
+{
+    int S = V_LISTITEM_HEIGHT, gap = V_UI(3), bh, bw = V_UI(120), i, hov;
+    point mp = vulture_get_mouse_pos();
+    Uint32 black = SDL_MapRGB(vulture_screen->format, 0, 0, 0);
+
+    if (!vhb_rect.w)
+        return;
+    bh = (S - 2 * gap) / 3;
+    for (i = 0; i < 3; i++) {
+        vbtn_rect[i].x = vhb_rect.x + vhb_rect.w + V_UI(8);
+        vbtn_rect[i].y = vhb_rect.y + i * (bh + gap);
+        vbtn_rect[i].w = bw, vbtn_rect[i].h = bh;
+    }
+    hov = vbtn_hit(mp.x, mp.y);
+    for (i = 0; i < 3; i++) {
+        SDL_Rect rc = vbtn_rect[i];
+        bool active = (i == 1 && (vamove_pending || vauto_mode == VAUTO_AMOVE))
+                      || (i == 2 && vauto_mode == VAUTO_REST);
+        Uint32 edge = active ? SDL_MapRGB(vulture_screen->format, 120, 230, 140)
+                      : i == hov ? SDL_MapRGB(vulture_screen->format, 255, 200, 70)
+                      : SDL_MapRGB(vulture_screen->format, 90, 82, 66);
+
+        vbox(rc.x, rc.y, rc.w, rc.h, 185);
+        rc.w = 3;
+        SDL_FillRect(vulture_screen, &rc, edge);
+        vulture_put_text_shadow(V_FONT_SMALL, vbtn_name[i], vulture_screen,
+                                vbtn_rect[i].x + V_UI(7), vbtn_rect[i].y + (bh - vulture_get_lineheight(V_FONT_SMALL)) / 2,
+                                SDL_MapRGB(vulture_screen->format, 240, 232, 210), black);
+        vulture_put_text_shadow(V_FONT_SMALL, vbtn_key[i], vulture_screen,
+                                vbtn_rect[i].x + bw - V_UI(5) - vulture_text_length(V_FONT_SMALL, vbtn_key[i]),
+                                vbtn_rect[i].y + (bh - vulture_get_lineheight(V_FONT_SMALL)) / 2,
+                                SDL_MapRGB(vulture_screen->format, 150, 142, 120), black);
+    }
+}
+
+/* ---- the "in sight" panel ---- */
+static struct {
+    int x, y, w, rowh, n;
+    unsigned mid[8];
+} vmp;
+static unsigned vmp_hl = 0;
+
+static int
+vmp_hit(int mx, int my)
+{
+    int i;
+
+    if (!vmp.n || mx < vmp.x || mx >= vmp.x + vmp.w)
+        return -1;
+    i = (my - (vmp.y + vmp.rowh)) / vmp.rowh;
+    if (my < vmp.y + vmp.rowh || i < 0 || i >= vmp.n)
+        return -1;
+    return i;
+}
+
+static struct monst *
+vmp_mon(unsigned mid)
+{
+    struct monst *m;
+
+    for (m = fmon; m; m = m->nmon)
+        if (m->m_id == mid && !DEADMONSTER(m) && canspotmon(m))
+            return m;
+    return 0;
+}
+
+static void
+vmp_draw(int ax, int ay, int w, int h)
+{
+    struct monst *m, *list[64];
+    int n = 0, i, j, lh = vulture_get_lineheight(V_FONT_SMALL), hov;
+    point mp = vulture_get_mouse_pos();
+    Uint32 black = SDL_MapRGB(vulture_screen->format, 0, 0, 0);
+
+    vmp.n = 0;
+    if (!u.ux || Hallucination || vulture_whatis_active)
+        return;
+    for (m = fmon; m && n < 64; m = m->nmon)
+        if (!DEADMONSTER(m) && canspotmon(m))
+            list[n++] = m;
+    if (!n)
+        return;
+    /* hostiles nearest first, then peacefuls, then pets */
+    for (i = 1; i < n; i++)
+        for (j = i; j > 0; j--) {
+            struct monst *a = list[j - 1], *b2 = list[j];
+            int ka = a->mtame ? 2 : a->mpeaceful ? 1 : 0;
+            int kb = b2->mtame ? 2 : b2->mpeaceful ? 1 : 0;
+
+            if (ka > kb || (ka == kb && distmin(u.ux, u.uy, a->mx, a->my)
+                                            > distmin(u.ux, u.uy, b2->mx, b2->my))) {
+                list[j - 1] = b2, list[j] = a;
+            } else {
+                break;
+            }
+        }
+    if (n > 8)
+        n = 8;
+    vmp.rowh = lh + 7;
+    vmp.w = V_UI(200);
+    vmp.x = ax + w - vmp.w - V_UI(10);
+    vmp.y = ay + h * 11 / 100;
+    vmp.n = n;
+    for (i = 0; i < n; i++)
+        vmp.mid[i] = list[i]->m_id;
+    hov = vmp_hit(mp.x, mp.y);
+    vmp_hl = hov >= 0 ? vmp.mid[hov] : 0;
+    vbox(vmp.x, vmp.y, vmp.w, vmp.rowh * (n + 1) + 4, 170);
+    vulture_put_text_shadow(V_FONT_SMALL, "IN SIGHT", vulture_screen, vmp.x + V_UI(8), vmp.y + 4,
+                            SDL_MapRGB(vulture_screen->format, 255, 200, 70), black);
+    for (i = 0; i < n; i++) {
+        Uint8 r, g, b;
+        int ry = vmp.y + vmp.rowh * (i + 1) + 2;
+        std::string nm;
+        SDL_Rect rc;
+
+        m = list[i];
+        (void) vthreat(m, &r, &g, &b);
+        if (i == hov)
+            vtint(vmp.x + 2, ry - 2, vmp.w - 4, vmp.rowh, 255, 255, 255, 30);
+        rc.x = vmp.x + V_UI(8), rc.y = ry + lh / 2 - 3, rc.w = 6, rc.h = 6;
+        SDL_FillRect(vulture_screen, &rc, SDL_MapRGB(vulture_screen->format, r, g, b));
+        nm = pmname(m->data, Mgender(m));
+        if (!nm.empty())
+            nm[0] = (char) toupper((unsigned char) nm[0]);
+        if (has_mgivenname(m))
+            nm = std::string(MGIVENNAME(m)) + " (" + nm + ")";
+        vulture_put_text_shadow(V_FONT_SMALL, nm, vulture_screen, vmp.x + V_UI(20), ry,
+                                SDL_MapRGB(vulture_screen->format, 235, 230, 220), black);
+        if ((m->mtame || m->mhp < m->mhpmax) && m->mhpmax > 0) {
+            int full = vmp.w - V_UI(28), fill = full * m->mhp / m->mhpmax;
+            int pct = 100 * m->mhp / m->mhpmax;
+
+            rc.x = vmp.x + V_UI(20), rc.y = ry + lh, rc.w = full, rc.h = 2;
+            SDL_FillRect(vulture_screen, &rc, SDL_MapRGB(vulture_screen->format, 50, 25, 25));
+            rc.w = fill < 0 ? 0 : fill;
+            SDL_FillRect(vulture_screen, &rc,
+                         pct > 60 ? SDL_MapRGB(vulture_screen->format, 90, 210, 90)
+                         : pct > 30 ? SDL_MapRGB(vulture_screen->format, 230, 190, 60)
+                         : SDL_MapRGB(vulture_screen->format, 220, 60, 50));
+        }
+    }
+}
+
+/* the hovered panel row's monster, marked on the map */
+static void
+vmp_mark(int cx, int cy, int vx, int vy)
+{
+    struct monst *m;
+    int sx, sy;
+
+    if (!vmp_hl || !(m = vmp_mon(vmp_hl)))
+        return;
+    vfx_square_screen(m->mx, m->my, cx, cy, vx, vy, &sx, &sy);
+    vfx_ringc(sx, sy, 16 + 2 * sin(SDL_GetTicks() / 150.0), 255, 200, 70, 230);
+}
+
+/*
  * IMPLEMENTATION_LOG s121: mouse-wheel zoom.  Zooming in scales the drawn
  * map up around the window centre (bilinear) just before the vignette and
  * the HUD, so toasts and the interface stay sharp; clicks and hovers are
@@ -3919,6 +4478,7 @@ levelwin::draw()
     /* s75: tween offsets (camera + movers) and facing for this frame */
     vtw_prepare(view_x, view_y);
     vfx_scan(); /* s85: damage numbers / blood from HP changes */
+    vstatus_scan(); /* s129 */
     map_centre_x += vtw_gx + (int) vpan_px; /* s79: + MMB drag residual */
     map_centre_y += vtw_gy + (int) vpan_py;
 
@@ -4199,12 +4759,16 @@ levelwin::draw()
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
     vpath_draw(map_centre_x, map_centre_y, view_x, view_y); /* s125 */
+    vmp_mark(map_centre_x, map_centre_y, view_x, view_y);   /* s130 */
     vaim_draw(map_centre_x, map_centre_y, view_x, view_y);  /* s125 */
     vzoom_apply(this->abs_x, this->abs_y, this->w, this->h); /* s121 */
     vulture_draw_vignette(this->abs_x, this->abs_y, this->w, this->h); /* s74 */
+    vstatus_pulse_draw(this->abs_x, this->abs_y, this->w, this->h); /* s129 */
+    vmp_draw(this->abs_x, this->abs_y, this->w, this->h); /* s130 */
     vhud_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
               this->abs_y, this->w, this->h); /* s100: toasts, card, waypoint */
     vhb_draw(this->abs_x, this->abs_y, this->w, this->h);   /* s126 */
+    vbtn_draw();                                            /* s130 */
     vhere_draw(this->abs_x, this->abs_y, this->w, this->h); /* s125 */
     if (isok(vhv.x, vhv.y) && !vaim_on) /* s125: monster hover card */
         vcard_draw(map_data->map_square_description(vhv, 0));
@@ -4336,6 +4900,17 @@ levelwin::handle_timer_event(window *target, void *result, int time)
 
         if (vpt_hit(mp.x, mp.y)) /* s123: no tooltip over the portrait */
             return V_EVENT_HANDLED_NOREDRAW;
+        if (vbtn_hit(mp.x, mp.y) >= 0) { /* s130 */
+            static const char *const tip[3] = {
+                "Fight the nearest enemy  [Tab]",
+                "Attack-move: walk to a spot, fighting anything on the way  [Shift+A]",
+                "Rest until healed - stops if an enemy appears  [F5]"
+            };
+            vulture_mouse_set_tooltip(tip[vbtn_hit(mp.x, mp.y)]);
+            return V_EVENT_HANDLED_NOREDRAW;
+        }
+        if (vmp_hit(mp.x, mp.y) >= 0)
+            return V_EVENT_HANDLED_NOREDRAW;
         if (vhb_hit(mp.x, mp.y) >= 0) { /* s126 */
             vulture_mouse_set_tooltip(vhb_tip(vhb_hit(mp.x, mp.y)));
             return V_EVENT_HANDLED_NOREDRAW;
@@ -4412,7 +4987,22 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
     mouse = vulture_get_mouse_pos();
     mappos = mouse_to_map(mouse);
 
-    if (vhb_hit(mouse.x, mouse.y) >= 0 || vpt_hit(mouse.x, mouse.y)) { /* s126 */
+    {
+        static unsigned last_hl = 0;
+        int ph = vmp_hit(mouse.x, mouse.y);
+        unsigned hl = ph >= 0 ? vmp.mid[ph] : 0;
+
+        if (hl != last_hl) { /* s130: mark the hovered panel monster */
+            last_hl = hl;
+            vmp_hl = hl;
+            force_redraw();
+            need_redraw = 1;
+        }
+    }
+    if (vamove_pending)
+        vulture_set_mcursor(V_CURSOR_TARGET_RED);
+    if (vhb_hit(mouse.x, mouse.y) >= 0 || vpt_hit(mouse.x, mouse.y)
+        || vbtn_hit(mouse.x, mouse.y) >= 0 || vmp_hit(mouse.x, mouse.y) >= 0) { /* s126 */
         vulture_set_mcursor(V_CURSOR_NORMAL);
         if (vhv.x != -1) {
             vhv.x = vhv.y = -1;
@@ -4511,6 +5101,49 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
     mouse = vulture_get_mouse_pos();
     mappos = mouse_to_map(mouse);
 
+    if (vamove_pending) { /* s130: attack-move target */
+        vamove_pending = false;
+        if (button == SDL_BUTTON_LEFT && isok(mappos.x, mappos.y)
+            && vbtn_hit(mouse.x, mouse.y) < 0 && vhb_hit(mouse.x, mouse.y) < 0) {
+            vauto_start(VAUTO_AMOVE, mappos.x, mappos.y);
+            vfx_click(mappos.x, mappos.y, VCK_ATTACK, false);
+        }
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+    }
+    {
+        int bh = vbtn_hit(mouse.x, mouse.y), ph = vmp_hit(mouse.x, mouse.y);
+
+        if (bh >= 0) { /* s130: FIGHT / A-MOVE / REST */
+            if (button == SDL_BUTTON_LEFT) {
+                if (bh == 0) {
+                    if (vauto_fight(result)) {
+                        force_redraw();
+                        return V_EVENT_HANDLED_FINAL;
+                    }
+                    pline("No enemies in sight.");
+                } else if (bh == 1) {
+                    vamove_pending = true;
+                    pline("Attack-move: click where to go (Esc to cancel).");
+                } else {
+                    vauto_start(VAUTO_REST, -1, -1);
+                }
+            }
+            force_redraw();
+            return V_EVENT_HANDLED_REDRAW;
+        }
+        if (ph >= 0) { /* s130: look at a monster from the panel */
+            struct monst *pm = vmp_mon(vmp.mid[ph]);
+
+            if (pm && button == SDL_BUTTON_LEFT) {
+                set_view(pm->mx, pm->my);
+                vulture_cam_follow = false;
+                vulture_cam_manual = true;
+            }
+            force_redraw();
+            return V_EVENT_HANDLED_REDRAW;
+        }
+    }
     { /* s126: the ability bar */
         int hs = vhb_hit(mouse.x, mouse.y);
 
@@ -4550,8 +5183,34 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
 
     switch (sym) {
     case SDLK_TAB:
-        map::toggle();
+        /* s130: Tab fights the nearest enemy (DCSS); Shift+Tab is the map */
+        if (mod & KMOD_SHIFT) {
+            map::toggle();
+            return V_EVENT_HANDLED_REDRAW;
+        }
+        if (vauto_fight(result)) {
+            force_redraw();
+            return V_EVENT_HANDLED_FINAL;
+        }
+        pline("No enemies in sight.");
         return V_EVENT_HANDLED_REDRAW;
+
+    case SDLK_ESCAPE:
+        if (vamove_pending) { /* s130 */
+            vamove_pending = false;
+            force_redraw();
+            return V_EVENT_HANDLED_REDRAW;
+        }
+        break;
+
+    case SDLK_a:
+        if ((mod & KMOD_SHIFT) && !(mod & (KMOD_CTRL | KMOD_ALT))) {
+            vamove_pending = true; /* s130: Dota's attack-move */
+            pline("Attack-move: click where to go (Esc to cancel).");
+            vulture_set_mcursor(V_CURSOR_TARGET_RED);
+            return V_EVENT_HANDLED_REDRAW;
+        }
+        break;
 
     /* F7 toggles wall height at runtime (QoL: full-height walls occlude the
      * squares behind them).  Deliberately NOT in vulture_sdl.cpp's global
@@ -4619,6 +5278,11 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
     case SDLK_F5:
     case SDLK_F6:
         macronum = sym - SDLK_F1;
+        if (sym == SDLK_F5 && !vulture_opts.macro[macronum][0]) {
+            vauto_start(VAUTO_REST, -1, -1); /* s130: rest until healed */
+            force_redraw();
+            return V_EVENT_HANDLED_REDRAW;
+        }
         if (!vulture_opts.macro[macronum][0])
             break;
 

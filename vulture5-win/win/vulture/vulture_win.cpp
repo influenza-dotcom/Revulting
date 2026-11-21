@@ -207,6 +207,11 @@ void vulture_event_dispatcher(void * result, int resulttype, window * topwin)
 		extern int vulture_idle_wait_ms(bool at_map);
 		extern void vulture_idle_bob(bool at_map);
 		bool at_map = (resulttype == V_RESPOND_POSKEY && topwin == ROOTWIN);
+		extern bool vulture_auto_step(void *result);
+
+		/* s130: auto-fight / attack-move / rest take their next turn */
+		if (at_map && vulture_auto_step(result))
+			return;
 
 		/* Get next event OR wait 100ms (50 while something bobs) */
 		vulture_wait_event(&event, vulture_idle_wait_ms(at_map));

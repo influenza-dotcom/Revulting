@@ -961,6 +961,7 @@ mapdata::mappos_to_dirkey(point mappos)
 extern "C" int vulture_collect_cmd_menu(coordxy, coordxy, int *,
                                         char (*)[80], int);
 extern "C" void vulture_do_cmd_menu_act(coordxy, coordxy, int);
+extern "C" boolean vulture_click_consumed; /* s129: cmd.c */
 static int vmenu_acts[32];
 static int vmenu_count = 0;
 
@@ -992,6 +993,15 @@ mapdata::handle_click(void *result, int button, point mappos)
         && action_id < V_ACTION_NHMENU + vmenu_count) {
         vulture_do_cmd_menu_act(mappos.x, mappos.y,
                                 vmenu_acts[action_id - V_ACTION_NHMENU]);
+        ((vulture_event *) result)->num = 0;
+        ((vulture_event *) result)->x = mappos.x;
+        ((vulture_event *) result)->y = mappos.y;
+        return V_EVENT_HANDLED_FINAL;
+    }
+
+    if (action_id == V_ACTION_AUTOPICKUP) { /* s129: run the checklist */
+        cmdq_add_ec(CQ_CANNED, vulture_autopickup_menu);
+        vulture_click_consumed = TRUE;
         ((vulture_event *) result)->num = 0;
         ((vulture_event *) result)->x = mappos.x;
         ((vulture_event *) result)->y = mappos.y;
@@ -1298,6 +1308,7 @@ mapdata::get_map_contextmenu(point mappos)
         if (*u.ushops)
             menu->add_item("Pay bill", V_ACTION_PAY_BILL), extras++;
         menu->add_item("Pray", V_ACTION_PRAY), extras++;
+        menu->add_item("Auto-pickup rules...", V_ACTION_AUTOPICKUP), extras++; /* s129 */
         if (Role_if(PM_PRIEST) || Role_if(PM_KNIGHT)
             || objects[SPE_TURN_UNDEAD].oc_name_known)
             menu->add_item("Turn undead", V_ACTION_TURN_UNDEAD), extras++;

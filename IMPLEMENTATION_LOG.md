@@ -2811,6 +2811,49 @@ What was built:
 - If the button-up hasn't arrived yet, levelwin swallows the next left
   button-up (vulture_swallow_lclick_up, expires after 1.5 s).
 
+### 129. Polish: hit-stop, status pulse, fog distance markers, auto-pickup checklist
+
+- **Hit-stop:** a monster losing at least 40% of its max HP in one blow
+  (and at least 4) gets a gold damage number, an impact burst (vfx kind
+  6) and a 70 ms frame hold (vhitstop_ms, applied in vulture_tween_run).
+  Taking a quarter of your own max HP does the same in red, held 55 ms.
+- **Status pulse:** newly becoming confused, stunned, blind,
+  hallucinating, sick, stoned, slimed, strangled or Weak flashes the
+  screen edges in that status's colour, and a label rises off the hero.
+- **Fog markers:** hovering an unknown or unreachable square draws a faint
+  straight line and a "~N" distance. While aiming, the pointer square
+  shows its range.
+- **Auto-pickup rules:** right-click your own square -> "Auto-pickup
+  rules..." opens a checklist (vulture_autopickup_menu in pickup.c).
+  - It sets flags.pickup and pickup_types.
+  - If nothing is ticked, auto-pickup turns off, rather than falling back
+    to the game's "everything" default.
+  - Saved with the game, not in the rc file.
+
+### 130. Auto-fight, attack-move, rest until healed, "In sight" panel
+
+- **Tab:** one blow (or a step along the known path) at the nearest
+  visible hostile. Shift+Tab now opens the overview map.
+- **Shift+A then click:** attack-move. Each turn it fights a hostile
+  within 8 squares, otherwise steps toward the spot. It stops below 1/3
+  HP, on arrival, or when there is no way.
+- **F5:** rest until HP and Pw are full, unless an F5 macro is set. It
+  searches turn by turn and stops when a hostile comes into view, or when
+  you're Weak.
+- **How they run:** vulture_auto_step, called from the input loop, queues
+  one canned command per turn.
+  - Any key or click takes over: Esc is eaten, and a left click is eaten
+    and swallowed.
+  - It gives up after 4 actions that take no game time.
+- **Buttons:** FIGHT / A-MOVE / REST sit beside the ability bar, with
+  tooltips.
+- **"In sight" panel (top right):** visible monsters, hostiles nearest
+  first, then peacefuls and pets.
+  - Each row has a threat-colour dot, name, and a health bar when hurt or
+    tame.
+  - Hovering a row rings the monster on the map; clicking looks at it.
+- The old left-side "Hostiles in view" box (s86 vw_draw) is disabled.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

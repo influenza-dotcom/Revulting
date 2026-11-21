@@ -4093,3 +4093,79 @@ tipcontainer_checks(
 }
 
 /*pickup.c*/
+
+/* Vulture s129: auto-pickup rules as a checklist (right-click your own
+   square -> "Auto-pickup rules...") instead of option syntax */
+int
+vulture_autopickup_menu(void)
+{
+    static const struct {
+        char sym;
+        const char *name;
+    } cl[] = {
+        { '$', "Gold" },
+        { '"', "Amulets" },
+        { '=', "Rings" },
+        { '!', "Potions" },
+        { '?', "Scrolls" },
+        { '/', "Wands" },
+        { '+', "Spellbooks" },
+        { '(', "Tools" },
+        { '%', "Food" },
+        { ')', "Weapons" },
+        { '[', "Armor" },
+        { '*', "Gems and stones (careful: loadstones)" },
+    };
+    winid win;
+    anything any;
+    menu_item *sel = (menu_item *) 0;
+    int n, i, k = 0;
+    char types[MAXOCLASSES];
+
+    win = create_nhwindow(NHW_MENU);
+    start_menu(win, MENU_BEHAVE_STANDARD);
+    any = cg.zeroany;
+    any.a_int = 1;
+    add_menu(win, &nul_glyphinfo, &any, 'A', 0, ATR_NONE, NO_COLOR,
+             "Auto-pickup is ON",
+             flags.pickup ? MENU_ITEMFLAGS_SELECTED : MENU_ITEMFLAGS_NONE);
+    for (i = 0; i < SIZE(cl); i++) {
+        char buf[BUFSZ];
+
+        any.a_int = 10 + i;
+        Sprintf(buf, "%c  %s", cl[i].sym, cl[i].name);
+        add_menu(win, &nul_glyphinfo, &any, (char) ('a' + i), 0, ATR_NONE,
+                 NO_COLOR, buf,
+                 (*flags.pickup_types && strchr(flags.pickup_types, cl[i].sym))
+                     ? MENU_ITEMFLAGS_SELECTED : MENU_ITEMFLAGS_NONE);
+    }
+    end_menu(win, "Auto-pickup: tick what you pick up just by walking over it");
+    n = select_menu(win, PICK_ANY, &sel);
+    destroy_nhwindow(win);
+    if (n < 0)
+        return ECMD_OK; /* cancelled: nothing changes */
+    flags.pickup = FALSE;
+    for (i = 0; i < n; i++) {
+        int v = sel[i].item.a_int;
+
+        if (v == 1)
+            flags.pickup = TRUE;
+        else if (v >= 10 && v < 10 + SIZE(cl) && k < MAXOCLASSES - 1)
+            types[k++] = cl[v - 10].sym;
+    }
+    types[k] = '\0';
+    if (sel)
+        free((genericptr_t) sel);
+    if (flags.pickup && !k) {
+        /* an empty list means "everything" to the game - avoid that */
+        flags.pickup = FALSE;
+        pline("Nothing ticked, so auto-pickup is off.");
+        return ECMD_OK;
+    }
+    Strcpy(flags.pickup_types, types);
+    if (flags.pickup)
+        pline("Auto-pickup on: %s", types);
+    else
+        pline("Auto-pickup off.");
+    return ECMD_OK;
+}
