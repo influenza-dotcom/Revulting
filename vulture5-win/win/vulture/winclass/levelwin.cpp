@@ -1001,7 +1001,7 @@ vst_draw(int j, int i, int x, int y)
 #include <vector>
 
 struct vfx_ent {
-    int kind;                 /* 1 number, 2 blood */
+    int kind;                 /* 1 number, 2 blood, 3 click marker (s108) */
     int x, y;                 /* map square */
     Uint32 t0, dur;
     char txt[16];
@@ -1139,6 +1139,105 @@ vfx_droplet(int x, int y, int size, int alpha)
     SDL_BlitSurface(drop[size], NULL, vulture_screen, &d);
 }
 
+/* s108: a soft round glow dot in any colour (one cached white sprite,
+   tinted and faded per call) */
+static void
+vfx_glowdot(int x, int y, Uint8 r, Uint8 g, Uint8 b, int alpha)
+{
+    static SDL_Surface *dot = NULL;
+    SDL_Rect d;
+
+    if (!dot) {
+        int R = 4, dim = 2 * R + 1, xx, yy;
+
+        dot = SDL_CreateRGBSurfaceWithFormat(0, dim, dim, 32, SDL_PIXELFORMAT_ARGB8888);
+        if (!dot)
+            return;
+        SDL_LockSurface(dot);
+        for (yy = 0; yy < dim; yy++)
+            for (xx = 0; xx < dim; xx++) {
+                double dd = sqrt((double) ((xx - R) * (xx - R) + (yy - R) * (yy - R))) / (R + 0.5);
+                double a = dd >= 1.0 ? 0.0 : 1.0 - dd * dd;
+
+                ((Uint32 *) ((Uint8 *) dot->pixels + yy * dot->pitch))[xx]
+                    = SDL_MapRGBA(dot->format, 255, 255, 255, (Uint8) (255 * a));
+            }
+        SDL_UnlockSurface(dot);
+        SDL_SetSurfaceBlendMode(dot, SDL_BLENDMODE_BLEND);
+    }
+    SDL_SetSurfaceColorMod(dot, r, g, b);
+    SDL_SetSurfaceAlphaMod(dot, (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
+    d.x = x - dot->w / 2, d.y = y - dot->h / 2, d.w = dot->w, d.h = dot->h;
+    SDL_BlitSurface(dot, NULL, vulture_screen, &d);
+}
+
+/* s108: Dota-style click marker on map square (x, y) */
+static void
+vfx_click(int x, int y, bool attack)
+{
+    vfx_ent e;
+
+    if (!isok(x, y))
+        return;
+    memset(&e, 0, sizeof e);
+    e.kind = 3, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = 520;
+    if (attack)
+        e.r = 255, e.g = 70, e.b = 60;
+    else
+        e.r = 90, e.g = 255, e.b = 120;
+    vfx_list.push_back(e);
+}
+
+/* draw one click marker: a ring that pops then shrinks into the square,
+   four arrows closing in, all fading out (flattened for the iso floor) */
+static void
+vfx_draw_click(const vfx_ent &e, double age, int sx, int sy)
+{
+    double pop = age < 0.18 ? age / 0.18 : 1.0;
+    double rad = (age < 0.18 ? 16 + 14 * pop : 30 - 22 * (age - 0.18) / 0.82);
+    double ease = 1 - (1 - age) * (1 - age);
+    int alpha = (int) (255 * (age < 0.6 ? 1.0 : (1.0 - age) / 0.4));
+    int k, n = 32;
+
+    /* ring (with a dark under-ring so it reads on bright floors) */
+    for (k = 0; k < n; k++) {
+        double a = 2 * 3.14159265358979 * k / n;
+        int px = sx + (int) (rad * cos(a)), py = sy + (int) (rad * 0.5 * sin(a));
+
+        vfx_glowdot(px, py + 1, 0, 0, 0, alpha / 2);
+        vfx_glowdot(px, py, e.r, e.g, e.b, alpha);
+    }
+    /* four chevrons sliding inward on the diagonals */
+    for (k = 0; k < 4; k++) {
+        double a = 3.14159265358979 / 4 + k * 3.14159265358979 / 2;
+        double ux = cos(a), uy = sin(a) * 0.5;
+        double dist = 46 - 30 * ease, len = 7;
+        int j;
+
+        for (j = -3; j <= 3; j++) {
+            /* a "V" pointing at the centre: arms go back and out */
+            double t = fabs((double) j) / 3.0;
+            double bx = sx + ux * (dist + len * t), by = sy + uy * (dist + len * t);
+            double pxo = -uy * 2, pyo = ux * 0.5 * 2; /* perpendicular, iso-flattened */
+            double nrm = sqrt(pxo * pxo + pyo * pyo);
+
+            if (nrm > 0)
+                pxo /= nrm, pyo /= nrm;
+            vfx_glowdot((int) (bx + pxo * j * 2.2), (int) (by + pyo * j * 2.2),
+                        e.r, e.g, e.b, alpha);
+        }
+    }
+}
+
+/* called from the map click handler */
+static void
+vfx_click_at(int x, int y)
+{
+    if (!isok(x, y) || u_at(x, y) || !levl[x][y].seenv)
+        return;
+    vfx_click(x, y, glyph_is_monster(glyph_at(x, y)) || glyph_is_invisible(glyph_at(x, y)));
+}
+
 static void
 vfx_draw(int cx, int cy, int vx, int vy)
 {
@@ -1170,6 +1269,11 @@ vfx_draw(int cx, int cy, int vx, int vy)
         vfx_ent &e = vfx_list[i];
         double age = (double) (now - e.t0) / e.dur, ts = (now - e.t0) / 1000.0;
 
+        if (age < 1.0 && e.kind == 3) { /* s108 */
+            vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
+            vfx_draw_click(e, age, sx, sy);
+            continue;
+        }
         if (age >= 1.0)
             continue;
         vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
@@ -1736,7 +1840,7 @@ int
 vulture_idle_wait_ms(bool at_map)
 {
     nhUse(vbob_wanted);
-    return at_map ? 40 : 100;
+    return at_map ? (vfx_list.empty() ? 40 : 20) : 100; /* s108 */
 }
 
 /* one idle frame for bobbing, breathing and combat effects (called from
@@ -1748,8 +1852,18 @@ vulture_idle_bob(bool at_map)
     Uint32 now = SDL_GetTicks(), took;
 
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
-        || vanim_kind || now - last < vidle_interval || vanim_input_waiting())
+        || vanim_kind || vanim_input_waiting())
         return;
+    {   /* s108: a click marker animates at ~40 fps, everything else idles */
+        bool marker = false;
+        size_t q;
+
+        for (q = 0; q < vfx_list.size(); q++)
+            if (vfx_list[q].kind == 3 && now - vfx_list[q].t0 < vfx_list[q].dur)
+                marker = true;
+        if (now - last < (marker ? 25u : vidle_interval))
+            return;
+    }
     last = now;
     (void) vfx_alive();
     levwin->force_redraw();
@@ -2685,6 +2799,10 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
     mouse = vulture_get_mouse_pos();
     mappos = mouse_to_map(mouse);
 
+    if (button == SDL_BUTTON_LEFT) { /* s108: Dota-style click marker */
+        vfx_click_at(mappos.x, mappos.y);
+        force_redraw();
+    }
     return map_data->handle_click(result, button, mappos);
 }
 

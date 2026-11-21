@@ -2457,6 +2457,22 @@ nearest-pixel SDL_BlitScaled and blown back up the same way. Now:
 - **Test:** an off-screen game ran 10 s with no crash. The replay hasn't
   been watched on a real display.
 
+## 108. Dota-style click marker (2026-11-20)
+
+Left-clicking a seen map square (not your own) spawns vfx kind 3
+(levelwin.cpp vfx_click / vfx_draw_click). Over 0.52 s:
+- **Ring:** an iso-flattened ring of soft glow dots pops out, then shrinks
+  into the square.
+- **Chevrons:** four slide in on the diagonals.
+- **Fade:** everything fades over the last 40%.
+- **Colour:** green to move, red when the square shows a monster (attack).
+- **Helper:** vfx_glowdot is one cached white soft-dot sprite, tinted and
+  faded per call.
+- **Smoothness:** while a marker is alive the idle loop redraws every
+  25 ms and the input wait drops to 20 ms.
+- **Test:** an off-screen game ran 8 s with no crash. The marker hasn't
+  been watched on a real display.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
