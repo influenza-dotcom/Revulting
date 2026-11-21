@@ -1931,6 +1931,8 @@ vulture_idle_bob(bool at_map)
 /* play the in-between frames of a pending tween, then any queued death
    animations (vulture_win.cpp calls this after each refresh; re-entry is
    blocked while animating) */
+static bool vtw_fast = false; /* s112: this step is part of a run/travel */
+
 void
 vulture_tween_run(void)
 {
@@ -1938,20 +1940,27 @@ vulture_tween_run(void)
 
     if (vtw_animating || vanim_kind || !levwin)
         return;
-    /* s81: running, travelling, auto-explore and repeated commands snap -
-       animating every step there is what made long walks crawl */
-    if (vtw_pending && (svc.context.run || svc.context.travel || gm.multi
-                        || autoexplore_active)) {
-        vtw_pending = false;
-        vtw_t = 1.0;
-        vtw_commit(vtw_last_vx, vtw_last_vy);
-        levwin->force_redraw();
+    /* s81 snapped every step of running / travel / auto-explore (long walks
+       crawled).  s112: they slide again, just quickly - 4 short frames a
+       step - so the hero visibly walks instead of teleporting.  A key or
+       click still cuts any step short. */
+    {
+        bool fast = svc.context.run || svc.context.travel || gm.multi
+                    || autoexplore_active;
+
+        if (vtw_pending && fast && vanim_input_waiting()) {
+            vtw_pending = false;
+            vtw_t = 1.0;
+            vtw_commit(vtw_last_vx, vtw_last_vy);
+            levwin->force_redraw();
+        }
+        vtw_fast = fast;
     }
     if (vtw_pending) {
         Uint32 t0 = SDL_GetTicks();
 
         vtw_animating = true;
-        frames = 9;
+        frames = vtw_fast ? 4 : 9;
         for (f = 1; f <= frames; f++) {
             Uint32 tf = SDL_GetTicks();
 
@@ -1968,8 +1977,8 @@ vulture_tween_run(void)
                 break;
             }
             if (f == 1 && SDL_GetTicks() - tf > 25)
-                frames = 4; /* slow frames: fewer of them */
-            SDL_Delay(12);
+                frames = vtw_fast ? 2 : 4; /* slow frames: fewer of them */
+            SDL_Delay(vtw_fast ? 5 : 12);
         }
         vtw_t = 1.0;
         vtw_pending = false;
