@@ -21,7 +21,6 @@ extern const char *const enc_stat[]; /* defined in botl.c */
 #include "statuswin.h"
 #include "textwin.h"
 #include "mapdata.h" /* s110: portrait */
-#include "vulture_opt.h" /* s117: camera lock badge */
 
 #include <sstream>
 
@@ -251,11 +250,6 @@ statuswin::draw()
 
         if (px >= 0) {
             vpt_draw(statusbg, px, abs_y, ps);
-            if (vulture_opts.recenter) /* s117: camera locked on the hero */
-                vulture_put_text_shadow(V_FONT_SMALL, "LOCKED", vulture_screen,
-                                        px + V_UI(3), abs_y + V_UI(2),
-                                        SDL_MapRGB(vulture_screen->format, 255, 210, 90),
-                                        SDL_MapRGB(vulture_screen->format, 0, 0, 0));
             vulture_invalidate_region(px, abs_y, ps, ps);
         }
     }
