@@ -2430,6 +2430,12 @@ New main-menu item: [e] "Hearse: share bones with other players..."
   "not set up".
 - **Untested:** the setup itself against the live Hearse server.
 
+## 105. Death-cam plays in colour (2026-11-20)
+
+User: "remove the stupid filter from the last moments thing". The sepia
+SDL_SetSurfaceColorMod in vulture_replay_play is gone, and the frames play
+back as they were drawn.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

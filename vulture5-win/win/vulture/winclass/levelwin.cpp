@@ -1493,7 +1493,7 @@ vw_photo(levelwin *lw)
 /*
  * IMPLEMENTATION_LOG s92: death-cam.  Once per turn the screen as it stands
  * is copied, at a third of its size, into a ring of the last 40 turns.
- * When the hero dies for good, really_done() plays the ring back - sepia,
+ * When the hero dies for good, really_done() plays the ring back, in colour,
  * oldest to newest, "Your last moments..." - before the end-of-game
  * questions.  Any key or click skips it.
  */
@@ -1558,9 +1558,7 @@ vulture_replay_play(void)
         if (!f)
             continue;
         SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 0, 0, 0));
-        SDL_SetSurfaceColorMod(f, 225, 195, 150); /* sepia-ish */
-        SDL_BlitScaled(f, NULL, vulture_screen, &d);
-        SDL_SetSurfaceColorMod(f, 255, 255, 255);
+        SDL_BlitScaled(f, NULL, vulture_screen, &d); /* s105: no sepia filter */
         vulture_put_text_shadow(V_FONT_LARGE, cap, vulture_screen,
                                 d.x + d.w / 2 - vulture_text_length(V_FONT_LARGE, cap) / 2,
                                 d.y + d.h - 60,
