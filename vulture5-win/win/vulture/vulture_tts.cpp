@@ -291,6 +291,34 @@ static bool pp_speak(const char *text, int female, int pitch)
 	return true;
 }
 
+/* s114: speak with an explicit Piper voice (0 ryan, 1 amy, 2 gruff) and
+   playback factor; SAPI fallback by gender when Piper isn't there */
+extern "C" void vulture_tts_speak(const char *text, int female, int pitch,
+                                  int rate);
+extern "C" void vulture_tts_speak_voice(const char *text, int voice,
+                                        double factor, int female)
+{
+	pp_req r;
+
+	if (!text || !*text)
+		return;
+	if (!pp_init()) {
+		vulture_tts_speak(text, female, (int) ((factor - 1.0) * 40), 0);
+		return;
+	}
+	r.text = text;
+	for (size_t i = 0; i < r.text.size(); i++)
+		if (r.text[i] == '\n' || r.text[i] == '\r')
+			r.text[i] = ' ';
+	r.voice = voice < 0 || voice > 2 ? 0 : voice;
+	r.factor = factor < 0.75 ? 0.75 : factor > 1.3 ? 1.3 : factor;
+	EnterCriticalSection(&pp_lock);
+	if (pp_queue.size() < 6)
+		pp_queue.push_back(r);
+	LeaveCriticalSection(&pp_lock);
+	SetEvent(pp_wake);
+}
+
 static ISpVoice *tts_voice = NULL;
 static ISpObjectToken *tts_tok[2] = { NULL, NULL }; /* [0] male, [1] female */
 static int tts_state = 0; /* 0 untried, 1 ready, -1 unavailable */

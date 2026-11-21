@@ -1235,6 +1235,49 @@ vfx_draw_click(const vfx_ent &e, double age, int sx, int sy)
    never rattles on.  Shown above their head; spoken with `voices`. */
 #include "vulture_bark.h"
 extern "C" void vulture_tts_speak(const char *, int, int, int);
+extern "C" void vulture_tts_speak_voice(const char *, int, double, int);
+
+/* s114: the hero's bark voice by role and gender (Piper voice + pitch),
+   nudged by race - so a Barbarian growls and a Tourist chirps */
+static void
+vbark_voice(int *voice, double *factor)
+{
+    static const struct { short pm; signed char mv, fv; float mf, ff; } tab[] = {
+        /* role            male voice/pitch  female voice/pitch */
+        { PM_ARCHEOLOGIST, 0, 1, 1.02f, 1.03f },
+        { PM_BARBARIAN,    2, 1, 0.88f, 0.87f },
+        { PM_CAVE_DWELLER, 2, 1, 0.86f, 0.86f },
+        { PM_HEALER,       0, 1, 1.08f, 1.10f },
+        { PM_KNIGHT,       0, 1, 0.94f, 0.95f },
+        { PM_MONK,         0, 1, 1.00f, 1.00f },
+        { PM_CLERIC,       0, 1, 0.97f, 0.97f },
+        { PM_RANGER,       2, 1, 1.04f, 0.98f },
+        { PM_ROGUE,        0, 1, 1.12f, 1.12f },
+        { PM_SAMURAI,      0, 1, 0.91f, 0.92f },
+        { PM_TOURIST,      0, 1, 1.15f, 1.18f },
+        { PM_VALKYRIE,     2, 1, 0.98f, 0.90f },
+        { PM_WIZARD,       0, 1, 1.05f, 1.05f },
+    };
+    size_t i;
+    double f = 1.0;
+    int v = flags.female ? 1 : 0;
+
+    for (i = 0; i < sizeof tab / sizeof tab[0]; i++)
+        if (Role_if(tab[i].pm)) {
+            v = flags.female ? tab[i].fv : tab[i].mv;
+            f = flags.female ? tab[i].ff : tab[i].mf;
+            break;
+        }
+    if (Race_if(PM_DWARF))
+        f *= 0.94;
+    else if (Race_if(PM_ORC))
+        f *= 0.92;
+    else if (Race_if(PM_GNOME))
+        f *= 1.10;
+    else if (Race_if(PM_ELF))
+        f *= 1.04;
+    *voice = v, *factor = f;
+}
 
 struct vbark_kind {
     int chance;          /* percent */
@@ -1318,8 +1361,13 @@ vulture_bark(int kind)
     snprintf(e.txt, sizeof e.txt, "%s", bk->lines[k]);
     e.r = 245, e.g = 240, e.b = 220;
     vfx_list.push_back(e);
-    if (iflags.voices && !Deaf)
-        vulture_tts_speak(bk->lines[k], flags.female ? 1 : 0, 0, 1);
+    if (iflags.voices && !Deaf) {
+        int voice;
+        double factor;
+
+        vbark_voice(&voice, &factor); /* s114 */
+        vulture_tts_speak_voice(bk->lines[k], voice, factor, flags.female ? 1 : 0);
+    }
 }
 
 static void

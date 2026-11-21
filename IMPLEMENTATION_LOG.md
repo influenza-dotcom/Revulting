@@ -2554,6 +2554,20 @@ levelwin.cpp (vbark_tab).
 - **Status:** an off-screen game ran 9 s with no crash. Not yet seen or
   heard on a real display.
 
+## 114. Bark voices by class, gender and race (2026-11-20)
+
+- **API:** vulture_tts_speak_voice(text, voice, factor, female) in
+  vulture_tts.cpp queues a line on an explicit Piper voice (0 ryan, 1 amy,
+  2 northern-English gruff) at a playback factor (0.75-1.3). It falls back
+  to SAPI by gender.
+- **Voice table:** levelwin.cpp vbark_voice maps the role to a male and a
+  female voice/pitch.
+  - Gruff low: male Barbarian, Cave dweller, Ranger, Valkyrie.
+  - High: Tourist, Rogue, Healer.
+- **Race nudges:** dwarf x0.94, orc x0.92, gnome x1.10, elf x1.04.
+- **Limit:** only one female model, so women differ by pitch only. A
+  multi-speaker model would fix that.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
