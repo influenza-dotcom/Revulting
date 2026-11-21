@@ -2410,6 +2410,26 @@ pettype from the settings, or clears a pettype:none, so the role's usual
 pet comes. Hero shortcuts launched with their own rc skip the menu and keep
 their pettype.
 
+## 104. Hearse setup from the main menu (2026-11-20)
+
+New main-menu item: [e] "Hearse: share bones with other players..."
+(vulture_mainmenu.cpp mm_hearse*).
+- **Not set up:** Set up asks for an email (private) and a public
+  nickname, rejecting an email address as the nickname.
+  - It writes hearse\hearse.ini so hearse.exe never prompts. A fresh file
+    gets Mode = replace plus the BONESPREFIX/SAVEPREFIX dirs; an existing
+    file keeps its other keys.
+  - It runs hearse.exe once to register: windowless, stdin = NUL, output to
+    hearse\hearse_last.txt and shown in a menu, 60 s cap.
+  - A "User token" afterwards means success, so hearse_path is set in the
+    user's vulture.conf (vulture_write_userconfig) and the exit-time
+    exchange (vulture_run_hearse) runs. Otherwise it stays off.
+- **Set up:** on/off toggle, "Exchange bones now", change email/nickname
+  (the rerun notifies the server through Hearse's own CRC check).
+- **Release:** the zip still ships without hearse.ini, so new players start
+  "not set up".
+- **Untested:** the setup itself against the live Hearse server.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

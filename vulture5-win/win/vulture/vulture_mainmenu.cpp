@@ -44,6 +44,7 @@
 #include "vulture_txt.h"
 #include "vulture_main.h"
 #include "vulture_types.h"
+#include "vulture_opt.h" /* s104: hearse_path */
 
 /* full-screen image that levelwin::draw() paints instead of black while no
  * map exists, so menus opening and closing over the title keep it intact */
@@ -553,6 +554,296 @@ std::string mm_stamp(void)
     return yyyymmddhhmmss(getnow());
 }
 
+/* ------------------------------------------------------------------ hearse */
+/*
+ * IMPLEMENTATION_LOG s104: Hearse (bones-file sharing) from the main menu.
+ * Setup asks for an email (private, only the Hearse admins see it) and a
+ * public nickname, writes hearse\hearse.ini so hearse.exe never has to
+ * prompt (it runs windowless at game exit), registers with the server once
+ * right away, and turns the exit-time exchange on (hearse_path in the
+ * user's vulture.conf).  Players can change their details, run an exchange
+ * now, or turn it off again.
+ */
+std::string mm_hearse_dir(void)
+{
+    char exepath[MAX_PATH];
+    DWORD n = GetModuleFileNameA(NULL, exepath, MAX_PATH);
+    std::string d;
+
+    if (!n || n >= MAX_PATH)
+        return "";
+    d = exepath;
+    d = d.substr(0, d.find_last_of("\\/"));
+    return d + "\\hearse";
+}
+
+/* read "Key = value" from hearse.ini ("" when missing) */
+std::string mm_hearse_get(const std::string &key)
+{
+    FILE *fp = fopen((mm_hearse_dir() + "\\hearse.ini").c_str(), "r");
+    char line[512];
+    std::string val;
+
+    if (!fp)
+        return val;
+    while (fgets(line, sizeof line, fp)) {
+        std::string l = mm_trim(line);
+        size_t eq = l.find('=');
+
+        if (l.empty() || l[0] == '#' || eq == std::string::npos)
+            continue;
+        if (mm_trim(l.substr(0, eq)) == key) {
+            val = mm_trim(l.substr(eq + 1));
+            break;
+        }
+    }
+    (void) fclose(fp);
+    return val;
+}
+
+/* write email + nickname into hearse.ini, keeping everything else */
+bool mm_hearse_write(const std::string &email, const std::string &nick)
+{
+    std::string path = mm_hearse_dir() + "\\hearse.ini", out;
+    FILE *fp = fopen(path.c_str(), "r");
+    char line[512];
+    bool have_email = false, have_nick = false;
+
+    if (fp) {
+        while (fgets(line, sizeof line, fp)) {
+            std::string l = line, t = mm_trim(line);
+            size_t eq = t.find('=');
+            std::string key = eq == std::string::npos ? "" : mm_trim(t.substr(0, eq));
+
+            if (!t.empty() && t[0] != '#' && key == "User email") {
+                l = "User email = " + email + "\n";
+                have_email = true;
+            } else if (!t.empty() && t[0] != '#' && key == "User nickname") {
+                l = "User nickname = " + nick + "\n";
+                have_nick = true;
+            }
+            out += l;
+        }
+        (void) fclose(fp);
+    } else {
+        /* a fresh file: where this game keeps bones and saves */
+        out = "# Hearse configuration file (set up from Revulting's main menu).\n"
+              "Mode = replace\n";
+        if (gf.fqn_prefix[BONESPREFIX] && *gf.fqn_prefix[BONESPREFIX])
+            out += std::string("Bones directory = ") + gf.fqn_prefix[BONESPREFIX] + "\n";
+        if (gf.fqn_prefix[SAVEPREFIX] && *gf.fqn_prefix[SAVEPREFIX])
+            out += std::string("Save files directory = ") + gf.fqn_prefix[SAVEPREFIX] + "\n";
+        out += "Show bones info on download = 1\nPause on exit = 0\n";
+    }
+    if (!have_email)
+        out += "User email = " + email + "\n";
+    if (!have_nick)
+        out += "User nickname = " + nick + "\n";
+    if (!(fp = fopen(path.c_str(), "w")))
+        return false;
+    fputs(out.c_str(), fp);
+    return fclose(fp) == 0;
+}
+
+/* run hearse.exe now (windowless, no keyboard), and show what it said */
+void mm_hearse_run(void)
+{
+    std::string dir = mm_hearse_dir(), exe = dir + "\\hearse.exe";
+    std::string logp = dir + "\\hearse_last.txt";
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    HANDLE hout, hin;
+    char cmd[MAX_PATH + 3];
+
+    memset(&sa, 0, sizeof sa);
+    sa.nLength = sizeof sa;
+    sa.bInheritHandle = TRUE;
+    hout = CreateFileA(logp.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                       CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    hin = CreateFileA("NUL", GENERIC_READ, 0, &sa, OPEN_EXISTING, 0, NULL);
+    if (hout == INVALID_HANDLE_VALUE || hin == INVALID_HANDLE_VALUE) {
+        if (hout != INVALID_HANDLE_VALUE)
+            CloseHandle(hout);
+        if (hin != INVALID_HANDLE_VALUE)
+            CloseHandle(hin);
+        mm_message("Couldn't start Hearse.");
+        return;
+    }
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = hin;
+    si.hStdOutput = hout;
+    si.hStdError = hout;
+    memset(&pi, 0, sizeof pi);
+    snprintf(cmd, sizeof cmd, "\"%s\"", exe.c_str());
+    mm_show_backdrop();
+    {
+        const char *msg = "Contacting the Hearse server...";
+
+        vulture_put_text_shadow(V_FONT_LARGE, msg, vulture_screen,
+                                (vulture_screen->w - vulture_text_length(V_FONT_LARGE, msg)) / 2,
+                                vulture_screen->h / 2,
+                                SDL_MapRGB(vulture_screen->format, 255, 236, 200),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        vulture_refresh();
+    }
+    if (!CreateProcessA(exe.c_str(), cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, dir.c_str(), &si, &pi)) {
+        CloseHandle(hout);
+        CloseHandle(hin);
+        mm_message("Couldn't start " + exe);
+        return;
+    }
+    if (WaitForSingleObject(pi.hProcess, 60000) == WAIT_TIMEOUT)
+        TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CloseHandle(hout);
+    CloseHandle(hin);
+
+    /* show its output (the last screenful) */
+    {
+        FILE *fp = fopen(logp.c_str(), "r");
+        std::vector<std::string> lines;
+        char line[512];
+        winid w;
+        size_t i;
+
+        if (fp) {
+            while (fgets(line, sizeof line, fp)) {
+                std::string l = mm_trim(line);
+
+                if (!l.empty())
+                    lines.push_back(l);
+            }
+            (void) fclose(fp);
+        }
+        w = mm_start();
+        if (lines.empty())
+            mm_text(w, "Hearse finished without saying anything.");
+        for (i = lines.size() > 18 ? lines.size() - 18 : 0; i < lines.size(); i++)
+            mm_text(w, lines[i]);
+        (void) mm_pick(w, "Hearse");
+    }
+}
+
+void mm_hearse_enable(bool on)
+{
+    std::string exe = on ? mm_hearse_dir() + "\\hearse.exe" : "";
+
+    strncpy(vulture_opts.hearse_path, exe.c_str(), sizeof vulture_opts.hearse_path - 1);
+    vulture_opts.hearse_path[sizeof vulture_opts.hearse_path - 1] = '\0';
+    vulture_write_userconfig();
+}
+
+/* ask for email + nickname; false if cancelled */
+bool mm_hearse_ask(void)
+{
+    char email[BUFSZ], nick[BUFSZ];
+    std::string e = mm_hearse_get("User email"), n = mm_hearse_get("User nickname");
+
+    email[0] = nick[0] = '\0';
+    if (!vulture_get_input(-1, vulture_screen->h - V_UI(170),
+                           "Email for Hearse (private - only the Hearse admins "
+                           "see it, to contact you about a bad file)",
+                           email, e.c_str()))
+        return false;
+    if (!*mm_trim(email).c_str() || mm_trim(email).find('@') == std::string::npos) {
+        mm_message("That doesn't look like an email address.");
+        return false;
+    }
+    if (!vulture_get_input(-1, vulture_screen->h - V_UI(170),
+                           "Nickname (public - shown to people who get your "
+                           "bones; not your email)",
+                           nick, n.c_str()))
+        return false;
+    if (mm_trim(nick).empty() || mm_trim(nick).find('@') != std::string::npos) {
+        mm_message("Pick a nickname (and not an email address).");
+        return false;
+    }
+    if (!mm_hearse_write(mm_trim(email), mm_trim(nick))) {
+        mm_message("Couldn't write " + mm_hearse_dir() + "\\hearse.ini");
+        return false;
+    }
+    return true;
+}
+
+void mm_hearse(void)
+{
+    enum { H_SETUP = 1, H_RUN, H_EDIT, H_OFF, H_ON };
+    std::string exe = mm_hearse_dir() + "\\hearse.exe";
+    DWORD attrs = GetFileAttributesA(exe.c_str());
+
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        mm_message("Hearse isn't in this copy of the game (" + exe + ").");
+        return;
+    }
+    for (;;) {
+        std::string nick = mm_hearse_get("User nickname");
+        bool registered = !nick.empty() && !mm_hearse_get("User email").empty();
+        bool on = vulture_opts.hearse_path[0] != '\0';
+        winid w = mm_start();
+        int id;
+
+        mm_text(w, "Hearse swaps bones files with other players.", ATR_BOLD);
+        mm_text(w, "When you die, your ghost's level (bones) is uploaded,");
+        mm_text(w, "and you get someone else's bones for the same level -");
+        mm_text(w, "their ghost, their gear, and whatever killed them.");
+        mm_text(w, "It runs by itself when you quit or die.");
+        mm_text(w, "");
+        if (registered)
+            mm_text(w, std::string("Status: ") + (on ? "ON" : "OFF")
+                           + " - you are \"" + nick + "\"");
+        else
+            mm_text(w, "Status: not set up");
+        mm_text(w, "");
+        if (!registered) {
+            mm_item(w, H_SETUP, 's', "Set up Hearse (email + nickname)");
+        } else {
+            if (on)
+                mm_item(w, H_OFF, 't', "Turn Hearse off");
+            else
+                mm_item(w, H_ON, 't', "Turn Hearse on");
+            mm_item(w, H_RUN, 'x', "Exchange bones now");
+            mm_item(w, H_EDIT, 'e', "Change email / nickname");
+        }
+        id = mm_pick(w, "Hearse");
+        switch (id) {
+        case H_SETUP:
+            if (mm_hearse_ask()) {
+                mm_hearse_run(); /* registers with the server */
+                if (!mm_hearse_get("User token").empty()) {
+                    mm_hearse_enable(true);
+                    mm_message("Hearse is set up and on. Bones are swapped "
+                               "whenever you quit or die.");
+                } else {
+                    mm_message("Hearse couldn't register with its server "
+                               "(see its message). Try again later from "
+                               "this menu; it stays off for now.");
+                }
+            }
+            break;
+        case H_EDIT:
+            if (mm_hearse_ask())
+                mm_hearse_run(); /* tells the server about the change */
+            break;
+        case H_RUN:
+            mm_hearse_run();
+            break;
+        case H_OFF:
+            mm_hearse_enable(false);
+            break;
+        case H_ON:
+            mm_hearse_enable(true);
+            break;
+        default:
+            return;
+        }
+    }
+}
+
 /* ----------------------------------------------------------------- actions */
 
 /* start a fresh copy of the game with `rcpath`, then exit this one */
@@ -910,7 +1201,7 @@ void mm_guidebook(void)
 
 enum {
     MM_CONTINUE = 1, MM_LOAD, MM_ROSTER, MM_NEW, MM_SCORES, MM_GRAVE,
-    MM_BACKUPS, MM_GUIDE, MM_QUIT
+    MM_BACKUPS, MM_GUIDE, MM_QUIT, MM_HEARSE
 };
 
 } /* namespace */
@@ -960,6 +1251,7 @@ extern "C" void vulture_main_menu(int launched_with_rc)
         mm_item(w, MM_SCORES, 'h', "High scores");
         mm_item(w, MM_GRAVE, 'p', "Past games (dumplogs)");
         mm_item(w, MM_BACKUPS, 'b', "Save backups...");
+        mm_item(w, MM_HEARSE, 'e', "Hearse: share bones with other players...");
         mm_item(w, MM_GUIDE, 'g', "Read the Guidebook");
         mm_text(w, "");
         mm_item(w, MM_QUIT, 'q', "Quit");
@@ -999,6 +1291,9 @@ extern "C" void vulture_main_menu(int launched_with_rc)
             break;
         case MM_GUIDE:
             mm_guidebook();
+            break;
+        case MM_HEARSE:
+            mm_hearse(); /* s104 */
             break;
         case MM_QUIT:
             mm_drop_backdrop();
