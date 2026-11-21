@@ -1492,7 +1492,7 @@ vw_photo(levelwin *lw)
 
 /*
  * IMPLEMENTATION_LOG s92: death-cam.  Once per turn the screen as it stands
- * is copied, at a third of its size, into a ring of the last 40 turns.
+ * is copied, at half its size (s107: smoothly), into a ring of the last 40 turns.
  * When the hero dies for good, really_done() plays the ring back, in colour,
  * oldest to newest, "Your last moments..." - before the end-of-game
  * questions.  Any key or click skips it.
@@ -1501,6 +1501,89 @@ vw_photo(levelwin *lw)
 static SDL_Surface *vrp_frame[VRP_N];
 static int vrp_head = 0, vrp_count = 0;
 static d_level vrp_lev = { -1, -1 };
+
+/* s107: smooth death-cam - frames are kept at half size, box-filtered
+   down (not nearest-pixel), and bilinear-filtered back up on playback, so
+   the replay no longer looks pixelated */
+static SDL_Surface *vrp_scratch = NULL; /* full-size ARGB work surface */
+
+static SDL_Surface *
+vrp_scratch_for(int w, int h)
+{
+    if (!vrp_scratch || vrp_scratch->w != w || vrp_scratch->h != h) {
+        if (vrp_scratch)
+            SDL_FreeSurface(vrp_scratch);
+        vrp_scratch = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32,
+                                                     SDL_PIXELFORMAT_ARGB8888);
+    }
+    return vrp_scratch;
+}
+
+/* full-size ARGB `s` -> half-size ARGB `f`, averaging each 2x2 block */
+static void
+vrp_down2(SDL_Surface *s, SDL_Surface *f)
+{
+    int x, y;
+
+    SDL_LockSurface(s);
+    SDL_LockSurface(f);
+    for (y = 0; y < f->h; y++) {
+        Uint32 *r0 = (Uint32 *) ((Uint8 *) s->pixels + (2 * y) * s->pitch);
+        Uint32 *r1 = (Uint32 *) ((Uint8 *) s->pixels + (2 * y + 1 < s->h ? 2 * y + 1 : 2 * y) * s->pitch);
+        Uint32 *o = (Uint32 *) ((Uint8 *) f->pixels + y * f->pitch);
+
+        for (x = 0; x < f->w; x++) {
+            Uint32 a = r0[2 * x], b = r0[2 * x + 1], c = r1[2 * x], d = r1[2 * x + 1];
+            Uint32 rb = ((a & 0xFF00FF) + (b & 0xFF00FF) + (c & 0xFF00FF) + (d & 0xFF00FF)) >> 2;
+            Uint32 g = ((a & 0xFF00) + (b & 0xFF00) + (c & 0xFF00) + (d & 0xFF00)) >> 2;
+
+            o[x] = 0xFF000000 | (rb & 0xFF00FF) | (g & 0xFF00);
+        }
+    }
+    SDL_UnlockSurface(f);
+    SDL_UnlockSurface(s);
+}
+
+/* half-size ARGB `f` -> `o` (any size, ARGB), bilinear */
+static void
+vrp_up(SDL_Surface *f, SDL_Surface *o)
+{
+    int x, y;
+    double sx = (double) f->w / o->w, sy = (double) f->h / o->h;
+
+    SDL_LockSurface(f);
+    SDL_LockSurface(o);
+    for (y = 0; y < o->h; y++) {
+        double fy = (y + 0.5) * sy - 0.5;
+        int y0 = fy < 0 ? 0 : (int) fy, y1 = y0 + 1 < f->h ? y0 + 1 : y0;
+        int wy = (int) ((fy - y0) * 256);
+        Uint32 *r0 = (Uint32 *) ((Uint8 *) f->pixels + y0 * f->pitch);
+        Uint32 *r1 = (Uint32 *) ((Uint8 *) f->pixels + y1 * f->pitch);
+        Uint32 *out = (Uint32 *) ((Uint8 *) o->pixels + y * o->pitch);
+
+        if (wy < 0)
+            wy = 0;
+        for (x = 0; x < o->w; x++) {
+            double fx = (x + 0.5) * sx - 0.5;
+            int x0 = fx < 0 ? 0 : (int) fx, x1 = x0 + 1 < f->w ? x0 + 1 : x0;
+            int wx = (int) ((fx - x0) * 256);
+            Uint32 p00 = r0[x0], p01 = r0[x1], p10 = r1[x0], p11 = r1[x1];
+            Uint32 rb0, g0, rb1, g1, rb, g;
+
+            if (wx < 0)
+                wx = 0;
+            rb0 = (((p00 & 0xFF00FF) * (256 - wx) + (p01 & 0xFF00FF) * wx) >> 8) & 0xFF00FF;
+            g0 = (((p00 & 0xFF00) * (256 - wx) + (p01 & 0xFF00) * wx) >> 8) & 0xFF00;
+            rb1 = (((p10 & 0xFF00FF) * (256 - wx) + (p11 & 0xFF00FF) * wx) >> 8) & 0xFF00FF;
+            g1 = (((p10 & 0xFF00) * (256 - wx) + (p11 & 0xFF00) * wx) >> 8) & 0xFF00;
+            rb = ((rb0 * (256 - wy) + rb1 * wy) >> 8) & 0xFF00FF;
+            g = ((g0 * (256 - wy) + g1 * wy) >> 8) & 0xFF00;
+            out[x] = 0xFF000000 | rb | g;
+        }
+    }
+    SDL_UnlockSurface(o);
+    SDL_UnlockSurface(f);
+}
 
 extern "C" void
 vulture_replay_capture(void)
@@ -1520,17 +1603,31 @@ vulture_replay_capture(void)
     if (src.w < 3 || src.h < 3)
         return;
     f = vrp_frame[vrp_head];
-    if (!f || f->w != src.w / 3 || f->h != src.h / 3) {
+    if (!f || f->w != src.w / 2 || f->h != src.h / 2) {
         if (f)
             SDL_FreeSurface(f);
-        f = SDL_CreateRGBSurfaceWithFormat(0, src.w / 3, src.h / 3, 32,
+        f = SDL_CreateRGBSurfaceWithFormat(0, src.w / 2, src.h / 2, 32,
                                            SDL_PIXELFORMAT_ARGB8888);
         vrp_frame[vrp_head] = f;
         if (!f)
             return;
     }
-    dst.x = dst.y = 0, dst.w = f->w, dst.h = f->h;
-    SDL_BlitScaled(vulture_screen, &src, f, &dst);
+    {
+        SDL_Surface *sc = vrp_scratch_for(src.w, src.h);
+
+        if (!sc)
+            return;
+        dst.x = dst.y = 0, dst.w = src.w, dst.h = src.h;
+        {
+            SDL_BlendMode bm;
+
+            SDL_GetSurfaceBlendMode(vulture_screen, &bm);
+            SDL_SetSurfaceBlendMode(vulture_screen, SDL_BLENDMODE_NONE);
+            SDL_BlitSurface(vulture_screen, &src, sc, &dst); /* s107 */
+            SDL_SetSurfaceBlendMode(vulture_screen, bm);
+        }
+        vrp_down2(sc, f);
+    }
     vrp_head = (vrp_head + 1) % VRP_N;
     if (vrp_count < VRP_N)
         vrp_count++;
@@ -1558,7 +1655,17 @@ vulture_replay_play(void)
         if (!f)
             continue;
         SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 0, 0, 0));
-        SDL_BlitScaled(f, NULL, vulture_screen, &d); /* s105: no sepia filter */
+        { /* s105: no sepia; s107: smooth upscale, not blocky */
+            SDL_Surface *sc = vrp_scratch_for(d.w, d.h);
+            SDL_Rect dd = d;
+
+            if (sc) {
+                vrp_up(f, sc);
+                SDL_BlitSurface(sc, NULL, vulture_screen, &dd);
+            } else {
+                SDL_BlitScaled(f, NULL, vulture_screen, &dd);
+            }
+        }
         vulture_put_text_shadow(V_FONT_LARGE, cap, vulture_screen,
                                 d.x + d.w / 2 - vulture_text_length(V_FONT_LARGE, cap) / 2,
                                 d.y + d.h - 60,

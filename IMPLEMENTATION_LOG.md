@@ -2445,6 +2445,18 @@ its clip rect. That surface can still be clipped to the last draw region
 and the jolt covered only that rectangle. The shake now saves the clip
 rect, unclips, and restores it at the end. Not yet seen on a real display.
 
+## 107. Death-cam no longer pixelated (2026-11-20)
+
+User: "remove the pixelation too". Frames were stored at 1/3 size with a
+nearest-pixel SDL_BlitScaled and blown back up the same way. Now:
+- **Capture:** the map region is copied unblended into a full-size ARGB
+  scratch surface, then box-filtered 2x2 down to half size (vrp_down2).
+- **Playback:** bilinear back up to the map size (vrp_up).
+- **Memory:** about 2 MB per frame at 1920x1080, so about 83 MB for the
+  40-turn ring.
+- **Test:** an off-screen game ran 10 s with no crash. The replay hasn't
+  been watched on a real display.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
