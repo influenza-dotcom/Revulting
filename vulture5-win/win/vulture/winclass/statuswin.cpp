@@ -20,6 +20,7 @@ extern const char *const enc_stat[]; /* defined in botl.c */
 #include "enhancebutton.h"
 #include "statuswin.h"
 #include "textwin.h"
+#include "mapdata.h" /* s110: portrait */
 
 #include <sstream>
 
@@ -27,6 +28,160 @@ statuswin *stwin;
 #define V_STATUS_CONDS 7 /* condition cells; see add_cond() (§45) */
 static const int status_xpos[5] = { 0, 60, 100, 180, 250 };
 static Uint32 warn_colors[V_MAX_WARN];
+
+/*
+ * IMPLEMENTATION_LOG s110: Dota-style hero portrait left of the status
+ * panel.  The hero's current map sprite (so polymorph shows), cropped to
+ * head-and-shoulders (the top ~55% of its opaque pixels), bilinear-scaled
+ * into a frame cut from the status panel's own stone art, with thin HP
+ * and power bars along the bottom.  Rebuilt only when the sprite or the
+ * size changes.
+ */
+static SDL_Surface *vpt_cache = NULL;
+static int vpt_tile = -1, vpt_size = 0;
+
+/* bilinear sample of ARGB surface s at (fx, fy) */
+static Uint32
+vpt_sample(SDL_Surface *s, double fx, double fy)
+{
+    int x0, y0, x1, y1, wx, wy;
+    Uint32 p00, p01, p10, p11, out = 0;
+    int sh;
+
+    if (fx < 0) fx = 0;
+    if (fy < 0) fy = 0;
+    x0 = (int) fx, y0 = (int) fy;
+    if (x0 >= s->w) x0 = s->w - 1;
+    if (y0 >= s->h) y0 = s->h - 1;
+    x1 = x0 + 1 < s->w ? x0 + 1 : x0;
+    y1 = y0 + 1 < s->h ? y0 + 1 : y0;
+    wx = (int) ((fx - x0) * 256), wy = (int) ((fy - y0) * 256);
+    p00 = ((Uint32 *) ((Uint8 *) s->pixels + y0 * s->pitch))[x0];
+    p01 = ((Uint32 *) ((Uint8 *) s->pixels + y0 * s->pitch))[x1];
+    p10 = ((Uint32 *) ((Uint8 *) s->pixels + y1 * s->pitch))[x0];
+    p11 = ((Uint32 *) ((Uint8 *) s->pixels + y1 * s->pitch))[x1];
+    for (sh = 0; sh < 32; sh += 8) {
+        int a = (p00 >> sh) & 255, b = (p01 >> sh) & 255;
+        int c = (p10 >> sh) & 255, d = (p11 >> sh) & 255;
+        int top = a * (256 - wx) + b * wx, bot = c * (256 - wx) + d * wx;
+        int v = (top * (256 - wy) + bot * wy) >> 16;
+
+        out |= (Uint32) (v > 255 ? 255 : v) << sh;
+    }
+    return out;
+}
+
+static SDL_Surface *
+vpt_build(int tile_id, int size)
+{
+    vulture_tile *t = vulture_get_tile(tile_id);
+    SDL_Surface *src, *dst;
+    int x, y, x0 = 9999, y0 = 9999, x1 = -1, y1 = -1, cw, ch, side;
+    double sc, ox, oy;
+
+    if (!t || !t->graphic || size < 8)
+        return NULL;
+    src = SDL_ConvertSurfaceFormat(t->graphic, SDL_PIXELFORMAT_ARGB8888, 0);
+    if (!src)
+        return NULL;
+    SDL_LockSurface(src);
+    for (y = 0; y < src->h; y++)
+        for (x = 0; x < src->w; x++) {
+            Uint32 p = ((Uint32 *) ((Uint8 *) src->pixels + y * src->pitch))[x];
+            Uint8 r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255, a = p >> 24;
+
+            if (a < 160)
+                continue;
+            if (abs(r - g) < 6 && abs(g - b) < 6 && r < 110)
+                continue; /* the grey drop shadow */
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+        }
+    if (x1 < 0) {
+        SDL_UnlockSurface(src);
+        SDL_FreeSurface(src);
+        return NULL;
+    }
+    /* head and shoulders: the top 55% of the figure, squared up */
+    ch = (int) ((y1 - y0 + 1) * 0.55);
+    cw = x1 - x0 + 1;
+    side = ch > cw ? ch : cw;
+    if (side < 8)
+        side = 8;
+    ox = (x0 + x1) / 2.0 - side / 2.0;
+    oy = y0 - side * 0.04;
+    sc = (double) side / size;
+    dst = SDL_CreateRGBSurfaceWithFormat(0, size, size, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (dst) {
+        SDL_LockSurface(dst);
+        for (y = 0; y < size; y++)
+            for (x = 0; x < size; x++) {
+                double fx = ox + (x + 0.5) * sc - 0.5, fy = oy + (y + 0.5) * sc - 0.5;
+                Uint32 p = 0;
+
+                if (fx >= -0.5 && fy >= -0.5 && fx < src->w && fy < src->h)
+                    p = vpt_sample(src, fx, fy);
+                ((Uint32 *) ((Uint8 *) dst->pixels + y * dst->pitch))[x] = p;
+            }
+        SDL_UnlockSurface(dst);
+        SDL_SetSurfaceBlendMode(dst, SDL_BLENDMODE_BLEND);
+    }
+    SDL_UnlockSurface(src);
+    SDL_FreeSurface(src);
+    return dst;
+}
+
+/* the portrait box: (px, py) top-left, side `ps` */
+static void
+vpt_draw(SDL_Surface *bg, int px, int py, int ps)
+{
+    int tile = (map_data && isok(u.ux, u.uy))
+                   ? map_data->get_glyph(MAP_MON, u.ux, u.uy) : V_TILE_NONE;
+    int inset = V_UI(4), inner = ps - 2 * inset, barh = V_UI(4);
+    SDL_Rect s, d;
+    int hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax;
+
+    /* frame: the status panel's stone, then a dark inner well */
+    s.x = 0, s.y = 0, s.w = ps < bg->w ? ps : bg->w, s.h = ps < bg->h ? ps : bg->h;
+    d.x = px, d.y = py, d.w = s.w, d.h = s.h;
+    SDL_BlitSurface(bg, &s, vulture_screen, &d);
+    d.x = px + inset, d.y = py + inset, d.w = inner, d.h = inner;
+    SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 18, 16, 20));
+
+    if (tile != V_TILE_NONE && (tile != vpt_tile || inner != vpt_size || !vpt_cache)) {
+        if (vpt_cache)
+            SDL_FreeSurface(vpt_cache);
+        vpt_cache = vpt_build(tile, inner);
+        vpt_tile = tile, vpt_size = inner;
+    }
+    if (tile != V_TILE_NONE && vpt_cache) {
+        d.x = px + inset, d.y = py + inset, d.w = inner, d.h = inner;
+        SDL_BlitSurface(vpt_cache, NULL, vulture_screen, &d);
+    }
+
+    /* HP (green -> red) and power (blue) bars along the bottom of the well */
+    if (hpmax > 0) {
+        int fill = inner * (hp < 0 ? 0 : hp > hpmax ? hpmax : hp) / hpmax;
+        double f = (double) hp / hpmax;
+        Uint8 r = (Uint8) (f > 0.5 ? (1 - f) * 2 * 230 : 230);
+        Uint8 g = (Uint8) (f > 0.5 ? 200 : f * 2 * 200);
+
+        d.x = px + inset, d.y = py + ps - inset - 2 * barh - 1, d.w = inner, d.h = barh;
+        SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 40, 10, 10));
+        d.w = fill;
+        SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, r, g, 40));
+    }
+    if (u.uenmax > 0) {
+        int fill = inner * (u.uen < 0 ? 0 : u.uen > u.uenmax ? u.uenmax : u.uen) / u.uenmax;
+
+        d.x = px + inset, d.y = py + ps - inset - barh, d.w = inner, d.h = barh;
+        SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 10, 14, 40));
+        d.w = fill;
+        SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 70, 130, 255));
+    }
+}
 
 statuswin::statuswin(window *p) : window(p)
 {
@@ -38,7 +193,7 @@ statuswin::statuswin(window *p) : window(p)
     bg_scale = vulture_ui_scale;
     this->w = statusbg->w;
     this->h = statusbg->h;
-    this->x = V_UI(6);
+    this->x = V_UI(6) + this->h + V_UI(4); /* s110: room for the portrait */
     this->y = vulture_screen->h - (this->h + V_UI(6));
     this->menu_id = V_WIN_STATUSBAR;
 
@@ -89,6 +244,15 @@ statuswin::draw()
                             vulture_screen->h - 1);
 
     vulture_invalidate_region(abs_x, abs_y, w, h);
+    /* s110: the hero portrait, square, just left of the panel */
+    {
+        int ps = h, px = abs_x - V_UI(4) - ps;
+
+        if (px >= 0) {
+            vpt_draw(statusbg, px, abs_y, ps);
+            vulture_invalidate_region(px, abs_y, ps, ps);
+        }
+    }
 
     return true;
 }
@@ -125,7 +289,7 @@ statuswin::handle_resize_event(window *target, void *result, int res_w,
             bg_scale = vulture_ui_scale;
             w = statusbg->w;
             h = statusbg->h;
-            x = V_UI(6);
+            x = V_UI(6) + h + V_UI(4); /* s110 */
 
             for (int i = 0; i < 5; i++)
                 for (int j = 0; j < 5; j++) {

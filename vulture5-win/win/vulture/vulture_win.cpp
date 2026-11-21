@@ -63,6 +63,8 @@ static int vulture_handle_event(window * topwin, window * win,
 /******************************
 * High-level window functions
 ******************************/
+extern "C" void vulture_music_poll(void); /* s111 */
+
 void vulture_messagebox(std::string message)
 {
     window *win;
@@ -210,8 +212,10 @@ void vulture_event_dispatcher(void * result, int resulttype, window * topwin)
 		vulture_wait_event(&event, vulture_idle_wait_ms(at_map));
 
 		event_result = vulture_event_dispatcher_core(&event, result, topwin);
-		if (event_result != V_EVENT_HANDLED_FINAL)
+		if (event_result != V_EVENT_HANDLED_FINAL) {
 			vulture_idle_bob(at_map);
+			vulture_music_poll();
+		}
 
 #ifdef __EMSCRIPTEN__
 		emscripten_sleep(1);

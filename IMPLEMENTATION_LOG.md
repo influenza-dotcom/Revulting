@@ -2497,6 +2497,30 @@ Left-clicking a seen map square (not your own) spawns vfx kind 3
   already says "Down". The off-screen edge arrow stays.
 - **Status:** none of these have been seen on a real display.
 
+## 110. Dota-style hero portrait (2026-11-20)
+
+statuswin.cpp vpt_*: a square, panel-high portrait left of the status
+panel, which moves right to make room (constructor and resize).
+- **Image:** the hero's current map sprite (MAP_MON at u.ux,u.uy, so
+  polymorph shows), cropped to the top 55% of its opaque pixels (head and
+  shoulders), squared, and bilinear-scaled.
+- **Frame:** cut from the status panel's stone art, with a dark well.
+- **Bars:** thin HP (green to red) and Pw (blue) along the bottom.
+- **Caching:** rebuilt only when the tile or the size changes.
+
+## 111. Music fades out, then in (2026-11-20)
+
+- **Before:** vmz_start did Mix_HaltMusic and then a fade-in, so every
+  zone change cut dead.
+- **Now:** a zone change fades the old track out (1.1 s, or 0.35 s into
+  battle) and queues the new zone (vmz_pending).
+  - vulture_music_poll starts it with a 2 s fade-in once the old track has
+    stopped. It's called per turn and from the input idle loop
+    (vulture_win.cpp), so it never waits on a key.
+  - vulture_play_song now fades in as well.
+- **Status:** an off-screen game ran 9 s with no crash. Not yet heard or
+  seen on a real display.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -143,6 +143,7 @@ void vulture_play_event_sound(const char * str)
 static int vmz_zone = -1;     /* s74: current music zone, -1 = not started */
 static int vmz_silenced = 0;  /* s89: the hero died - no more music */
 static int vmz_volume = MIX_MAX_VOLUME * 55 / 100;
+static int vmz_pending = -1;  /* s111: zone to start once the fade-out ends */
 
 void vulture_play_ambient_sound(int force_play)
 {
@@ -175,7 +176,7 @@ static void vulture_play_song(std::string midifilename)
 		Mix_FreeMusic(vulture_current_music);
 
 	vulture_current_music = Mix_LoadMUS(midifilename.c_str());
-	Mix_PlayMusic(vulture_current_music,0);
+	Mix_FadeInMusic(vulture_current_music, 0, 1500); /* s111: no hard start */
 }
 
 
@@ -305,7 +306,23 @@ static void vmz_start(int zone)
 	if (!vulture_current_music)
 		return;
 	Mix_VolumeMusic(vmz_volume);
-	Mix_FadeInMusic(vulture_current_music, loops, zone == VMZ_BATTLE ? 400 : 1500);
+	Mix_FadeInMusic(vulture_current_music, loops, zone == VMZ_BATTLE ? 400 : 2000);
+}
+
+/* s111: start a queued zone once the old track has faded out (called
+   per turn and from the idle loop, so it never waits on a keypress) */
+extern "C" void vulture_music_poll(void)
+{
+	if (vmz_pending < 0 || !vulture_sound_inited || vmz_silenced)
+		return;
+	if (Mix_PlayingMusic())
+		return; /* still fading out */
+	{
+		int z = vmz_pending;
+
+		vmz_pending = -1;
+		vmz_start(z);
+	}
 }
 
 extern "C" void vulture_music_zone(int zone)
@@ -316,7 +333,18 @@ extern "C" void vulture_music_zone(int zone)
 		zone = VMZ_DUNGEON;
 	if (zone != vmz_zone) {
 		vmz_zone = zone;
-		vmz_start(zone);
+		/* s111: fade the old track out, THEN fade the new one in (it used
+		   to be cut dead) - battle music still cuts in fast */
+		if (Mix_PlayingMusic()) {
+			vmz_pending = zone;
+			if (Mix_FadingMusic() != MIX_FADING_OUT)
+				Mix_FadeOutMusic(zone == VMZ_BATTLE ? 350 : 1100);
+		} else {
+			vmz_pending = -1;
+			vmz_start(zone);
+		}
+	} else if (vmz_pending >= 0) {
+		vulture_music_poll();
 	} else if (!Mix_PlayingMusic()) {
 		vmz_start(zone); /* calm track ended: next one */
 	}
