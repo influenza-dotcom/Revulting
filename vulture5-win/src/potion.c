@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 staticfn long itimeout(long);
 staticfn long itimeout_incr(long, int);
@@ -618,6 +619,7 @@ int
 dopotion(struct obj *otmp)
 {
     vulture_sfx("gulp"); /* Vulture s80: action sound */
+    vulture_bark(VB_DRINK); /* s113 */
     int retval;
 
     otmp->in_use = TRUE;

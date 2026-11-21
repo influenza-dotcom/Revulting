@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 #ifndef LONG_MAX
 #include <limits.h>
 #endif
@@ -358,6 +359,7 @@ pluslvl(
 
             Sprintf(tb, "Experience level %d", u.ulevel);
             vulture_toast("LEVEL UP", tb);
+            vulture_bark(VB_LEVELUP); /* s113 */
         }
         adjabil(u.ulevel - 1, u.ulevel); /* give new intrinsics */
         SoundAchievement(0, sa2_xplevelup, 0);

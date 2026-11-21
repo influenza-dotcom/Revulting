@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 #define Your_Own_Role(mndx)  ((mndx) == gu.urole.mnum)
 #define Your_Own_Race(mndx)  ((mndx) == gu.urace.mnum)
@@ -2195,6 +2196,7 @@ seffects(
     struct obj *sobj) /* sobj - scroll or fake spellbook for spell */
 {
     vulture_sfx("read"); /* Vulture s80: action sound */
+    vulture_bark(VB_READ); /* s113 */
     int otyp = sobj->otyp;
 
     if (objects[otyp].oc_magic)

@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 /* Disintegration rays have special treatment; corpses are never left.
  * But the routine which calculates the damage is separate from the routine
@@ -3431,6 +3432,7 @@ void
 weffects(struct obj *obj)
 {
     vulture_sfx("zap"); /* Vulture s80: action sound */
+    vulture_bark(VB_ZAP); /* s113 */
     int otyp = obj->otyp;
     boolean disclose = FALSE, was_unkn = !objects[otyp].oc_name_known;
 

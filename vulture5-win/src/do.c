@@ -6,6 +6,7 @@
 /* Contains code for 'd', 'D' (drop), '>', '<' (up, down) */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 staticfn boolean teleport_sink(void);
 staticfn void dosinkring(struct obj *);
@@ -1670,8 +1671,10 @@ goto_level(
     boolean falling,   /* when falling to level, objects might tag along */
     boolean portal)    /* True if arriving via magic portal */
 {
-    if (at_stairs)
+    if (at_stairs) {
         vulture_sfx("stairs"); /* Vulture s80 */
+        vulture_bark(depth(newlevel) > depth(&u.uz) ? VB_DESCEND : VB_ASCEND); /* s113 */
+    }
     else if (falling)
         vulture_sfx("fall");
     int l_idx, save_mode;

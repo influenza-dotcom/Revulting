@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 /* KMH -- Differences between the three weapon slots.
  *
@@ -170,6 +171,7 @@ ready_weapon(struct obj *wep)
 {
     if (wep)
         vulture_sfx("wield"); /* Vulture s80: action sound */
+        vulture_bark(VB_WIELD); /* s113 */
     /* Separated function so swapping works easily */
     int res = ECMD_OK;
     boolean was_twoweap = u.twoweap, had_wep = (uwep != 0);

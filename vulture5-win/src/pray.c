@@ -3,6 +3,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 staticfn int prayer_done(void);
 staticfn void maybe_turn_mon_iter(struct monst *);
@@ -2224,6 +2225,7 @@ dopray(void)
     }
 
     vulture_sfx("pray"); /* Vulture s80: action sound */
+    vulture_bark(VB_PRAY); /* s113 */
     if (!u.uconduct.gnostic++)
         /* breaking conduct should probably occur in can_pray() at
          * "You begin praying to %s", as demons who find praying repugnant

@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 static const char brief_feeling[] =
     "have a %s feeling for a moment, then it passes.";
@@ -566,6 +567,7 @@ do_attack(struct monst *mtmp)
         extern void vulture_anim_attack(int, int, int, int);
 
         vulture_anim_attack(u.ux, u.uy, mtmp->mx, mtmp->my); /* s78 */
+        vulture_bark(VB_ATTACK); /* s113 */
     }
     if (Upolyd)
         (void) hmonas(mtmp);

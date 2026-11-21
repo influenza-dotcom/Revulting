@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 #include "mfndpos.h"
 
 staticfn void pet_sanity_check(struct monst *, const char *);
@@ -3502,6 +3503,8 @@ xkilled(
             nocorpse = (xkill_flags & XKILL_NOCORPSE) != 0,
             noconduct = (xkill_flags & XKILL_NOCONDUCT) != 0;
 
+    if (!mtmp->mtame && !mtmp->mpeaceful)
+        vulture_bark(VB_KILL); /* Vulture s113 */
     /* potential pet message; always clear global flag */
     be_sad = iflags.sad_feeling;
     iflags.sad_feeling = FALSE;

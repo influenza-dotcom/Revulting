@@ -6,6 +6,7 @@
 /* various code that was replicated in *main.c */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 #ifndef NO_SIGNAL
 #include <signal.h>
@@ -852,6 +853,18 @@ vulture_qol_pass(void)
                                    dmg * 4 >= hpmax ? 2
                                    : dmg * 10 >= hpmax ? 1 : 0);
             }
+        }
+        /* s113: barks when HP first drops under a third, or hunger sets in */
+        if (last_hp >= 0 && hp > 0 && hpmax > 0 && hp * 3 < hpmax
+            && last_hp * 3 >= hpmax)
+            vulture_bark(VB_LOWHP);
+        {
+            static int last_uhs = -1;
+
+            if (last_uhs >= 0 && u.uhs > last_uhs && u.uhs >= HUNGRY
+                && u.uhs <= WEAK)
+                vulture_bark(VB_HUNGRY);
+            last_uhs = u.uhs;
         }
         last_hp = hp, last_hpmax = hpmax;
         last_poly = Upolyd ? TRUE : FALSE;

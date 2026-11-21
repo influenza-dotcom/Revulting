@@ -1004,7 +1004,7 @@ struct vfx_ent {
     int kind;                 /* 1 number, 2 blood, 3 click marker (s108) */
     int x, y;                 /* map square */
     Uint32 t0, dur;
-    char txt[16];
+    char txt[40]; /* s113: room for a bark line */
     Uint8 r, g, b;
     float vx[10], vy[10];
 };
@@ -1229,43 +1229,103 @@ vfx_draw_click(const vfx_ent &e, double age, int sx, int sy)
     }
 }
 
-/* s109: Dota-style acknowledgement - the hero barks "Mhm." / "Moving!"
-   when told to move (not every click: a cooldown and a coin flip), spoken
-   with the voices option and shown as a line above their head */
-static const char *const vbark_lines[] = {
-    "Mhm.", "Moving!", "On my way.", "Going.", "Right.", "Yep.", "Okay.",
-    "Heading there.", "As you say.", "Understood.", "On it.", "Moving out.",
-    "Aye.", "Fine, fine.", "Let's go.", "Sure.", "Got it.", "Going there.",
-};
+/* s109/s113: Dota-style barks - the hero says a short line for what
+   they're doing (vulture_bark.h).  Each kind has its own lines, a chance
+   and a cooldown; chatty kinds also share a global cooldown so the hero
+   never rattles on.  Shown above their head; spoken with `voices`. */
+#include "vulture_bark.h"
 extern "C" void vulture_tts_speak(const char *, int, int, int);
+
+struct vbark_kind {
+    int chance;          /* percent */
+    Uint32 gap;          /* ms since this kind last spoke */
+    bool urgent;         /* ignores the shared cooldown */
+    const char *lines[10];
+};
+static const vbark_kind vbark_tab[VB_COUNT] = {
+    /* MOVE */    { 55, 3500, false, { "Mhm.", "Moving!", "On my way.", "Going.", "Right.",
+                                       "Heading there.", "On it.", "Aye.", "Got it.", "Let's go." } },
+    /* ATTACK */  { 35, 4000, false, { "Have at you!", "Attacking!", "Die!", "Take that!",
+                                       "For glory!", "Back off!", "Hyah!", "Come on, then!" } },
+    /* KILL */    { 60, 2500, false, { "Got 'em.", "Down you go.", "Next!", "That's one.",
+                                       "Too easy.", "Stay down.", "Hah!", "Rest now." } },
+    /* PICKUP */  { 35, 5000, false, { "Mine.", "Ooh.", "That'll do.", "Useful.", "Shiny.",
+                                       "Into the pack.", "Don't mind if I do." } },
+    /* DESCEND */ { 80, 2000, true,  { "Going down.", "Deeper we go.", "Down the stairs.",
+                                       "Into the dark.", "Lower still." } },
+    /* ASCEND */  { 80, 2000, true,  { "Going up.", "Back up.", "Up we go.", "Fresh air, maybe." } },
+    /* CAST */    { 40, 4000, false, { "By my will!", "Magic!", "Let it burn!", "Behold!",
+                                       "Arcane might!", "Hear me!" } },
+    /* NOMANA */  { 100, 1500, true, { "Not enough mana!", "I need more power.",
+                                       "My magic's spent.", "Not enough energy!" } },
+    /* DOOR */    { 25, 6000, false, { "Open sesame.", "After me.", "Door's open." } },
+    /* LOCKED */  { 90, 2500, true,  { "Locked.", "It won't budge.", "Locked tight.",
+                                       "Need a key for this." } },
+    /* EAT */     { 50, 5000, false, { "Mm, food.", "Dinner time.", "Better than nothing.",
+                                       "Chew, chew..." } },
+    /* DRINK */   { 50, 5000, false, { "Bottoms up.", "Here goes.", "Cheers.", "Hope this is good." } },
+    /* READ */    { 45, 5000, false, { "Let's see...", "What's this say?", "Words of power.",
+                                       "Reading it." } },
+    /* PRAY */    { 70, 4000, true,  { "Hear me!", "A little help?", "Please...",
+                                       "Grant me aid!" } },
+    /* LEVELUP */ { 100, 1000, true, { "I feel stronger!", "Getting better.", "Power!",
+                                       "Level up!", "Stronger now." } },
+    /* LOWHP */   { 100, 8000, true, { "I need healing!", "I'm hurt bad!", "Not like this...",
+                                       "Ugh... careful.", "I can't take much more!" } },
+    /* HUNGRY */  { 100, 8000, true, { "I'm starving.", "Need to eat.", "So hungry...",
+                                       "My stomach's growling." } },
+    /* WEAR */    { 30, 6000, false, { "Suits me.", "Snug.", "Better protected." } },
+    /* WIELD */   { 40, 5000, false, { "Ready.", "This'll do.", "Armed." } },
+    /* THROW */   { 25, 5000, false, { "Catch!", "Heads up!", "Fore!" } },
+    /* ZAP */     { 35, 5000, false, { "Zap!", "Let's see what this does.", "Fire!" } },
+};
+static Uint32 vbark_kind_last[VB_COUNT];
+static int vbark_kind_prev[VB_COUNT] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                                         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 static Uint32 vbark_last = 0;
-static int vbark_prev = -1;
+
+extern "C" void
+vulture_bark(int kind)
+{
+    Uint32 now = SDL_GetTicks();
+    const vbark_kind *bk;
+    int n, k;
+    vfx_ent e;
+
+    if (kind < 0 || kind >= VB_COUNT || !levwin || vulture_windows_inited != TRUE)
+        return;
+    bk = &vbark_tab[kind];
+    if (Hallucination || Strangled || u.uswallow || Underwater
+        || program_state.gameover)
+        return;
+    if (vbark_kind_last[kind] && now - vbark_kind_last[kind] < bk->gap)
+        return;
+    if (!bk->urgent && vbark_last && now - vbark_last < 2500)
+        return;
+    if (rn2(100) >= bk->chance)
+        return;
+    for (n = 0; n < 10 && bk->lines[n]; n++)
+        ;
+    if (!n)
+        return;
+    do
+        k = rn2(n);
+    while (k == vbark_kind_prev[kind] && n > 1);
+    vbark_kind_prev[kind] = k;
+    vbark_kind_last[kind] = vbark_last = now;
+    memset(&e, 0, sizeof e);
+    e.kind = 4, e.x = u.ux, e.y = u.uy, e.t0 = now, e.dur = 1400;
+    snprintf(e.txt, sizeof e.txt, "%s", bk->lines[k]);
+    e.r = 245, e.g = 240, e.b = 220;
+    vfx_list.push_back(e);
+    if (iflags.voices && !Deaf)
+        vulture_tts_speak(bk->lines[k], flags.female ? 1 : 0, 0, 1);
+}
 
 static void
 vbark_move(void)
 {
-    Uint32 now = SDL_GetTicks();
-    int n = (int) (sizeof vbark_lines / sizeof vbark_lines[0]), k;
-    vfx_ent e;
-
-    if (vbark_last && now - vbark_last < 3500)
-        return;
-    if (rn2(100) >= 55 || Hallucination || Strangled || u.uswallow
-        || Underwater)
-        return;
-    vbark_last = now;
-    do
-        k = rn2(n);
-    while (k == vbark_prev && n > 1);
-    vbark_prev = k;
-    memset(&e, 0, sizeof e);
-    e.kind = 4, e.x = u.ux, e.y = u.uy, e.t0 = now, e.dur = 1300;
-    snprintf(e.txt, sizeof e.txt, "%s", vbark_lines[k]);
-    e.r = 245, e.g = 240, e.b = 220;
-    vfx_list.push_back(e);
-    if (iflags.voices && !Deaf) {
-        vulture_tts_speak(vbark_lines[k], flags.female ? 1 : 0, 0, 1);
-    }
+    vulture_bark(VB_MOVE);
 }
 
 /* called from the map click handler */

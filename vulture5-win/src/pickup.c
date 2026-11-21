@@ -8,6 +8,7 @@
  */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 #define CONTAINED_SYM '>' /* from invent.c */
 
@@ -1931,6 +1932,7 @@ struct obj *
 pick_obj(struct obj *otmp)
 {
     vulture_sfx("pickup"); /* Vulture s80: action sound */
+    vulture_bark(VB_PICKUP); /* s113 */
     struct obj *result;
     coordxy ox, oy;
     boolean robshop, fromfloor = otmp->where == OBJ_FLOOR;

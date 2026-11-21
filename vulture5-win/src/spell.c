@@ -3,6 +3,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 /* spellmenu arguments; 0..n-1 used as svs.spl_book[] index when swapping */
 #define SPELLMENU_DUMP (-3)
@@ -1312,6 +1313,7 @@ spelleffects_check(int spell, int *res, int *energy)
          * isn't now (lost energy when losing levels or polymorphing into
          * new person or had some stripped away by traps or monsters).
          */
+        vulture_bark(VB_NOMANA); /* Vulture s113 */
         You("don't have enough energy to cast that spell%s.",
             (u.uen < u.uenmax) ? "" /* not at full energy => normal message */
             : (*energy > u.uenpeak) ? " yet" /* haven't ever had enough */
@@ -1395,6 +1397,7 @@ spelleffects(int spell_otyp, boolean atme, boolean force)
         return res;
 
     u.uen -= energy;
+    vulture_bark(VB_CAST); /* Vulture s113 */
     disp.botl = TRUE;
     exercise(A_WIS, TRUE);
     /* pseudo is a temporary "false" object containing the spell stats */

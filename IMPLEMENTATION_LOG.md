@@ -2533,6 +2533,27 @@ panel, which moves right to make room (constructor and resize).
 - **If long walks stall again:** set runmode back to teleport (or run) in
   that rc.
 
+## 113. Hero barks for every kind of action (2026-11-20)
+
+include/vulture_bark.h has VB_* kinds; vulture_bark(kind) lives in
+levelwin.cpp (vbark_tab).
+- **Kinds (21):** move, attack, kill, pickup, descend/ascend, cast, no
+  mana, door opens, locked, eat, drink, read, pray, level up, low HP (first
+  drop under 1/3), hunger (gets hungrier to Hungry/Weak), wear, wield,
+  throw, zap.
+- **Per kind:** 3-10 lines, a chance and its own cooldown.
+- **Shared cooldown:** chatty kinds share a 2.5 s cooldown. Urgent kinds
+  (stairs, no mana, locked, pray, level up, low HP, hunger) ignore it.
+- **Delivery:** never the same line twice in a row per kind. Text over the
+  head for 1.4 s (vfx txt grew to 40 chars); spoken with the voices option.
+  Silent while hallucinating, strangled, engulfed, underwater or game over.
+- **Hooks:** the existing s80 action-sound sites, uhitm vulture_anim_attack,
+  mon.c xkilled (not pets or peacefuls), spell.c (cast / not enough energy),
+  lock.c (door opens / locked), do.c goto_level (stairs, up vs down by
+  depth), exper.c pluslvl, allmain.c (low HP, hunger).
+- **Status:** an off-screen game ran 9 s with no crash. Not yet seen or
+  heard on a real display.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

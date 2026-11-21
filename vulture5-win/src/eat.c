@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 staticfn int eatmdone(void);
 staticfn int eatfood(void);
@@ -2022,6 +2023,7 @@ staticfn void
 start_eating(struct obj *otmp, boolean already_partly_eaten)
 {
     vulture_sfx("crunch"); /* Vulture s80: action sound */
+    vulture_bark(VB_EAT); /* s113 */
     const char *old_nomovemsg, *save_nomovemsg;
     static char msgbuf[BUFSZ];
 

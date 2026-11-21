@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 /* occupation callbacks */
 staticfn int picklock(void);
@@ -868,6 +869,7 @@ doopen_indir(coordxy x, coordxy y)
             break;
         default:
             mesg = " is locked";
+            vulture_bark(VB_LOCKED); /* Vulture s113 */
             locked = TRUE;
             break;
         }
@@ -904,6 +906,7 @@ doopen_indir(coordxy x, coordxy y)
     if (rnl(20) < (ACURRSTR + ACURR(A_DEX) + ACURR(A_CON)) / 3) {
         set_msg_xy(cc.x, cc.y);
         pline_The("door opens.");
+        vulture_bark(VB_DOOR); /* Vulture s113 */
         if (door->doormask & D_TRAPPED) {
             b_trapped("door", FINGER);
             door->doormask = D_NODOOR;

@@ -6,6 +6,7 @@
 /* Contains code for 't' (throw) */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 staticfn int throw_obj(struct obj *, int);
 staticfn boolean ok_to_throw(int *);
@@ -1515,6 +1516,7 @@ throwit(
     struct obj *oldslot) /* for thrown-and-return used with !fixinv */
 {
     vulture_sfx("throw"); /* Vulture s80: action sound */
+    vulture_bark(VB_THROW); /* s113 */
     struct monst *mon;
     int range, urange;
     const struct throw_and_return_weapon *arw = autoreturn_weapon(obj);

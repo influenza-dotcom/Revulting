@@ -4,6 +4,7 @@
 /* NetHack may be freely redistributed.  See license for details. */
 
 #include "hack.h"
+#include "vulture_bark.h" /* s113 */
 
 static NEARDATA const char see_yourself[] = "see yourself";
 static NEARDATA const char unknown_type[] = "Unknown type of %s (%d)";
@@ -1780,6 +1781,7 @@ staticfn int
 armor_or_accessory_off(struct obj *obj)
 {
     vulture_sfx("armor"); /* Vulture s80: action sound */
+    vulture_bark(VB_WEAR); /* s113 */
     if (!(obj->owornmask & (W_ARMOR | W_ACCESSORY))) {
         You("are not wearing that.");
         return ECMD_OK;
@@ -2275,6 +2277,7 @@ staticfn int
 accessory_or_armor_on(struct obj *obj)
 {
     vulture_sfx("armor"); /* Vulture s80: action sound */
+    vulture_bark(VB_WEAR); /* s113 */
     long mask = 0L;
     boolean armor, ring, amulet, eyewear;
 
