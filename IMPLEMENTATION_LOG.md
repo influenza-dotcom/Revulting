@@ -2521,6 +2521,18 @@ panel, which moves right to make room (constructor and resize).
 - **Status:** an off-screen game ran 9 s with no crash. Not yet heard or
   seen on a real display.
 
+## 112. Travel animates instead of teleporting (2026-11-20)
+
+- **Tweens:** vulture_tween_run no longer snaps steps of run, travel,
+  auto-explore or counts (s81). Those play a fast tween (vtw_fast: 4
+  frames, 5 ms apart, 2 if frames are slow). A waiting key or click still
+  snaps the step.
+- **Settings:** every hero rc, the default .nethackrc and the release rc
+  went from runmode:teleport (no redraw until travel ends) to runmode:walk.
+  Backups are in %USERPROFILE%\NetHack\backup-2026-11-20-runmode.
+- **If long walks stall again:** set runmode back to teleport (or run) in
+  that rc.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
