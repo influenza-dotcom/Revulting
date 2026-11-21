@@ -1153,6 +1153,7 @@ void vulture_refresh(void)
 extern "C" void vulture_screen_shake(int strength)
 {
 	SDL_Surface *win, *copy, *red;
+	SDL_Rect oldclip;
 	int f, frames = 10, amp; /* s97: 10 frames (was 8) */
 
 	if (!vulture_sdl_window || strength <= 0)
@@ -1160,9 +1161,17 @@ extern "C" void vulture_screen_shake(int strength)
 	win = SDL_GetWindowSurface(vulture_sdl_window);
 	if (!win)
 		return;
+	/* s106: the window surface may BE vulture_screen, still clipped to
+	 * whatever region was drawn last - the red flash (and the shake) then
+	 * covered only that rectangle, a red box on every hit.  Unclip for the
+	 * duration and put the clip back afterwards. */
+	SDL_GetClipRect(win, &oldclip);
+	SDL_SetClipRect(win, NULL);
 	copy = SDL_ConvertSurface(win, win->format, 0);
-	if (!copy)
+	if (!copy) {
+		SDL_SetClipRect(win, &oldclip);
 		return;
+	}
 	red = SDL_CreateRGBSurfaceWithFormat(0, win->w, win->h, 32,
 	                                     SDL_PIXELFORMAT_ARGB8888);
 	if (red) {
@@ -1196,4 +1205,5 @@ extern "C" void vulture_screen_shake(int strength)
 	if (red)
 		SDL_FreeSurface(red);
 	SDL_FreeSurface(copy);
+	SDL_SetClipRect(win, &oldclip);
 }

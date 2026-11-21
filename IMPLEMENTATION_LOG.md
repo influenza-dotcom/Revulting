@@ -2436,6 +2436,15 @@ User: "remove the stupid filter from the last moments thing". The sepia
 SDL_SetSurfaceColorMod in vulture_replay_play is gone, and the frames play
 back as they were drawn.
 
+## 106. Red box on every hit = the hit flash was clipped (2026-11-20)
+
+User: "blood is still momentarily shown as big rectangles after being
+hurt". vulture_screen_shake drew onto the window surface without resetting
+its clip rect. That surface can still be clipped to the last draw region
+(the same trap vulture_sdl.cpp ~415 already unclips for), so the red flash
+and the jolt covered only that rectangle. The shake now saves the clip
+rect, unclips, and restores it at the end. Not yet seen on a real display.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
