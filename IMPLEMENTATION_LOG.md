@@ -2696,6 +2696,14 @@ levelwin.cpp (vbark_tab).
   switches to render scale 2 (the F8 zoomed-out view), debounced to one
   rescale per 350 ms.
 
+### 122. Crisp zoom
+
+- Bilinear scaling at 1.25x/1.75x made the pixel art blurry.
+- The steps are now 1.5x, 2x and 3x:
+  - 2x and 3x use exact nearest-neighbour pixel blocks.
+  - 1.5x uses sharp bilinear: a nearest upscale to 2x, then one small
+    linear step down.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

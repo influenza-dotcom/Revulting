@@ -2830,9 +2830,11 @@ vulture_draw_vignette(int x0, int y0, int w, int h)
  * mapped back through it (mouse_to_map).  Wheeling out past 1x switches
  * to the 2x render scale - the F8 zoomed-out view.
  */
-static const double vzoom_steps[] = { 1.0, 1.25, 1.5, 1.75, 2.0 };
+/* s122: crisp steps - 2x/3x are exact pixel multiples; 1.5x is "sharp
+   bilinear" (nearest up to 2x, then a small smooth step down) */
+static const double vzoom_steps[] = { 1.0, 1.5, 2.0, 3.0 };
 static int vzoom_idx = 0;
-static SDL_Surface *vzoom_buf = NULL;
+static SDL_Surface *vzoom_buf = NULL, *vzoom_big = NULL;
 
 static void
 vzoom_apply(int ax, int ay, int w, int h)
@@ -2852,12 +2854,38 @@ vzoom_apply(int ax, int ay, int w, int h)
             return;
         SDL_SetSurfaceBlendMode(vzoom_buf, SDL_BLENDMODE_NONE);
     }
-    src.w = (int) (w / vzoom), src.h = (int) (h / vzoom);
-    src.x = ax + (w - src.w) / 2, src.y = ay + (h - src.h) / 2;
-    dst.x = 0, dst.y = 0, dst.w = w, dst.h = h;
-    if (SDL_SoftStretchLinear(vulture_screen, &src, vzoom_buf, &dst) != 0
-        && SDL_SoftStretch(vulture_screen, &src, vzoom_buf, &dst) != 0)
-        return;
+    {
+        int k = (int) ceil(vzoom - 1e-6);
+
+        src.w = (int) (w / vzoom), src.h = (int) (h / vzoom);
+        src.x = ax + (w - src.w) / 2, src.y = ay + (h - src.h) / 2;
+        dst.x = 0, dst.y = 0, dst.w = w, dst.h = h;
+        if (fabs(vzoom - k) < 1e-6) {
+            /* exact multiple: nearest neighbour, every pixel a clean block */
+            src.w = w / k, src.h = h / k;
+            src.x = ax + (w - src.w) / 2, src.y = ay + (h - src.h) / 2;
+            dst.w = src.w * k, dst.h = src.h * k;
+            dst.x = (w - dst.w) / 2, dst.y = (h - dst.h) / 2;
+            if (SDL_SoftStretch(vulture_screen, &src, vzoom_buf, &dst) != 0)
+                return;
+        } else {
+            SDL_Rect big;
+
+            big.x = 0, big.y = 0, big.w = src.w * k, big.h = src.h * k;
+            if (!vzoom_big || vzoom_big->w < big.w || vzoom_big->h < big.h
+                || vzoom_big->format->format != vulture_screen->format->format) {
+                if (vzoom_big)
+                    SDL_FreeSurface(vzoom_big);
+                vzoom_big = SDL_CreateRGBSurfaceWithFormat(0, big.w, big.h, 32,
+                                                           vulture_screen->format->format);
+                if (!vzoom_big)
+                    return;
+            }
+            if (SDL_SoftStretch(vulture_screen, &src, vzoom_big, &big) != 0
+                || SDL_SoftStretchLinear(vzoom_big, &big, vzoom_buf, &dst) != 0)
+                return;
+        }
+    }
     dst.x = ax, dst.y = ay;
     SDL_BlitSurface(vzoom_buf, NULL, vulture_screen, &dst);
 }
