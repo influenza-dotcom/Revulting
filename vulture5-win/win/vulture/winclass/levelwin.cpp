@@ -1229,13 +1229,57 @@ vfx_draw_click(const vfx_ent &e, double age, int sx, int sy)
     }
 }
 
+/* s109: Dota-style acknowledgement - the hero barks "Mhm." / "Moving!"
+   when told to move (not every click: a cooldown and a coin flip), spoken
+   with the voices option and shown as a line above their head */
+static const char *const vbark_lines[] = {
+    "Mhm.", "Moving!", "On my way.", "Going.", "Right.", "Yep.", "Okay.",
+    "Heading there.", "As you say.", "Understood.", "On it.", "Moving out.",
+    "Aye.", "Fine, fine.", "Let's go.", "Sure.", "Got it.", "Going there.",
+};
+extern "C" void vulture_tts_speak(const char *, int, int, int);
+static Uint32 vbark_last = 0;
+static int vbark_prev = -1;
+
+static void
+vbark_move(void)
+{
+    Uint32 now = SDL_GetTicks();
+    int n = (int) (sizeof vbark_lines / sizeof vbark_lines[0]), k;
+    vfx_ent e;
+
+    if (vbark_last && now - vbark_last < 3500)
+        return;
+    if (rn2(100) >= 55 || Hallucination || Strangled || u.uswallow
+        || Underwater)
+        return;
+    vbark_last = now;
+    do
+        k = rn2(n);
+    while (k == vbark_prev && n > 1);
+    vbark_prev = k;
+    memset(&e, 0, sizeof e);
+    e.kind = 4, e.x = u.ux, e.y = u.uy, e.t0 = now, e.dur = 1300;
+    snprintf(e.txt, sizeof e.txt, "%s", vbark_lines[k]);
+    e.r = 245, e.g = 240, e.b = 220;
+    vfx_list.push_back(e);
+    if (iflags.voices && !Deaf) {
+        vulture_tts_speak(vbark_lines[k], flags.female ? 1 : 0, 0, 1);
+    }
+}
+
 /* called from the map click handler */
 static void
 vfx_click_at(int x, int y)
 {
+    bool attack;
+
     if (!isok(x, y) || u_at(x, y) || !levl[x][y].seenv)
         return;
-    vfx_click(x, y, glyph_is_monster(glyph_at(x, y)) || glyph_is_invisible(glyph_at(x, y)));
+    attack = glyph_is_monster(glyph_at(x, y)) || glyph_is_invisible(glyph_at(x, y));
+    vfx_click(x, y, attack);
+    if (!attack)
+        vbark_move(); /* s109 */
 }
 
 static void
@@ -1272,6 +1316,16 @@ vfx_draw(int cx, int cy, int vx, int vy)
         if (age < 1.0 && e.kind == 3) { /* s108 */
             vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
             vfx_draw_click(e, age, sx, sy);
+            continue;
+        }
+        if (age < 1.0 && e.kind == 4) { /* s109: a bark over the hero's head */
+            int tw = vulture_text_length(V_FONT_SMALL, e.txt);
+
+            vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &sx, &sy);
+            vulture_put_text_shadow(V_FONT_SMALL, e.txt, vulture_screen,
+                                    sx - tw / 2, sy - 104 - (int) (8 * age),
+                                    SDL_MapRGB(vulture_screen->format, e.r, e.g, e.b),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
             continue;
         }
         if (age >= 1.0)
@@ -2044,18 +2098,8 @@ vhud_draw(int cx, int cy, int vx, int vy, int x0, int y0, int w, int h)
             sy -= 46 + (int) (5 * sin(now / 260.0)); /* float above the tile */
             if (sx > x0 + margin && sx < x0 + w - margin && sy > y0 + margin
                 && sy < y0 + h - margin) {
-                /* on screen: a bobbing chevron with a label */
-                for (k = 0; k < 7; k++) {
-                    vfx_dot(sx - 7 + k, sy + k, 2, black);
-                    vfx_dot(sx + 7 - k, sy + k, 2, black);
-                }
-                for (k = 0; k < 7; k++) {
-                    vfx_dot(sx - 7 + k, sy - 1 + k, 2, cyan);
-                    vfx_dot(sx + 7 - k, sy - 1 + k, 2, cyan);
-                }
-                vulture_put_text_shadow(V_FONT_SMALL, lbl, vulture_screen,
-                                        sx - vulture_text_length(V_FONT_SMALL, lbl) / 2,
-                                        sy - 18, cyan, black);
+                /* s109: on screen Vulture's own stair label already says
+                   "Down" - draw nothing (it showed the word twice) */
             } else {
                 /* off screen: clamp to the view edge, arrow pointing at it */
                 int mx = x0 + w / 2, my = y0 + h / 2;

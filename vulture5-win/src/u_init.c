@@ -1134,8 +1134,9 @@ restricted_spell_discipline(int otyp)
 staticfn boolean
 bestroll_active(void)
 {
-    return (boolean) (iflags.bestroll
-                      && (Role_if(PM_TOURIST) || Role_if(PM_WIZARD)));
+    /* s109: every role (was Tourist and Wizard only) - the stats and the
+       quantity/charge/blessing tweaks are all "top of the dice" */
+    return (boolean) iflags.bestroll;
 }
 
 /* init_attr(75) + vary_init_attr() at their ceiling.  init_attr spreads
@@ -1161,8 +1162,26 @@ bestroll_attrs(void)
        Dex 11 Int 14 Wis 11 Cha 11. */
     static const int mel_prio[A_MAX] = { A_CON, A_STR, A_DEX, A_INT,
                                          A_WIS, A_CHA };
+    /* s109: priorities for the other roles */
+    static const int fig_prio[A_MAX] = { A_STR, A_CON, A_DEX, A_WIS,
+                                         A_INT, A_CHA }; /* Bar Cav Kni Sam Val */
+    static const int hea_prio[A_MAX] = { A_WIS, A_CON, A_DEX, A_INT,
+                                         A_STR, A_CHA }; /* Healer */
+    static const int pri_prio[A_MAX] = { A_WIS, A_CON, A_STR, A_DEX,
+                                         A_INT, A_CHA }; /* Priest */
+    static const int mon_prio[A_MAX] = { A_CON, A_STR, A_DEX, A_WIS,
+                                         A_INT, A_CHA }; /* Monk */
+    static const int dex_prio[A_MAX] = { A_DEX, A_CON, A_STR, A_INT,
+                                         A_WIS, A_CHA }; /* Arc Ran Rog */
     const int *prio = iflags.bestroll_melee ? mel_prio
-                      : Role_if(PM_WIZARD) ? wiz_prio : tou_prio;
+                      : Role_if(PM_WIZARD) ? wiz_prio
+                      : Role_if(PM_TOURIST) ? tou_prio
+                      : Role_if(PM_HEALER) ? hea_prio
+                      : Role_if(PM_CLERIC) ? pri_prio
+                      : Role_if(PM_MONK) ? mon_prio
+                      : (Role_if(PM_ARCHEOLOGIST) || Role_if(PM_RANGER)
+                         || Role_if(PM_ROGUE)) ? dex_prio
+                      : fig_prio;
     int i, a, add, np = 75;
 
     for (i = 0; i < A_MAX; i++) {

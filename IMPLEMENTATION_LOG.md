@@ -2473,6 +2473,30 @@ Left-clicking a seen map square (not your own) spawns vfx kind 3
 - **Test:** an off-screen game ran 8 s with no crash. The marker hasn't
   been watched on a real display.
 
+## 109. Real red-box fix; move barks; best roll everywhere; one "Down" (2026-11-20)
+
+- **Red boxes:** the s106 unclip was not the cause. SDL_ConvertSurface
+  gives the shake's frame copy BLEND mode (its format has alpha), so each
+  shake frame alpha-blended the copy onto the window. Pixels where blood
+  left partial alpha soaked up the red flash and showed as solid red
+  rectangles until the next full redraw. The copy is now
+  SDL_BLENDMODE_NONE.
+- **Move barks** (vbark_move): on a left-click move, the hero barks a short
+  line from 18 ("Mhm.", "Moving!", "On my way."...).
+  - Throttle: 3.5 s cooldown, a 55% chance, never the same line twice in a
+    row.
+  - Text above the hero's head (vfx kind 4) for 1.3 s; spoken via
+    vulture_tts_speak with the voices option unless Deaf.
+- **Best roll for every role:** bestroll_active is just iflags.bestroll.
+  bestroll_attrs has priorities for fighters, Healer, Priest, Monk and
+  Arc/Ran/Rog.
+  - Main menu toggle [o] "Best starting roll for new heroes: ON/OFF"
+    (this session; the rc sets the default).
+  - mm_new_hero asks for it, defaulting to the current state.
+- **Waypoint:** on screen it draws nothing, because Vulture's stair label
+  already says "Down". The off-screen edge arrow stays.
+- **Status:** none of these have been seen on a real display.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

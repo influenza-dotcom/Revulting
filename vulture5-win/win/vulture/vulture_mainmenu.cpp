@@ -989,6 +989,10 @@ bool mm_new_hero(void)
     /* s103: a new hero chooses whether to bring a pet (your role's usual
        kitten / little dog / pony, or a pettype: from the settings) */
     if (!resuming) {
+        /* s109: best possible stats and starting kit, within the dice */
+        iflags.bestroll = vulture_yn_function(
+                              "Best possible starting roll (top stats and kit)?",
+                              "yn", iflags.bestroll ? 'y' : 'n') == 'y';
         if (mm_yes("Start with a pet?"))
             gp.preferred_pet = (gp.preferred_pet == 'n') ? '\0' : gp.preferred_pet;
         else
@@ -1201,7 +1205,7 @@ void mm_guidebook(void)
 
 enum {
     MM_CONTINUE = 1, MM_LOAD, MM_ROSTER, MM_NEW, MM_SCORES, MM_GRAVE,
-    MM_BACKUPS, MM_GUIDE, MM_QUIT, MM_HEARSE
+    MM_BACKUPS, MM_GUIDE, MM_QUIT, MM_HEARSE, MM_BESTROLL
 };
 
 } /* namespace */
@@ -1251,6 +1255,8 @@ extern "C" void vulture_main_menu(int launched_with_rc)
         mm_item(w, MM_SCORES, 'h', "High scores");
         mm_item(w, MM_GRAVE, 'p', "Past games (dumplogs)");
         mm_item(w, MM_BACKUPS, 'b', "Save backups...");
+        mm_item(w, MM_BESTROLL, 'o', std::string("Best starting roll for new heroes: ")
+                                        + (iflags.bestroll ? "ON" : "OFF"));
         mm_item(w, MM_HEARSE, 'e', "Hearse: share bones with other players...");
         mm_item(w, MM_GUIDE, 'g', "Read the Guidebook");
         mm_text(w, "");
@@ -1294,6 +1300,9 @@ extern "C" void vulture_main_menu(int launched_with_rc)
             break;
         case MM_HEARSE:
             mm_hearse(); /* s104 */
+            break;
+        case MM_BESTROLL: /* s109: for this session; rc sets the default */
+            iflags.bestroll = !iflags.bestroll;
             break;
         case MM_QUIT:
             mm_drop_backdrop();

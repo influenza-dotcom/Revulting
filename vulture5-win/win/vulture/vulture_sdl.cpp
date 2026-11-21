@@ -1172,6 +1172,12 @@ extern "C" void vulture_screen_shake(int strength)
 		SDL_SetClipRect(win, &oldclip);
 		return;
 	}
+	/* s109: copy it back OPAQUE.  SDL gives a converted surface with an
+	 * alpha channel BLEND mode, so the frame was alpha-blended onto itself
+	 * each shake frame: everywhere blood had left partial alpha (the stain
+	 * and droplet rectangles) soaked up the red flash and showed as solid
+	 * red boxes until the next full redraw. */
+	SDL_SetSurfaceBlendMode(copy, SDL_BLENDMODE_NONE);
 	red = SDL_CreateRGBSurfaceWithFormat(0, win->w, win->h, 32,
 	                                     SDL_PIXELFORMAT_ARGB8888);
 	if (red) {
