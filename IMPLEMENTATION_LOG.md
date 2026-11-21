@@ -2886,6 +2886,58 @@ What was built:
 - **Auto actions:** amove_go, rest_start, rest_done.
 - **HUD:** rustle for the ground card, card_whoosh for the level title.
 
+### 132. More SFX (second batch)
+
+- 22 more synthesized effects (toolchain/make_sfx2.py).
+- **Melee:** swing1-3, a whoosh on every lunge (vulture_anim_attack).
+- **Spell schools:** cast_attack / heal / div / ench / cler / escape /
+  matter, played in spelleffects by spell_skilltype.
+- **Pick-up by kind (pick_obj):**
+  - coins
+  - pk_potion: clink
+  - pk_scroll: paper
+  - pk_weapon: metal ring
+  - pk_armor: clank
+  - pk_gem: click, also rings and amulets
+  - pk_food
+- **Message-triggered (vulture_sounds.conf, game and release copies):**
+  - fizzle: "fail to cast"
+  - squeak: squeaky board
+  - snap: bear trap
+  - teleport: "wrenching sensation"
+  - dart_thunk: dart and arrow traps
+  - glass: "shatter"
+  - bell: a shopkeeper's "Welcome to"
+
+### 133. Dynamic lighting
+
+- **Light levels (vl_compute):** a per-square light level.
+  - Base: lit and in view 0.93, dark and in view 0.38, remembered 0.50,
+    unknown 0.
+  - Added on top:
+    - every visible light source from gl.light_base, flickering: objects
+      warm amber, monsters pale gold
+    - lava (orange, slow pulse)
+    - squares holding a zap or explosion glyph (MAP_SPECIAL, cool white)
+    - the hero's own faint glow
+    - decaying flashes (vl_flash: impact bursts)
+  - Each source adds (1 - d/(r+1))^2 falloff, only through clear_path and
+    only onto squares you've seen.
+- **Overlay (vl_render):** sampled at 1/4 resolution in map space through
+  the inverse projection and view rotation, bilinear between square
+  centres. It's turned into a darkness + colour-tint ARGB layer,
+  stretched with SoftStretchLinear and blended over the map.
+  - Drawn under the s86 glows, vfx, markers and HUD, and before the zoom,
+    so it scales with the map.
+- **Cost:** about 4.8 ms per rebuild at 800x600.
+  - The layer is cached with a 96 px margin and slides with the camera
+    during glides.
+  - It rebuilds at most every 90 ms (flicker), or when the
+    view/hero/turn/rotation/size changes, or while a flash is live.
+- **Toggle:** F9.
+- **Probe:** VULTURE_SELFTEST_DARK=1 (with VULTURE_SELFTEST) unlights the
+  level and fires a flash for screenshots.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -1398,6 +1398,15 @@ spelleffects(int spell_otyp, boolean atme, boolean force)
 
     u.uen -= energy;
     vulture_bark(VB_CAST); /* Vulture s113 */
+    { /* Vulture s132: each school of magic has its own sound */
+        static const char *const school[] = { "cast_attack", "cast_heal", "cast_div",
+                                              "cast_ench", "cast_cler", "cast_escape",
+                                              "cast_matter" };
+        int sk = spell_skilltype(spell_otyp) - P_ATTACK_SPELL;
+
+        if (sk >= 0 && sk < SIZE(school))
+            vulture_sfx(school[sk]);
+    }
     disp.botl = TRUE;
     exercise(A_WIS, TRUE);
     /* pseudo is a temporary "false" object containing the spell stats */

@@ -1931,7 +1931,36 @@ pickup_object(
 struct obj *
 pick_obj(struct obj *otmp)
 {
-    vulture_sfx("pickup"); /* Vulture s80: action sound */
+    /* Vulture s80: action sound; s132: by what it is */
+    switch (otmp->oclass) {
+    case COIN_CLASS:
+        vulture_sfx("coins");
+        break;
+    case POTION_CLASS:
+        vulture_sfx("pk_potion");
+        break;
+    case SCROLL_CLASS:
+    case SPBOOK_CLASS:
+        vulture_sfx("pk_scroll");
+        break;
+    case WEAPON_CLASS:
+        vulture_sfx("pk_weapon");
+        break;
+    case ARMOR_CLASS:
+        vulture_sfx("pk_armor");
+        break;
+    case GEM_CLASS:
+    case RING_CLASS:
+    case AMULET_CLASS:
+        vulture_sfx("pk_gem");
+        break;
+    case FOOD_CLASS:
+        vulture_sfx("pk_food");
+        break;
+    default:
+        vulture_sfx("pickup");
+        break;
+    }
     vulture_bark(VB_PICKUP); /* s113 */
     struct obj *result;
     coordxy ox, oy;

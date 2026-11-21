@@ -760,6 +760,13 @@ vulture_anim_attack(int ax, int ay, int tx, int ty)
     if (abs(ax - tx) > 1 || abs(ay - ty) > 1 || (ax == tx && ay == ty))
         return;
     vanim_ax = ax, vanim_ay = ay, vanim_tx = tx, vanim_ty = ty;
+    { /* s132: a swing you can hear, three variants in turn */
+        static int sw = 0;
+        static const char *const nm[3] = { "swing1", "swing2", "swing3" };
+
+        vulture_sfx(nm[sw]);
+        sw = (sw + 1) % 3;
+    }
     vanim_frames(1, 7, 10);
 }
 
@@ -1091,6 +1098,8 @@ static d_level vfx_lev = { -1, -1 };
 
 /* s129: big hits freeze the frame for a beat (hit-stop) and burst */
 static int vhitstop_ms = 0;
+static void vl_flash(int x, int y, float r, float g, float b, float inten, float rad,
+                     Uint32 dur); /* s133 */
 
 static void
 vfx_burst(int x, int y, Uint8 r, Uint8 g, Uint8 b)
@@ -1101,6 +1110,7 @@ vfx_burst(int x, int y, Uint8 r, Uint8 g, Uint8 b)
     e.kind = 6, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = 280;
     e.r = r, e.g = g, e.b = b;
     vfx_list.push_back(e);
+    vl_flash(x, y, r / 255.0f, g / 255.0f, b / 255.0f, 0.7f, 2.0f, 300); /* s133 */
 }
 
 static void
@@ -3860,6 +3870,14 @@ vselftest(void)
             vhv = sq;
             vhv_since = SDL_GetTicks() - 1000;
         }
+        if (getenv("VULTURE_SELFTEST_DARK")) { /* probe: unlit level + a flash */
+            for (x = 1; x < COLNO; x++)
+                for (y = 0; y < ROWNO; y++)
+                    levl[x][y].lit = 0;
+            gv.vision_full_recalc = 1;
+            vision_recalc(0);
+            vl_flash(u.ux - 3, u.uy, 1.0f, 0.6f, 0.3f, 0.9f, 2.5f, 60000);
+        }
         lines.push_back("a +0 dagger");
         lines.push_back("2 uncursed food rations");
         lines.push_back("a scroll labeled ELBIB YLOH");
@@ -4410,6 +4428,245 @@ vmp_mark(int cx, int cy, int vx, int vy)
 }
 
 /*
+ * IMPLEMENTATION_LOG s133: dynamic lighting.
+ * Every square gets a light level: lit rooms are bright, dark ground you
+ * can see is dim, remembered ground a little dim; then each light source
+ * the hero can see (lamps, candles, glowing monsters, Sunsword...), lava,
+ * the hero's own faint glow and short-lived flashes (zaps, explosions, big
+ * hits) add soft pools of coloured light that respect walls (clear_path)
+ * and flicker.  The level is sampled at 1/4 resolution in MAP space
+ * (bilinear between square centres, so pools are smooth, not square),
+ * stretched up and laid over the map as a darkness + tint layer, under
+ * the glows, markers and UI.  F9 toggles it.
+ */
+static bool vl_on = true;
+static float vl_L[ROWNO][COLNO], vl_R[ROWNO][COLNO], vl_G[ROWNO][COLNO], vl_B[ROWNO][COLNO];
+static SDL_Surface *vl_low = NULL, *vl_full = NULL;
+struct vl_flash_t {
+    int x, y;
+    Uint32 t0, dur;
+    float r, g, b, inten, rad;
+};
+static std::vector<vl_flash_t> vl_flashes;
+
+static void
+vl_flash(int x, int y, float r, float g, float b, float inten, float rad, Uint32 dur)
+{
+    vl_flash_t f;
+
+    f.x = x, f.y = y, f.t0 = SDL_GetTicks(), f.dur = dur;
+    f.r = r, f.g = g, f.b = b, f.inten = inten, f.rad = rad;
+    if (vl_flashes.size() < 32)
+        vl_flashes.push_back(f);
+}
+
+static void
+vl_add(int cx, int cy, double radius, double inten, double r, double g, double b)
+{
+    int x, y, R = (int) radius + 1;
+
+    for (y = cy - R; y <= cy + R; y++)
+        for (x = cx - R; x <= cx + R; x++) {
+            double d, k, f;
+
+            if (!isok(x, y) || !levl[x][y].seenv) /* light only lands on known ground */
+                continue;
+            d = sqrt((double) ((x - cx) * (x - cx) + (y - cy) * (y - cy)));
+            k = 1.0 - d / (radius + 1.0);
+            if (k <= 0)
+                continue;
+            if ((x != cx || y != cy) && !clear_path(cx, cy, x, y))
+                continue;
+            f = inten * k * k;
+            vl_L[y][x] += (float) f;
+            vl_R[y][x] += (float) (f * r);
+            vl_G[y][x] += (float) (f * g);
+            vl_B[y][x] += (float) (f * b);
+        }
+}
+
+static void
+vl_compute(mapdata *md)
+{
+    int x, y;
+    double t = SDL_GetTicks() / 1000.0;
+    light_source *ls;
+    Uint32 now = SDL_GetTicks();
+    size_t i, n = 0;
+
+    for (y = 0; y < ROWNO; y++)
+        for (x = 1; x < COLNO; x++) {
+            float base;
+
+            if (!levl[x][y].seenv)
+                base = 0.0f;
+            else if (cansee(x, y))
+                base = levl[x][y].lit ? 0.93f : 0.38f;
+            else
+                base = 0.50f; /* remembered, out of sight */
+            vl_L[y][x] = base;
+            vl_R[y][x] = vl_G[y][x] = vl_B[y][x] = base;
+        }
+    for (ls = gl.light_base; ls; ls = ls->next) {
+        double fl;
+
+        if (!isok(ls->x, ls->y) || ls->range <= 0)
+            continue;
+        if (!cansee(ls->x, ls->y) && !u_at(ls->x, ls->y))
+            continue;
+        /* flames flicker: two sines out of step plus a little jitter */
+        fl = 0.86 + 0.08 * sin(t * 9.0 + ls->x * 1.7 + ls->y * 2.3)
+             + 0.05 * sin(t * 23.0 + ls->x) + 0.02 * ((rand() % 100) / 100.0);
+        if (ls->type == LS_OBJECT)
+            vl_add(ls->x, ls->y, ls->range + 0.8, 0.85 * fl, 1.0, 0.72, 0.42);
+        else
+            vl_add(ls->x, ls->y, ls->range + 0.8, 0.75 * fl, 1.0, 0.9, 0.65);
+    }
+    for (y = 0; y < ROWNO; y++)
+        for (x = 1; x < COLNO; x++) {
+            int g;
+
+            if (!cansee(x, y))
+                continue;
+            g = glyph_at(x, y);
+            if (glyph_is_cmap(g) && (glyph_to_cmap(g) == S_lava || glyph_to_cmap(g) == S_lavawall))
+                vl_add(x, y, 2.2, 0.45 + 0.08 * sin(t * 2.5 + x * 0.9 + y * 1.3), 1.0, 0.42, 0.12);
+            if (md && md->get_glyph(MAP_SPECIAL, x, y) != V_TILE_NONE) /* zap / explosion */
+                vl_add(x, y, 2.5, 0.9, 0.85, 0.9, 1.0);
+        }
+    if (u.ux)
+        vl_add(u.ux, u.uy, 1.6, 0.30, 1.0, 0.95, 0.85); /* you can always see yourself */
+    for (i = 0; i < vl_flashes.size(); i++) {
+        vl_flash_t &f = vl_flashes[i];
+        double age = (double) (now - f.t0) / f.dur;
+
+        if (age >= 1.0)
+            continue;
+        vl_add(f.x, f.y, f.rad, f.inten * (1.0 - age) * (1.0 - age), f.r, f.g, f.b);
+        vl_flashes[n++] = f;
+    }
+    vl_flashes.resize(n);
+}
+
+/* bilinear light at fractional map position */
+static void
+vl_sample(double mx, double my, float *L, float *r, float *g, float *b)
+{
+    int x0 = (int) floor(mx), y0 = (int) floor(my), k;
+    double fx = mx - x0, fy = my - y0;
+    float acc[4] = { 0, 0, 0, 0 };
+
+    for (k = 0; k < 4; k++) {
+        int x = x0 + (k & 1), y = y0 + (k >> 1);
+        double w = ((k & 1) ? fx : 1 - fx) * ((k >> 1) ? fy : 1 - fy);
+
+        if (x < 1 || x >= COLNO || y < 0 || y >= ROWNO)
+            continue;
+        acc[0] += (float) (w * vl_L[y][x]);
+        acc[1] += (float) (w * vl_R[y][x]);
+        acc[2] += (float) (w * vl_G[y][x]);
+        acc[3] += (float) (w * vl_B[y][x]);
+    }
+    *L = acc[0], *r = acc[1], *g = acc[2], *b = acc[3];
+}
+
+static void
+vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, int h)
+{
+    extern int vulture_render_scale;
+    static int c_cx, c_cy, c_vx = -99, c_vy, c_ux, c_uy, c_rot, c_w, c_h;
+    static long c_moves = -1;
+    static Uint32 c_when = 0;
+    int FS = 4 * (vulture_render_scale > 0 ? vulture_render_scale : 1);
+    int M = 96; /* margin: a cached layer can slide with the camera */
+    int lw, lh, i, j;
+    Uint32 now = SDL_GetTicks();
+    SDL_Rect src, dst;
+
+    if (!vl_on || !u.ux || w < 32 || h < 32 || u.uswallow)
+        return;
+    /* reuse the last layer (shifted with the camera) unless the scene
+       changed or ~90 ms passed (flicker); during a slide, always reuse */
+    if (vl_full && c_vx == vx && c_vy == vy && c_ux == u.ux && c_uy == u.uy
+        && c_moves == svm.moves && c_rot == vulture_view_rot && c_w == w && c_h == h
+        && abs(cx - c_cx) < M && abs(cy - c_cy) < M
+        && (vtw_animating || now - c_when < 90) && vl_flashes.empty()) {
+        dst.x = ax - M + (cx - c_cx), dst.y = ay - M + (cy - c_cy);
+        SDL_BlitSurface(vl_full, NULL, vulture_screen, &dst);
+        return;
+    }
+    c_cx = cx, c_cy = cy, c_vx = vx, c_vy = vy, c_ux = u.ux, c_uy = u.uy;
+    c_moves = svm.moves, c_rot = vulture_view_rot, c_w = w, c_h = h, c_when = now;
+    ax -= M, ay -= M, w += 2 * M, h += 2 * M;
+    lw = w / FS + 2, lh = h / FS + 2;
+    vl_compute(md);
+    if (!vl_low || vl_low->w != lw || vl_low->h != lh) {
+        if (vl_low)
+            SDL_FreeSurface(vl_low);
+        vl_low = SDL_CreateRGBSurfaceWithFormat(0, lw, lh, 32, SDL_PIXELFORMAT_ARGB8888);
+    }
+    if (!vl_full || vl_full->w != w || vl_full->h != h) {
+        if (vl_full)
+            SDL_FreeSurface(vl_full);
+        vl_full = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+        if (vl_full)
+            SDL_SetSurfaceBlendMode(vl_full, SDL_BLENDMODE_BLEND);
+    }
+    if (!vl_low || !vl_full)
+        return;
+    SDL_LockSurface(vl_low);
+    for (j = 0; j < lh; j++) {
+        Uint32 *row = (Uint32 *) ((Uint8 *) vl_low->pixels + j * vl_low->pitch);
+
+        for (i = 0; i < lw; i++) {
+            /* screen -> view -> map (inverse of vfx_square_screen) */
+            double sx = (ax + i * FS - cx) / (double) V_MAP_XMOD;
+            double sy = (ay + j * FS - cy) / (double) V_MAP_YMOD;
+            double a = (sx + sy) / 2.0, b2 = (sy - sx) / 2.0, t;
+            float L, r, g, b, dark, tint, A, cr, cg, cb, mx, mn;
+            int k;
+
+            for (k = vulture_view_rot & 3; k > 0; k--) { /* view -> map */
+                t = a;
+                a = -b2;
+                b2 = t;
+            }
+            vl_sample(vx + a, vy + b2, &L, &r, &g, &b);
+            if (L < 0)
+                L = 0;
+            dark = (1.0f - (L > 1.0f ? 1.0f : L)) * 0.80f;
+            cr = cg = cb = 1.0f;
+            if (L > 0.01f)
+                cr = r / L, cg = g / L, cb = b / L;
+            mx = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
+            mn = cr < cg ? (cr < cb ? cr : cb) : (cg < cb ? cg : cb);
+            tint = (mx - mn) * 0.35f * (L > 1.2f ? 1.2f : L);
+            A = dark + tint * (1.0f - dark);
+            if (A > 0.95f)
+                A = 0.95f;
+            {
+                float s = A > 0.001f ? tint * (1.0f - dark) / A : 0.0f;
+                Uint8 R8 = (Uint8) (255 * (cr / mx) * s), G8 = (Uint8) (255 * (cg / mx) * s),
+                      B8 = (Uint8) (255 * (cb / mx) * s);
+
+                row[i] = ((Uint32) (A * 255) << 24) | ((Uint32) R8 << 16) | ((Uint32) G8 << 8) | B8;
+            }
+        }
+    }
+    SDL_UnlockSurface(vl_low);
+    src.x = 0, src.y = 0, src.w = lw - 1, src.h = lh - 1;
+    dst.x = 0, dst.y = 0, dst.w = (lw - 1) * FS, dst.h = (lh - 1) * FS;
+    if (dst.w > w)
+        dst.w = w;
+    if (dst.h > h)
+        dst.h = h;
+    if (SDL_SoftStretchLinear(vl_low, &src, vl_full, &dst) != 0)
+        return;
+    dst.x = ax, dst.y = ay;
+    SDL_BlitSurface(vl_full, NULL, vulture_screen, &dst);
+}
+
+/*
  * IMPLEMENTATION_LOG s121: mouse-wheel zoom.  Zooming in scales the drawn
  * map up around the window centre (bilinear) just before the vignette and
  * the HUD, so toasts and the interface stay sharp; clicks and hovers are
@@ -4819,6 +5076,8 @@ levelwin::draw()
             }
         }
     }
+    vl_render(map_data, map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
+              this->abs_y, this->w, this->h); /* s133: dynamic lighting */
     vw_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
@@ -5317,6 +5576,12 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
      * clamp.  Same placement rationale as F7 (level window only, so it cannot
      * fire inside a menu or a text prompt; no userconfig rewrite - persistence
      * stays with the Ctrl+Shift+O menu). */
+    case SDLK_F9: /* s133: dynamic lighting on/off */
+        vl_on = !vl_on;
+        pline("Dynamic lighting %s.", vl_on ? "on" : "off");
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+
     /* s86: F11 photo mode - the map without the interface (F12 is
      * Vulture's own full-screen screenshot, caught globally) */
     case SDLK_F11:
