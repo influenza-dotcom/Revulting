@@ -2568,6 +2568,23 @@ levelwin.cpp (vbark_tab).
 - **Limit:** only one female model, so women differ by pitch only. A
   multi-speaker model would fix that.
 
+## 115. Talk to shopkeepers (2026-11-20)
+
+- **Typed talk:** llm_free_talk (#chat with llmtalk) no longer skips
+  shopkeepers. A blank line still gives the stock shk_chat price talk.
+- **Context:** llm_who describes a shopkeeper by name, species and shop
+  type (shtypes), plus a mood from its state:
+  - angry (and robbed);
+  - robbed;
+  - debit owed;
+  - unpaid items carried;
+  - friendly.
+- **Guard:** the prompt says its prices are fixed by the game. It may
+  bargain in words or refuse, but never change a price, give goods away or
+  forgive a debt.
+- **Still excluded:** priests, guards, the Oracle, quest figures and Riders
+  keep their stock behaviour.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

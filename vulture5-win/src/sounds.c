@@ -934,6 +934,41 @@ llm_who(struct monst *mtmp, char *who, size_t whosz)
     const char *attitude = mtmp->mtame ? "the player's pet"
                            : mtmp->mpeaceful ? "peaceful" : "hostile";
 
+    /* s115: shopkeepers - who they are, what they sell, and how they
+       feel about the player (debts, theft, anger) */
+    if (mtmp->isshk && has_eshk(mtmp)) {
+        extern const struct shclass shtypes[];
+        struct eshk *e = ESHK(mtmp);
+        const char *kind = (e->shoptype >= SHOPBASE)
+                               ? shtypes[e->shoptype - SHOPBASE].name
+                               : "shop";
+        char mood[200];
+
+        if (!mtmp->mpeaceful)
+            Snprintf(mood, sizeof mood, "furious with the player%s",
+                     e->robbed ? ", who robbed the shop" : "");
+        else if (e->robbed)
+            Snprintf(mood, sizeof mood,
+                     "suspicious: the player stole %ld zorkmids of goods",
+                     e->robbed);
+        else if (e->debit > 0)
+            Snprintf(mood, sizeof mood,
+                     "polite but watchful: the player owes %ld zorkmids "
+                     "for using unpaid goods", e->debit);
+        else if (e->billct > 0)
+            Snprintf(mood, sizeof mood,
+                     "pleased: the player is carrying %d unpaid item%s",
+                     e->billct, plur(e->billct));
+        else
+            Strcpy(mood, "friendly, hoping to make a sale");
+        Snprintf(who, whosz,
+                 "%s, the %s shopkeeper who runs this %s (a shrewd, proud "
+                 "merchant; %s). Its prices are fixed by the game: it may "
+                 "boast, bargain in words or refuse, but never actually "
+                 "change a price, give goods away or forgive a debt",
+                 shkname(mtmp), species, kind, mood);
+        return;
+    }
     if (has_mgivenname(mtmp))
         Snprintf(who, whosz, "a %s named %s (%s)", species,
                  MGIVENNAME(mtmp), attitude);
@@ -1597,7 +1632,9 @@ llm_free_talk(struct monst *mtmp)
     if (!iflags.llmtalk || !*iflags.llmchat || Hallucination
         || !canspotmon(mtmp) || is_silent(mtmp->data))
         return FALSE;
-    if (mtmp->isshk || mtmp->ispriest || mtmp->isgd || ms == MS_ORACLE
+    /* s115: shopkeepers talk now too (their real buying/selling stays
+       the game's - a blank line is the usual price chat) */
+    if (mtmp->ispriest || mtmp->isgd || ms == MS_ORACLE
         || ms == MS_LEADER || ms == MS_NEMESIS || ms == MS_GUARDIAN
         || ms == MS_RIDER || mtmp->m_id == svq.quest_status.leader_m_id)
         return FALSE;
