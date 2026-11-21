@@ -719,6 +719,20 @@ vulture_qol_pass(void)
             vulture_place_card(TRUE);
         }
     }
+    { /* s116: Discord status - who you are, where, how healthy */
+        extern void vulture_presence(const char *, const char *);
+        char det[128], st[128];
+        const char *role = (flags.female && gu.urole.name.f)
+                               ? gu.urole.name.f : gu.urole.name.m;
+
+        Snprintf(det, sizeof det, "%s the %s %s - XL %d", svp.plname,
+                 gu.urace.adj, role, u.ulevel);
+        Snprintf(st, sizeof st, "%s%s %d - HP %d/%d",
+                 *u.ushops ? "Shopping, " : "",
+                 svd.dungeons[u.uz.dnum].dname, depth(&u.uz),
+                 Upolyd ? u.mh : u.uhp, Upolyd ? u.mhmax : u.uhpmax);
+        vulture_presence(det, st);
+    }
     llm_pet_name_pass(); /* s70: LLM name for an unnamed starting pet */
     llm_hero_quip_pass(); /* s76: the hero remarks on things */
     vulture_replay_capture(); /* s92: a frame for the death-cam */

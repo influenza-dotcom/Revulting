@@ -2585,6 +2585,33 @@ levelwin.cpp (vbark_tab).
 - **Still excluded:** priests, guards, the Oracle, quest figures and Riders
   keep their stock behaviour.
 
+## 116. Discord status, LibriTTS class voices, Steam shortcut tool (2026-11-20)
+
+- **Discord Rich Presence** (NEW win/vulture/vulture_presence.cpp):
+  - Talks to the local Discord client over \.\pipe\discord-ipc-N:
+    handshake, then SET_ACTIVITY frames, on a background thread with at
+    most one update per 15 s.
+  - Shows "Name the Race Role - XL n" / "[Shopping, ]Dungeon depth -
+    HP x/y" plus elapsed time, with large_image key "revulting".
+  - The application ID comes from discord_app_id.txt in the game folder
+    or REVULTING_DISCORD_APP; without one it does nothing.
+  - Fed every turn from vulture_qol_pass (only changes are sent).
+- **LibriTTS voices:** en_US-libritts_r-medium (904 speakers, 75 MB, from
+  rhasspy/piper-voices, user approved) is in piper\voices.
+  - vulture_tts.cpp voice 3 runs piper with --json-input, one
+    {"text","speaker_id"} line per request.
+  - vulture_tts_speak_speaker falls back to the old voice and pitch when
+    the model is missing.
+  - Speakers were sorted by pitch: 91 speakers generated (scratchpad
+    voice_survey.py) and their F0 measured by autocorrelation. Males are
+    97-140 Hz, females 181-251 Hz.
+  - Barks pick one per role and gender (vbark_voice), plus a mild race
+    nudge.
+- **Steam:** toolchain/add_steam_shortcut.py adds Revulting to
+  shortcuts.vdf (binary VDF, latin-1 byte-exact, backed up, idempotent).
+  - It refuses while Steam runs, because Steam rewrites the file.
+  - Dry-run on a copy: the existing entries stay byte-identical.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

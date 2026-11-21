@@ -1236,36 +1236,41 @@ vfx_draw_click(const vfx_ent &e, double age, int sx, int sy)
 #include "vulture_bark.h"
 extern "C" void vulture_tts_speak(const char *, int, int, int);
 extern "C" void vulture_tts_speak_voice(const char *, int, double, int);
+extern "C" void vulture_tts_speak_speaker(const char *, int, double, int, double, int);
 
 /* s114: the hero's bark voice by role and gender (Piper voice + pitch),
    nudged by race - so a Barbarian growls and a Tourist chirps */
 static void
-vbark_voice(int *voice, double *factor)
+vbark_voice(int *voice, double *factor, int *speaker)
 {
-    static const struct { short pm; signed char mv, fv; float mf, ff; } tab[] = {
-        /* role            male voice/pitch  female voice/pitch */
-        { PM_ARCHEOLOGIST, 0, 1, 1.02f, 1.03f },
-        { PM_BARBARIAN,    2, 1, 0.88f, 0.87f },
-        { PM_CAVE_DWELLER, 2, 1, 0.86f, 0.86f },
-        { PM_HEALER,       0, 1, 1.08f, 1.10f },
-        { PM_KNIGHT,       0, 1, 0.94f, 0.95f },
-        { PM_MONK,         0, 1, 1.00f, 1.00f },
-        { PM_CLERIC,       0, 1, 0.97f, 0.97f },
-        { PM_RANGER,       2, 1, 1.04f, 0.98f },
-        { PM_ROGUE,        0, 1, 1.12f, 1.12f },
-        { PM_SAMURAI,      0, 1, 0.91f, 0.92f },
-        { PM_TOURIST,      0, 1, 1.15f, 1.18f },
-        { PM_VALKYRIE,     2, 1, 0.98f, 0.90f },
-        { PM_WIZARD,       0, 1, 1.05f, 1.05f },
+    /* s116: ms/fs = LibriTTS speakers picked by measured pitch (male
+       97-140 Hz, female 181-251 Hz; deep for fighters, high for Tourists) */
+    static const struct { short pm; signed char mv, fv; float mf, ff; short ms, fs; } tab[] = {
+        /* role            male/female voice+pitch (fallback)  speakers */
+        { PM_ARCHEOLOGIST, 0, 1, 1.02f, 1.03f, 520, 290 },
+        { PM_BARBARIAN,    2, 1, 0.88f, 0.87f, 380, 260 },
+        { PM_CAVE_DWELLER, 2, 1, 0.86f, 0.86f, 400, 480 },
+        { PM_HEALER,       0, 1, 1.08f, 1.10f, 330,  10 },
+        { PM_KNIGHT,       0, 1, 0.94f, 0.95f,  90,   0 },
+        { PM_MONK,         0, 1, 1.00f, 1.00f, 410, 860 },
+        { PM_CLERIC,       0, 1, 0.97f, 0.97f, 800, 440 },
+        { PM_RANGER,       2, 1, 1.04f, 0.98f, 700, 710 },
+        { PM_ROGUE,        0, 1, 1.12f, 1.12f,  70,  30 },
+        { PM_SAMURAI,      0, 1, 0.91f, 0.92f, 500, 160 },
+        { PM_TOURIST,      0, 1, 1.15f, 1.18f, 110,  60 },
+        { PM_VALKYRIE,     2, 1, 0.98f, 0.90f,  50,  80 },
+        { PM_WIZARD,       0, 1, 1.05f, 1.05f, 660, 220 },
     };
     size_t i;
     double f = 1.0;
     int v = flags.female ? 1 : 0;
 
+    *speaker = -1;
     for (i = 0; i < sizeof tab / sizeof tab[0]; i++)
         if (Role_if(tab[i].pm)) {
             v = flags.female ? tab[i].fv : tab[i].mv;
             f = flags.female ? tab[i].ff : tab[i].mf;
+            *speaker = flags.female ? tab[i].fs : tab[i].ms;
             break;
         }
     if (Race_if(PM_DWARF))
@@ -1362,11 +1367,20 @@ vulture_bark(int kind)
     e.r = 245, e.g = 240, e.b = 220;
     vfx_list.push_back(e);
     if (iflags.voices && !Deaf) {
-        int voice;
-        double factor;
+        int voice, speaker;
+        double factor, rf;
 
-        vbark_voice(&voice, &factor); /* s114 */
-        vulture_tts_speak_voice(bk->lines[k], voice, factor, flags.female ? 1 : 0);
+        vbark_voice(&voice, &factor, &speaker); /* s114/s116 */
+        /* a real speaker needs only the race nudge; the full factor is
+           for faking voices out of the three single-speaker models */
+        rf = Race_if(PM_DWARF) ? 0.96 : Race_if(PM_ORC) ? 0.95
+             : Race_if(PM_GNOME) ? 1.07 : Race_if(PM_ELF) ? 1.03 : 1.0;
+        if (speaker >= 0)
+            vulture_tts_speak_speaker(bk->lines[k], speaker, rf, voice,
+                                      factor, flags.female ? 1 : 0);
+        else
+            vulture_tts_speak_voice(bk->lines[k], voice, factor,
+                                    flags.female ? 1 : 0);
     }
 }
 

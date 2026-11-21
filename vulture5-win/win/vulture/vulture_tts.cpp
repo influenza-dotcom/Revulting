@@ -39,18 +39,21 @@
 
 struct pp_req {
 	std::string text;
-	int voice;          /* 0 male, 1 female, 2 gruff */
+	int voice;          /* 0 male, 1 female, 2 gruff, 3 libritts (s116) */
 	double factor;      /* playback rate: >1 higher/faster */
+	int speaker;        /* s116: libritts speaker id (voice 3) */
 };
 
-static const char *const pp_voice_file[3] = {
+static const char *const pp_voice_file[4] = {
 	"en_US-ryan-medium.onnx", "en_US-amy-medium.onnx",
-	"en_GB-northern_english_male-medium.onnx"
+	"en_GB-northern_english_male-medium.onnx",
+	"en_US-libritts_r-medium.onnx" /* s116: 904 speakers, optional */
 };
+static bool pp_have_multi = false; /* s116: libritts present */
 static int pp_state = 0;                 /* 0 untried, 1 ok, -1 unavailable */
 static char pp_dir[MAX_PATH], pp_out[MAX_PATH];
-static HANDLE pp_in[3], pp_outp[3];      /* child stdin (write), stdout (read) */
-static bool pp_started[3];
+static HANDLE pp_in[4], pp_outp[4];      /* child stdin (write), stdout (read) */
+static bool pp_started[4];
 static std::deque<pp_req> pp_queue;
 static CRITICAL_SECTION pp_lock;
 static HANDLE pp_wake;
@@ -78,8 +81,9 @@ static bool pp_start_voice(int v)
 	si.hStdError = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &sa,
 	                           OPEN_EXISTING, 0, NULL);
 	_snprintf(cmd, sizeof cmd,
-	          "\"%s\\piper.exe\" --model \"%s\\voices\\%s\" --output_dir \"%s\" --quiet",
-	          pp_dir, pp_dir, pp_voice_file[v], pp_out);
+	          "\"%s\\piper.exe\" --model \"%s\\voices\\%s\" --output_dir \"%s\" --quiet%s",
+	          pp_dir, pp_dir, pp_voice_file[v], pp_out,
+	          v == 3 ? " --json-input" : ""); /* s116: speaker per line */
 	cmd[sizeof cmd - 1] = 0;
 	if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL,
 	                    pp_dir, &si, &pi)) {
@@ -173,7 +177,21 @@ static DWORD WINAPI pp_worker(LPVOID)
 			PPD("pp: start voice %d failed (%lu)\n", r.voice, GetLastError());
 			continue;
 		}
-		line = r.text + "\n";
+		if (r.voice == 3) { /* s116: one JSON object per line */
+			std::string esc;
+
+			for (size_t i = 0; i < r.text.size(); i++) {
+				char c = r.text[i];
+
+				if (c == '"' || c == '\\')
+					esc += '\\';
+				esc += c;
+			}
+			line = "{\"text\": \"" + esc + "\", \"speaker_id\": "
+			       + std::to_string(r.speaker) + "}\n";
+		} else {
+			line = r.text + "\n";
+		}
 		if (!WriteFile(pp_in[r.voice], line.c_str(), (DWORD) line.size(), &wrote, NULL)
 		    || !pp_read_line(pp_outp[r.voice], path)) {
 			PPD("pp: write/read failed (%lu)\n", GetLastError());
@@ -248,6 +266,8 @@ static bool pp_init(void)
 		if (GetFileAttributesA(probe) == INVALID_FILE_ATTRIBUTES)
 			return false;
 	}
+	_snprintf(probe, sizeof probe, "%s\\voices\\%s", pp_dir, pp_voice_file[3]);
+	pp_have_multi = GetFileAttributesA(probe) != INVALID_FILE_ATTRIBUTES;
 	_snprintf(pp_out, sizeof pp_out, "%s\\revulting_tts", tmp ? tmp : exe);
 	pp_out[sizeof pp_out - 1] = 0;
 	CreateDirectoryA(pp_out, NULL);
@@ -280,6 +300,7 @@ static bool pp_speak(const char *text, int female, int pitch)
 		if (r.text[i] == '\n' || r.text[i] == '\r')
 			r.text[i] = ' ';
 	r.voice = pitch <= -6 ? 2 : (female ? 1 : 0);
+	r.speaker = 0;
 	r.factor = 1.0 + pitch * 0.025;          /* -10..10 -> 0.75..1.25 */
 	if (r.voice == 2 && r.factor < 0.85)
 		r.factor = 0.85;                      /* the gruff voice is low already */
@@ -312,6 +333,35 @@ extern "C" void vulture_tts_speak_voice(const char *text, int voice,
 			r.text[i] = ' ';
 	r.voice = voice < 0 || voice > 2 ? 0 : voice;
 	r.factor = factor < 0.75 ? 0.75 : factor > 1.3 ? 1.3 : factor;
+	r.speaker = 0;
+	EnterCriticalSection(&pp_lock);
+	if (pp_queue.size() < 6)
+		pp_queue.push_back(r);
+	LeaveCriticalSection(&pp_lock);
+	SetEvent(pp_wake);
+}
+
+/* s116: a specific LibriTTS speaker (when that voice is installed);
+   otherwise the old voice/factor */
+extern "C" void vulture_tts_speak_speaker(const char *text, int speaker,
+                                          double factor, int fallback_voice,
+                                          double fallback_factor, int female)
+{
+	pp_req r;
+
+	if (!text || !*text)
+		return;
+	if (!pp_init() || !pp_have_multi || speaker < 0) {
+		vulture_tts_speak_voice(text, fallback_voice, fallback_factor, female);
+		return;
+	}
+	r.text = text;
+	for (size_t i = 0; i < r.text.size(); i++)
+		if (r.text[i] == '\n' || r.text[i] == '\r')
+			r.text[i] = ' ';
+	r.voice = 3;
+	r.speaker = speaker;
+	r.factor = factor < 0.85 ? 0.85 : factor > 1.2 ? 1.2 : factor;
 	EnterCriticalSection(&pp_lock);
 	if (pp_queue.size() < 6)
 		pp_queue.push_back(r);
