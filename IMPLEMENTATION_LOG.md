@@ -2938,6 +2938,33 @@ What was built:
 - **Probe:** VULTURE_SELFTEST_DARK=1 (with VULTURE_SELFTEST) unlights the
   level and fires a flash for screenshots.
 
+### 134. Brogue notes: combat odds, one-key stairs, clickable inventory, EXPLORE
+
+- **Combat odds on the hover card:** for a hostile, the card shows "You
+  hit it N% of the time" and "It hits you N%, ~M% of your health".
+  - Your chance is find_roll_to_hit with your weapon, at (roll - 1) x 5.
+  - Its chance uses mattacku's AC + 10 + level; negative AC uses the
+    average of its random roll.
+  - Damage is the average of its physical attack dice, as a share of your
+    current HP.
+  - The second line turns orange when expected damage per turn is 10% of
+    your HP or more, red at 25% or more.
+- **One-key stairs:** '>' or '<' away from matching stairs travels to the
+  nearest known staircase or ladder that way, using the game's own travel
+  (new vulture_travel_to in cmd.c). On the stairs it behaves as usual.
+- **Clickable inventory:** a left or right click on an item opens its
+  actions.
+  - Only sensible ones, likeliest first: potion Drink; scroll/book Read;
+    wand Zap/break; food Eat; ring/amulet Put on/Remove; armour
+    Wear/Take off; weapon Wield/Throw/Quiver; tool Apply (+ Put on for
+    blindfold/towel/lenses, Wield for weapon-tools); gem Throw/Quiver.
+  - Then Throw, Remove, "Add to ability bar" (vulture_hotbar_bind: its
+    slot, else the first empty one), Drop, Name.
+- **EXPLORE:** a fourth button runs doautoexplore. The buttons are now
+  2x2, and the bar shifts left so it and the buttons always fit.
+- **Probe:** VULTURE_SELFTEST also spawns a jackal next to the hero, so
+  the odds can be checked.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

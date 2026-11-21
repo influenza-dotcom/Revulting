@@ -4994,6 +4994,16 @@ vulture_do_cmd_menu_act(coordxy x, coordxy y, int act)
     vulture_click_consumed = TRUE;
 }
 
+/* Vulture s134: walk to (x, y) with the game's own travel (one-key stairs) */
+void
+vulture_travel_to(coordxy x, coordxy y)
+{
+    iflags.travelcc.x = u.tx = x;
+    iflags.travelcc.y = u.ty = y;
+    cmdq_add_ec(CQ_CANNED, dotravel_target);
+    vulture_click_consumed = TRUE;
+}
+
 void
 click_to_cmd(coordxy x, coordxy y, int mod)
 {

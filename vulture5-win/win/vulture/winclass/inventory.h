@@ -19,7 +19,9 @@ enum invactions {
     V_INVACTION_QUIVER,
     V_INVACTION_REMOVE,
     V_INVACTION_DROP,
-    V_INVACTION_NAME
+    V_INVACTION_NAME,
+    V_INVACTION_THROW,  /* s134 */
+    V_INVACTION_HOTBAR  /* s134 */
 };
 
 class inventory : public menuwin

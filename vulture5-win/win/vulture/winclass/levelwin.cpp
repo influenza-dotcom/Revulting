@@ -3276,6 +3276,40 @@ vbox(int x, int y, int w, int h, int alpha)
                      h - yy > 160 ? 160 : h - yy, alpha);
 }
 
+/* s134 (Brogue): the odds - how often you hit it, how often it hits you
+   and for what share of your current HP, from the game's own formulas
+   (find_roll_to_hit; mattacku's AC + 10 + level; average attack dice) */
+static void
+vodds(struct monst *m, int *you_hit, int *it_hit, int *it_pct)
+{
+    int tmp, cnt = 0, pen = 0, i, t2, ac = u.uac, hp = Upolyd ? u.mh : u.uhp;
+    double dmg = 0;
+
+    tmp = find_roll_to_hit(m, AT_WEAP, uwep, &cnt, &pen);
+    *you_hit = (tmp - 1) * 5;
+    /* negative AC: AC_VALUE rolls -rnd(-AC); use its average */
+    t2 = (ac >= 0 ? ac : -((-ac + 1) / 2)) + 10 + m->m_lev;
+    *it_hit = (t2 - 1) * 5;
+    for (i = 0; i < NATTK; i++) {
+        struct attack *a = &m->data->mattk[i];
+
+        switch (a->aatyp) {
+        case AT_CLAW: case AT_BITE: case AT_KICK: case AT_BUTT: case AT_TUCH:
+        case AT_STNG: case AT_HUGS: case AT_WEAP: case AT_TENT:
+            if (a->damn && a->damd)
+                dmg += a->damn * (a->damd + 1) / 2.0;
+            else if (a->aatyp == AT_WEAP)
+                dmg += 3.5; /* a typical weapon */
+            break;
+        default:
+            break;
+        }
+    }
+    *you_hit = *you_hit < 0 ? 0 : *you_hit > 100 ? 100 : *you_hit;
+    *it_hit = *it_hit < 5 ? 5 : *it_hit > 100 ? 100 : *it_hit;
+    *it_pct = hp > 0 ? (int) (100.0 * dmg / hp + 0.5) : 100;
+}
+
 /* the hover card over a monster (crisp: drawn after the zoom) */
 static void
 vcard_draw(const std::string &name)
@@ -3325,13 +3359,31 @@ vcard_draw(const std::string &name)
     if (!title.empty())
         title[0] = (char) toupper((unsigned char) title[0]);
     bar = m->mtame || m->mhp < m->mhpmax;
+    std::string odds1, odds2;
+    int risk = 0;
+
+    if (!m->mtame && !m->mpeaceful) { /* s134 */
+        int yh, ih, ip;
+        char ob[96];
+
+        vodds(m, &yh, &ih, &ip);
+        snprintf(ob, sizeof ob, "You hit it %d%% of the time", yh);
+        odds1 = ob;
+        snprintf(ob, sizeof ob, "It hits you %d%%, ~%d%% of your health", ih, ip);
+        odds2 = ob;
+        risk = ip * ih / 100;
+    }
     bw = vulture_text_length(V_FONT_SMALL, title);
     if (vulture_text_length(V_FONT_SMALL, tags) > bw)
         bw = vulture_text_length(V_FONT_SMALL, tags);
+    if (!odds2.empty() && vulture_text_length(V_FONT_SMALL, odds2) > bw)
+        bw = vulture_text_length(V_FONT_SMALL, odds2);
+    if (!odds1.empty() && vulture_text_length(V_FONT_SMALL, odds1) > bw)
+        bw = vulture_text_length(V_FONT_SMALL, odds1);
     bw += 26;
     if (bw < 150)
         bw = 150;
-    bh = 2 * lh + 14 + (bar ? 10 : 0);
+    bh = 2 * lh + 14 + (bar ? 10 : 0) + (odds1.empty() ? 0 : 2 * lh + 4);
     bx = mp.x + 20, by = mp.y + 24;
     if (bx + bw > vulture_screen->w - 4)
         bx = mp.x - 20 - bw;
@@ -3348,6 +3400,18 @@ vcard_draw(const std::string &name)
     vulture_put_text_shadow(V_FONT_SMALL, tags, vulture_screen, bx + 12, by + 6 + lh,
                             SDL_MapRGB(vulture_screen->format, tr, tg, tb),
                             SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    if (!odds1.empty()) { /* s134: the odds, below the bar */
+        int oy = by + 8 + 2 * lh + (bar ? 10 : 0);
+
+        vulture_put_text_shadow(V_FONT_SMALL, odds1, vulture_screen, bx + 12, oy,
+                                SDL_MapRGB(vulture_screen->format, 200, 210, 230),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        vulture_put_text_shadow(V_FONT_SMALL, odds2, vulture_screen, bx + 12, oy + lh,
+                                risk >= 25 ? SDL_MapRGB(vulture_screen->format, 255, 90, 70)
+                                : risk >= 10 ? SDL_MapRGB(vulture_screen->format, 255, 190, 80)
+                                : SDL_MapRGB(vulture_screen->format, 200, 210, 230),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    }
     if (bar) {
         int full = bw - 24, fill = m->mhpmax > 0 ? full * m->mhp / m->mhpmax : 0;
         int pct = m->mhpmax > 0 ? 100 * m->mhp / m->mhpmax : 0;
@@ -3700,6 +3764,30 @@ vhb_pick(int slot)
     vhb_save();
 }
 
+/* s134: "Add to ability bar" from the inventory - the item's slot if it
+   has one, else the first empty slot, else the last */
+void
+vulture_hotbar_bind(struct obj *o)
+{
+    int i, slot = -1;
+
+    if (!o)
+        return;
+    vhb_load();
+    for (i = 0; i < 10 && slot < 0; i++)
+        if (vhb[i].kind == 1 && vhb[i].oid == o->o_id)
+            slot = i;
+    for (i = 0; i < 10 && slot < 0; i++)
+        if (!vhb[i].kind)
+            slot = i;
+    if (slot < 0)
+        slot = 9;
+    vhb[slot].kind = 1, vhb[slot].oid = o->o_id, vhb[slot].otyp = o->otyp, vhb[slot].spell = -1;
+    vhb_flash[slot] = SDL_GetTicks();
+    vhb_save();
+    vulture_sfx("ui_assign");
+}
+
 /* the tooltip text for a slot */
 static std::string
 vhb_tip(int i)
@@ -3746,8 +3834,12 @@ vhb_draw(int ax, int ay, int w, int h)
         x0 = ax + (w - total) / 2;
         y0 = ay + h - S - V_UI(10);
     }
-    if (x0 + total > ax + w - 4)
-        x0 = ax + w - 4 - total;
+    { /* s134: keep the bar AND its 2x2 buttons on screen */
+        int extra = V_UI(8) + 2 * V_UI(96) + V_UI(3);
+
+        if (x0 + total + extra > ax + w - 4)
+            x0 = ax + w - 4 - total - extra;
+    }
     if (x0 < ax + 4)
         x0 = ax + 4;
     vhb_rect.x = x0, vhb_rect.y = y0, vhb_rect.w = total, vhb_rect.h = S;
@@ -3878,6 +3970,12 @@ vselftest(void)
             vision_recalc(0);
             vl_flash(u.ux - 3, u.uy, 1.0f, 0.6f, 0.3f, 0.9f, 2.5f, 60000);
         }
+        if (getenv("VULTURE_SELFTEST")) { /* probe: a hostile to hover (odds) */
+            coord cc;
+
+            if (enexto(&cc, u.ux, u.uy, &mons[PM_JACKAL]))
+                (void) makemon(&mons[PM_JACKAL], cc.x, cc.y, NO_MM_FLAGS);
+        }
         lines.push_back("a +0 dagger");
         lines.push_back("2 uncursed food rations");
         lines.push_back("a scroll labeled ELBIB YLOH");
@@ -3889,7 +3987,12 @@ vselftest(void)
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_hover.bmp", dir);
         SDL_SaveBMP(vulture_screen, path);
-        for (m = fmon; m; m = m->nmon)
+        for (m = fmon; m; m = m->nmon) /* a hostile if there is one (odds) */
+            if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame)
+                break;
+        if (!m)
+            m = fmon;
+        for (; m; m = m->nmon)
             if (!DEADMONSTER(m) && canspotmon(m)) {
                 point sq, mp;
 
@@ -4252,16 +4355,16 @@ vulture_auto_step(void *result)
 }
 
 /* the three buttons beside the ability bar */
-static SDL_Rect vbtn_rect[3];
-static const char *const vbtn_name[3] = { "FIGHT", "A-MOVE", "REST" };
-static const char *const vbtn_key[3] = { "Tab", "Shift+A", "F5" };
+static SDL_Rect vbtn_rect[4];
+static const char *const vbtn_name[4] = { "FIGHT", "A-MOVE", "REST", "EXPLORE" };
+static const char *const vbtn_key[4] = { "Tab", "S-A", "F5", "" };
 
 static int
 vbtn_hit(int mx, int my)
 {
     int i;
 
-    for (i = 0; i < 3; i++)
+    for (i = 0; i < 4; i++)
         if (vbtn_rect[i].w && mx >= vbtn_rect[i].x && mx < vbtn_rect[i].x + vbtn_rect[i].w
             && my >= vbtn_rect[i].y && my < vbtn_rect[i].y + vbtn_rect[i].h)
             return i;
@@ -4271,23 +4374,24 @@ vbtn_hit(int mx, int my)
 static void
 vbtn_draw(void)
 {
-    int S = V_LISTITEM_HEIGHT, gap = V_UI(3), bh, bw = V_UI(120), i, hov;
+    int S = V_LISTITEM_HEIGHT, gap = V_UI(3), bh, bw = V_UI(96), i, hov;
     point mp = vulture_get_mouse_pos();
     Uint32 black = SDL_MapRGB(vulture_screen->format, 0, 0, 0);
 
     if (!vhb_rect.w)
         return;
-    bh = (S - 2 * gap) / 3;
-    for (i = 0; i < 3; i++) {
-        vbtn_rect[i].x = vhb_rect.x + vhb_rect.w + V_UI(8);
-        vbtn_rect[i].y = vhb_rect.y + i * (bh + gap);
+    bh = (S - gap) / 2; /* s134: 2x2 - FIGHT / A-MOVE | REST / EXPLORE */
+    for (i = 0; i < 4; i++) {
+        vbtn_rect[i].x = vhb_rect.x + vhb_rect.w + V_UI(8) + (i / 2) * (bw + gap);
+        vbtn_rect[i].y = vhb_rect.y + (i % 2) * (bh + gap);
         vbtn_rect[i].w = bw, vbtn_rect[i].h = bh;
     }
     hov = vbtn_hit(mp.x, mp.y);
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < 4; i++) {
         SDL_Rect rc = vbtn_rect[i];
         bool active = (i == 1 && (vamove_pending || vauto_mode == VAUTO_AMOVE))
-                      || (i == 2 && vauto_mode == VAUTO_REST);
+                      || (i == 2 && vauto_mode == VAUTO_REST)
+                      || (i == 3 && autoexplore_active);
         Uint32 edge = active ? SDL_MapRGB(vulture_screen->format, 120, 230, 140)
                       : i == hov ? SDL_MapRGB(vulture_screen->format, 255, 200, 70)
                       : SDL_MapRGB(vulture_screen->format, 90, 82, 66);
@@ -5224,10 +5328,11 @@ levelwin::handle_timer_event(window *target, void *result, int time)
         if (vpt_hit(mp.x, mp.y)) /* s123: no tooltip over the portrait */
             return V_EVENT_HANDLED_NOREDRAW;
         if (vbtn_hit(mp.x, mp.y) >= 0) { /* s130 */
-            static const char *const tip[3] = {
+            static const char *const tip[4] = {
                 "Fight the nearest enemy  [Tab]",
                 "Attack-move: walk to a spot, fighting anything on the way  [Shift+A]",
-                "Rest until healed - stops if an enemy appears  [F5]"
+                "Rest until healed - stops if an enemy appears  [F5]",
+                "Explore the level automatically - stops when something comes up"
             };
             vulture_mouse_set_tooltip(tip[vbtn_hit(mp.x, mp.y)]);
             return V_EVENT_HANDLED_NOREDRAW;
@@ -5459,8 +5564,16 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
                     vulture_sfx("aim_ready");
                     vamove_pending = true;
                     pline("Attack-move: click where to go (Esc to cancel).");
-                } else {
+                } else if (bh == 2) {
                     vauto_start(VAUTO_REST, -1, -1);
+                } else { /* s134: EXPLORE (Brogue's x) */
+                    cmdq_add_ec(CQ_CANNED, doautoexplore);
+                    vulture_click_consumed = TRUE;
+                    ((vulture_event *) result)->num = 0;
+                    ((vulture_event *) result)->x = u.ux;
+                    ((vulture_event *) result)->y = u.uy;
+                    force_redraw();
+                    return V_EVENT_HANDLED_FINAL;
                 }
             }
             force_redraw();
@@ -5669,6 +5782,31 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
 
     /* all other keys are converted and passed to the core */
     key = vulture_make_nh_key(sym, mod, unicode);
+
+    /* s134 (Brogue): '>' or '<' away from the stairs walks you to the
+       known staircase (or ladder) going that way; on them, it's the usual */
+    if ((key == '>' || key == '<') && u.ux && !u.uswallow) {
+        stairway *here = stairway_at(u.ux, u.uy), *st, *best = NULL;
+        bool up = (key == '<');
+
+        if (!here || (here->up ? true : false) != up) {
+            for (st = gs.stairs; st; st = st->next)
+                if ((st->up ? true : false) == up && isok(st->sx, st->sy)
+                    && levl[st->sx][st->sy].seenv
+                    && (!best || distmin(u.ux, u.uy, st->sx, st->sy)
+                                     < distmin(u.ux, u.uy, best->sx, best->sy)))
+                    best = st;
+            if (best) {
+                vulture_travel_to(best->sx, best->sy);
+                vfx_click(best->sx, best->sy, VCK_STAIRS, up);
+                ((vulture_event *) result)->num = 0;
+                ((vulture_event *) result)->x = u.ux;
+                ((vulture_event *) result)->y = u.uy;
+                force_redraw();
+                return V_EVENT_HANDLED_FINAL;
+            }
+        }
+    }
 
     if (!key)
         return V_EVENT_HANDLED_NOREDRAW;

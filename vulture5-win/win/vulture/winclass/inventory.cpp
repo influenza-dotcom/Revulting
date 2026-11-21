@@ -165,47 +165,89 @@ inventory::context_menu(objitemwin *target)
     int action = 0, key = 0;
     contextmenu *menu;
 
-    menu = new contextmenu(ROOTWIN);
-    menu->add_item("Apply", V_INVACTION_APPLY);
+    /* s134 (Brogue): only what makes sense for this item, the thing you'd
+       most likely do first; plus Throw and "Add to ability bar" */
+    {
+        struct obj *o = target->obj;
+        int oc = o->oclass;
+        bool worn = o->owornmask != 0, removed = false;
 
-    if (!target->obj->owornmask) {
-        /* if you can wear it there's no way you can eat or drink it */
-        if (target->obj->oclass == POTION_CLASS)
+        menu = new contextmenu(ROOTWIN);
+        switch (oc) {
+        case POTION_CLASS:
             menu->add_item("Drink", V_INVACTION_DRINK);
-        menu->add_item("Eat", V_INVACTION_EAT);
+            break;
+        case SCROLL_CLASS:
+        case SPBOOK_CLASS:
+            menu->add_item("Read", V_INVACTION_READ);
+            break;
+        case WAND_CLASS:
+            menu->add_item("Zap", V_INVACTION_ZAP);
+            menu->add_item("Apply (break)", V_INVACTION_APPLY);
+            break;
+        case FOOD_CLASS:
+            menu->add_item("Eat", V_INVACTION_EAT);
+            break;
+        case RING_CLASS:
+        case AMULET_CLASS:
+            if (worn)
+                menu->add_item("Remove", V_INVACTION_REMOVE), removed = true;
+            else
+                menu->add_item("Put on", V_INVACTION_PUT_ON);
+            break;
+        case ARMOR_CLASS:
+            if (worn)
+                menu->add_item("Take off", V_INVACTION_REMOVE), removed = true;
+            else
+                menu->add_item("Wear", V_INVACTION_WEAR);
+            break;
+        case WEAPON_CLASS:
+            if (o != uwep)
+                menu->add_item("Wield", V_INVACTION_WIELD);
+            menu->add_item("Throw", V_INVACTION_THROW);
+            menu->add_item("Quiver", V_INVACTION_QUIVER);
+            break;
+        case TOOL_CLASS:
+            menu->add_item("Apply", V_INVACTION_APPLY);
+            if (o->otyp == BLINDFOLD || o->otyp == TOWEL || o->otyp == LENSES) {
+                if (worn)
+                    menu->add_item("Remove", V_INVACTION_REMOVE), removed = true;
+                else
+                    menu->add_item("Put on", V_INVACTION_PUT_ON);
+            }
+            if (is_weptool(o) && o != uwep)
+                menu->add_item("Wield", V_INVACTION_WIELD);
+            break;
+        case GEM_CLASS:
+            menu->add_item("Throw", V_INVACTION_THROW);
+            menu->add_item("Quiver", V_INVACTION_QUIVER);
+            break;
+        default:
+            menu->add_item("Apply", V_INVACTION_APPLY);
+            break;
+        }
+        if (oc != WEAPON_CLASS && oc != GEM_CLASS && !worn)
+            menu->add_item("Throw", V_INVACTION_THROW);
+        if (worn && !removed)
+            menu->add_item("Remove", V_INVACTION_REMOVE);
+        menu->add_item("Add to ability bar", V_INVACTION_HOTBAR);
+        if (!worn)
+            menu->add_item("Drop", V_INVACTION_DROP);
+        if (!objects[o->otyp].oc_name_known)
+            menu->add_item("Name", V_INVACTION_NAME);
     }
-
-    menu->add_item("Read", V_INVACTION_READ);
-
-    if (target->obj->oclass == WAND_CLASS)
-        menu->add_item("Zap", V_INVACTION_ZAP);
-
-    /* you could already be wearing it, then you can't wear it again */
-    if (!target->obj->owornmask && target->obj->oclass != WAND_CLASS) {
-        if (target->obj->oclass != RING_CLASS
-            && target->obj->oclass != AMULET_CLASS)
-            menu->add_item("Wear", V_INVACTION_WEAR);
-
-        if (target->obj->oclass != ARMOR_CLASS)
-            menu->add_item("Put on", V_INVACTION_PUT_ON);
-    }
-
-    menu->add_item("Wield", V_INVACTION_WIELD);
-    menu->add_item("Quiver", V_INVACTION_QUIVER);
-
-    if (target->obj->owornmask)
-        menu->add_item("Remove", V_INVACTION_REMOVE);
-
-    if (!target->obj->owornmask)
-        menu->add_item("Drop", V_INVACTION_DROP);
-
-    if (!objects[target->obj->otyp].oc_name_known)
-        menu->add_item("Name", V_INVACTION_NAME);
 
     menu->layout();
     vulture_event_dispatcher(&action, V_RESPOND_INT, menu);
 
     delete menu;
+
+    if (action == V_INVACTION_HOTBAR) { /* s134: stays in the inventory */
+        extern void vulture_hotbar_bind(struct obj *);
+
+        vulture_hotbar_bind(target->obj);
+        return V_EVENT_HANDLED_NOREDRAW;
+    }
 
     if (action) {
         vulture_eventstack_add('i', -1, -1, V_RESPOND_POSKEY);
@@ -273,6 +315,9 @@ inventory::context_menu(objitemwin *target)
         case V_INVACTION_DROP:
             key = 'd';
             break;
+        case V_INVACTION_THROW: /* s134 */
+            key = 't';
+            break;
         }
 
         vulture_eventstack_add(target->menu_id, -1, -1, V_RESPOND_CHARACTER);
@@ -308,14 +353,9 @@ inventory::handle_mousebuttonup_event(window *target, void *result,
                 || mouse.y > abs_y + h))
             return V_EVENT_HANDLED_FINAL;
 
-        /* left clicks on object items do nothing */
-        if (button == SDL_BUTTON_LEFT && target != this
-            && target->v_type == V_WINTYPE_OBJITEM)
-            return V_EVENT_HANDLED_NOREDRAW;
-
-        /* right clicks on object items open a context menu */
-        else if (button == SDL_BUTTON_RIGHT
-                 && target->v_type == V_WINTYPE_OBJITEM)
+        /* s134 (Brogue): any click on an item opens its actions */
+        if ((button == SDL_BUTTON_LEFT || button == SDL_BUTTON_RIGHT)
+            && target != this && target->v_type == V_WINTYPE_OBJITEM)
             return context_menu(static_cast<objitemwin *>(target));
     }
 

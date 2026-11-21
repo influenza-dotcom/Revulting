@@ -413,6 +413,7 @@ extern void llm_note_speaker(struct monst *, int);
 extern void llm_tts_line(const char *);
 extern boolean llm_bubble_line(const char *);
 extern int vulture_autopickup_menu(void);
+extern void vulture_travel_to(coordxy, coordxy);
 extern void llm_hero_quip_pass(void);
 extern void llm_name_hero(void);
 extern void vulture_sfx(const char *);
