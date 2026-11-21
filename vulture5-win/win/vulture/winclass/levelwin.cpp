@@ -262,7 +262,7 @@ vpt_hit(int mx, int my)
 /* s123: Dota-style - double-clicking the portrait makes the camera
    follow the hero until you move the camera yourself (edge scroll or
    middle-drag); session only, no badge, no popup */
-bool vulture_cam_follow = false;
+bool vulture_cam_follow = true; /* s127: starts following the hero */
 bool vulture_cam_manual = false; /* s124: you've panned: no auto-rescue */
 
 static void
