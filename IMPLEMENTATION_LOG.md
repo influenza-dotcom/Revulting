@@ -2675,6 +2675,27 @@ levelwin.cpp (vbark_tab).
   while asleep, breathe at 40% depth and under half the rate.
   Floaters/flyers settle and barely drift.
 
+### 120. Esc also stops waits, searches and occupations
+
+- vulture_esc_cancels_travel now also watches go.occupation (resting,
+  searching until disturbed, eating, digging...) and counted repeats
+  (20s).
+  - An occupation ends with stop_occupation(), which prints its own
+    "You stop ..." message.
+  - A counted wait or search ends with nomul(0) and "You stop."
+
+### 121. Mouse-wheel zoom
+
+- **Zooming in:** wheel up zooms through 125/150/175/200%.
+  - The drawn map is scaled up around the window centre with
+    SDL_SoftStretchLinear (vzoom_apply), after the vfx and before the
+    vignette and HUD, so toasts stay sharp.
+  - While zoomed, every frame is a full redraw.
+  - mouse_to_map, map_to_mouse and hero_off_view map through the zoom.
+- **Zooming out:** wheel down zooms back out. One notch past 100%
+  switches to render scale 2 (the F8 zoomed-out view), debounced to one
+  rescale per 350 ms.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

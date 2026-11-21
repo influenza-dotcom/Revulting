@@ -1118,7 +1118,7 @@ static void vulture_esc_cancels_travel(void)
 	bool esc = false;
 
 	if (!svc.context.travel && !svc.context.run && !svc.context.mv
-	    && gm.multi <= 0)
+	    && gm.multi <= 0 && !go.occupation)
 		return;
 	SDL_PumpEvents();
 	n = SDL_PeepEvents(ev, 32, SDL_PEEKEVENT, SDL_KEYDOWN, SDL_KEYDOWN);
@@ -1129,6 +1129,16 @@ static void vulture_esc_cancels_travel(void)
 		return;
 	SDL_FlushEvent(SDL_KEYDOWN); /* the Esc must not open a menu too */
 	SDL_FlushEvent(SDL_TEXTINPUT);
+	/* s120: also counted waits/searches (20s) and occupations (resting,
+	   searching until disturbed, eating, digging...) */
+	if (go.occupation) {
+		stop_occupation(); /* prints its own "You stop ..." */
+	} else if (gm.multi > 0 && !svc.context.mv && !svc.context.travel
+	           && !svc.context.run) {
+		nomul(0);
+		pline("You stop.");
+		return;
+	}
 	nomul(0); /* ends running and travel */
 }
 

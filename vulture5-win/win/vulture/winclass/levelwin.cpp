@@ -189,6 +189,9 @@ levelwin::set_view(int x, int y)
     vpan_px = vpan_py = 0.0; /* s79: a recentre ends any drag offset */
 }
 
+/* s121: mouse-wheel zoom factor (>1 = zoomed in; see vzoom_apply) */
+static double vzoom = 1.0;
+
 /* s117: the hero has left the visible map (the free camera's rescue) */
 bool
 levelwin::hero_off_view(int map_x, int map_y)
@@ -199,6 +202,9 @@ levelwin::hero_off_view(int map_x, int map_y)
           &map_y);
     sx = vulture_screen->w / 2 + V_MAP_XMOD * (map_x - map_y) + (int) vpan_px;
     sy = vulture_screen->h / 2 + V_MAP_YMOD * (map_x + map_y) + (int) vpan_py;
+    /* s121: zoomed in, less of the map is on screen */
+    sx = vulture_screen->w / 2 + (int) ((sx - vulture_screen->w / 2) * vzoom);
+    sy = vulture_screen->h / 2 + (int) ((sy - vulture_screen->h / 2) * vzoom);
     return sx < V_MAP_XMOD || sx > vulture_screen->w - V_MAP_XMOD
            || sy < V_MAP_YMOD * 2 || sy > vulture_screen->h * 5 / 6;
 }
@@ -2817,6 +2823,73 @@ vulture_draw_vignette(int x0, int y0, int w, int h)
     SDL_BlitSurface(vg_surf, NULL, vulture_screen, &d);
 }
 
+/*
+ * IMPLEMENTATION_LOG s121: mouse-wheel zoom.  Zooming in scales the drawn
+ * map up around the window centre (bilinear) just before the vignette and
+ * the HUD, so toasts and the interface stay sharp; clicks and hovers are
+ * mapped back through it (mouse_to_map).  Wheeling out past 1x switches
+ * to the 2x render scale - the F8 zoomed-out view.
+ */
+static const double vzoom_steps[] = { 1.0, 1.25, 1.5, 1.75, 2.0 };
+static int vzoom_idx = 0;
+static SDL_Surface *vzoom_buf = NULL;
+
+static void
+vzoom_apply(int ax, int ay, int w, int h)
+{
+    SDL_Rect src, dst;
+
+    if (vzoom <= 1.0 || w < 16 || h < 16
+        || vulture_screen->format->BytesPerPixel != 4)
+        return;
+    if (!vzoom_buf || vzoom_buf->w != w || vzoom_buf->h != h
+        || vzoom_buf->format->format != vulture_screen->format->format) {
+        if (vzoom_buf)
+            SDL_FreeSurface(vzoom_buf);
+        vzoom_buf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32,
+                                                   vulture_screen->format->format);
+        if (!vzoom_buf)
+            return;
+        SDL_SetSurfaceBlendMode(vzoom_buf, SDL_BLENDMODE_NONE);
+    }
+    src.w = (int) (w / vzoom), src.h = (int) (h / vzoom);
+    src.x = ax + (w - src.w) / 2, src.y = ay + (h - src.h) / 2;
+    dst.x = 0, dst.y = 0, dst.w = w, dst.h = h;
+    if (SDL_SoftStretchLinear(vulture_screen, &src, vzoom_buf, &dst) != 0
+        && SDL_SoftStretch(vulture_screen, &src, vzoom_buf, &dst) != 0)
+        return;
+    dst.x = ax, dst.y = ay;
+    SDL_BlitSurface(vzoom_buf, NULL, vulture_screen, &dst);
+}
+
+/* one wheel notch: dir > 0 in, < 0 out */
+static void
+vzoom_step(int dir)
+{
+    static Uint32 last_rescale = 0;
+    Uint32 now = SDL_GetTicks();
+
+    if (dir > 0) {
+        if (vulture_render_scale > 1) {
+            if (now - last_rescale > 350) {
+                last_rescale = now;
+                vulture_set_render_scale(1);
+            }
+            return;
+        }
+        if (vzoom_idx < (int) (sizeof vzoom_steps / sizeof vzoom_steps[0]) - 1)
+            vzoom_idx++;
+    } else {
+        if (vzoom_idx > 0) {
+            vzoom_idx--;
+        } else if (vulture_render_scale == 1 && now - last_rescale > 350) {
+            last_rescale = now;
+            vulture_set_render_scale(2);
+        }
+    }
+    vzoom = vzoom_steps[vzoom_idx];
+}
+
 bool
 levelwin::draw()
 {
@@ -2858,6 +2931,8 @@ levelwin::draw()
     map_centre_x += vtw_gx + (int) vpan_px; /* s79: + MMB drag residual */
     map_centre_y += vtw_gy + (int) vpan_py;
 
+    if (vzoom > 1.0)
+        prev_cx = -1; /* s121: zoomed, every frame is a full redraw */
     if (prev_cx != view_x || prev_cy != view_y
         || map_data->map_swallow != V_TILE_NONE) {
         clip_tl_x = this->abs_x;
@@ -3132,6 +3207,7 @@ levelwin::draw()
     vw_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
+    vzoom_apply(this->abs_x, this->abs_y, this->w, this->h); /* s121 */
     vulture_draw_vignette(this->abs_x, this->abs_y, this->w, this->h); /* s74 */
     vhud_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
               this->abs_y, this->w, this->h); /* s100: toasts, card, waypoint */
@@ -3384,6 +3460,11 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
 
     /* s79: releasing a middle-mouse drag snaps the leftover pixels away, so
      * clicks map to squares exactly again */
+    if (button == SDL_BUTTON_WHEELUP || button == SDL_BUTTON_WHEELDOWN) {
+        vzoom_step(button == SDL_BUTTON_WHEELUP ? 1 : -1); /* s121 */
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+    }
     if (button == SDL_BUTTON_MIDDLE) {
         vpan_px = vpan_py = 0.0;
         force_redraw();
@@ -3698,7 +3779,15 @@ point
 levelwin::mouse_to_map(point mouse)
 {
     point mappos;
-    int px = mouse.x - (w / 2), py = mouse.y - (h / 2), vj, vi, dj, di;
+    int px, py, vj, vi, dj, di;
+
+    /* s121: undo the zoom - the map under the pointer was drawn nearer the
+       centre before being scaled up */
+    if (vzoom > 1.0) {
+        mouse.x = w / 2 + (int) floor((mouse.x - w / 2) / vzoom);
+        mouse.y = h / 2 + (int) floor((mouse.y - h / 2) / vzoom);
+    }
+    px = mouse.x - (w / 2), py = mouse.y - (h / 2);
 
     /* §62: screen -> VIEW offset (the stock formula, with the view centre
      * factored out and floor division so negative offsets round the same
@@ -3728,6 +3817,10 @@ levelwin::map_to_mouse(point mappos)
           &vi);
     mouse.x = map_centre_x + V_MAP_XMOD * (vj - vi);
     mouse.y = map_centre_y + V_MAP_YMOD * (vj + vi);
+    if (vzoom > 1.0) { /* s121 */
+        mouse.x = map_centre_x + (int) ((mouse.x - map_centre_x) * vzoom);
+        mouse.y = map_centre_y + (int) ((mouse.y - map_centre_y) * vzoom);
+    }
 
     /* FIXME Why does this happen sometimes ? */
     if (mouse.x < 0)
