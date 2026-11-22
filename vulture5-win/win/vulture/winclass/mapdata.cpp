@@ -999,6 +999,14 @@ mapdata::handle_click(void *result, int button, point mappos)
         return V_EVENT_HANDLED_FINAL;
     }
 
+    if (action_id == V_ACTION_ALTARTEST) { /* s139 */
+        cmdq_add_ec(CQ_CANNED, vulture_altar_test);
+        vulture_click_consumed = TRUE;
+        ((vulture_event *) result)->num = 0;
+        ((vulture_event *) result)->x = mappos.x;
+        ((vulture_event *) result)->y = mappos.y;
+        return V_EVENT_HANDLED_FINAL;
+    }
     if (action_id == V_ACTION_AUTOPICKUP) { /* s129: run the checklist */
         cmdq_add_ec(CQ_CANNED, vulture_autopickup_menu);
         vulture_click_consumed = TRUE;
@@ -1309,6 +1317,8 @@ mapdata::get_map_contextmenu(point mappos)
             menu->add_item("Pay bill", V_ACTION_PAY_BILL), extras++;
         menu->add_item("Pray", V_ACTION_PRAY), extras++;
         menu->add_item("Auto-pickup rules...", V_ACTION_AUTOPICKUP), extras++; /* s129 */
+        if (IS_ALTAR(levl[u.ux][u.uy].typ)) /* s139 */
+            menu->add_item("Test my unknown items on the altar", V_ACTION_ALTARTEST), extras++;
         if (Role_if(PM_PRIEST) || Role_if(PM_KNIGHT)
             || objects[SPE_TURN_UNDEAD].oc_name_known)
             menu->add_item("Turn undead", V_ACTION_TURN_UNDEAD), extras++;

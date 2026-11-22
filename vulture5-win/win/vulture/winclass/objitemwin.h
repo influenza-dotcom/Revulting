@@ -22,6 +22,8 @@ class objitemwin : public optionwin
                                                    int state);
     virtual eventresult handle_other_event(window *target, void *result,
                                            SDL_Event *event);
+    virtual eventresult handle_timer_event(window *target, void *result,
+                                           int time); /* s139 */
 
     struct obj *obj;
     bool last_toggled;

@@ -352,8 +352,23 @@ void vulture_mouse_set_tooltip(std::string str)
 			SDL_FreeSurface(vulture_tooltip.tip);
 		/* the text metrics already scale (V_FONT_TOOLTIP is opened at
 		 * vulture_ui_scale); the border around them has to scale with it */
-		length = vulture_text_length(V_FONT_TOOLTIP, str) + V_UI(6);
-		height = vulture_text_height(V_FONT_TOOLTIP, str) + V_UI(6);
+		/* s139: several lines when the text has newlines */
+		{
+			size_t a = 0, b2;
+			int lw = 0, nl = 0;
+
+			while (a <= str.size()) {
+				b2 = str.find('\n', a);
+				if (b2 == std::string::npos)
+					b2 = str.size();
+				if (vulture_text_length(V_FONT_TOOLTIP, str.substr(a, b2 - a)) > lw)
+					lw = vulture_text_length(V_FONT_TOOLTIP, str.substr(a, b2 - a));
+				nl++;
+				a = b2 + 1;
+			}
+			length = lw + V_UI(6);
+			height = nl * vulture_get_lineheight(V_FONT_TOOLTIP) + V_UI(6);
+		}
 
 		vulture_tooltip.tip = SDL_CreateRGBSurface(SDL_SWSURFACE | SDL_SRCALPHA,
 				length, height, vulture_px_format->BitsPerPixel,
@@ -364,8 +379,21 @@ void vulture_mouse_set_tooltip(std::string str)
 
 		SDL_FillRect(vulture_tooltip.tip, NULL, tooltipcolor);
 		vulture_rect_surface(vulture_tooltip.tip, 0, 0, length-1, height-1, V_COLOR_BACKGROUND);
-		vulture_put_text(V_FONT_TOOLTIP, str, vulture_tooltip.tip,
-						V_UI(3), V_UI(3), V_COLOR_BACKGROUND);
+		{ /* s139: one line at a time */
+			size_t a = 0, b2;
+			int row = 0;
+
+			while (a <= str.size()) {
+				b2 = str.find('\n', a);
+				if (b2 == std::string::npos)
+					b2 = str.size();
+				vulture_put_text(V_FONT_TOOLTIP, str.substr(a, b2 - a), vulture_tooltip.tip,
+								V_UI(3), V_UI(3) + row * vulture_get_lineheight(V_FONT_TOOLTIP),
+								V_COLOR_BACKGROUND);
+				row++;
+				a = b2 + 1;
+			}
+		}
 	}
 
 	if (vulture_tooltip.tip)

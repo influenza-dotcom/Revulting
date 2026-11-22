@@ -422,6 +422,7 @@ extern void vulture_room_sleepers(int, int, int);
 extern int vulture_aim_mode, vulture_aim_dmg;
 extern int vulture_getdir_ray(int, boolean);
 extern int vulture_aim_end(int);
+extern int vulture_altar_test(void); /* s139 */
 extern void vulture_search_more(void); /* s135 */
 /* Vulture mod s70-71 */
 extern boolean llm_rewrite_line(const char *, char *, size_t, boolean);

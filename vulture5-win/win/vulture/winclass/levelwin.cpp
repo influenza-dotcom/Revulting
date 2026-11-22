@@ -3276,6 +3276,133 @@ vpath_draw(int cx, int cy, int vx, int vy)
                             SDL_MapRGB(vulture_screen->format, 0, 0, 0));
 }
 
+/* ---- s139: item stat cards (inventory hover) ----
+   Only what the hero knows: dice and armour values only for a type whose
+   identity is known (or that has no random appearance); enchantment only
+   when known. Compared with what is wielded / worn in the same slot. */
+static bool
+vitem_type_known(struct obj *o)
+{
+    return o->dknown && (!OBJ_DESCR(objects[o->otyp]) || objects[o->otyp].oc_name_known);
+}
+
+static double
+vitem_avg(struct obj *o, bool *exact)
+{
+    double a = (objects[o->otyp].oc_wsdam + 1) / 2.0;
+
+    if (o->known)
+        a += o->spe;
+    else
+        *exact = false;
+    return a;
+}
+
+static struct obj *
+vworn_in(int cat)
+{
+    switch (cat) {
+    case ARM_SUIT: return uarm;
+    case ARM_SHIELD: return uarms;
+    case ARM_HELM: return uarmh;
+    case ARM_GLOVES: return uarmg;
+    case ARM_BOOTS: return uarmf;
+    case ARM_CLOAK: return uarmc;
+    case ARM_SHIRT: return uarmu;
+    }
+    return (struct obj *) 0;
+}
+
+std::string
+vulture_item_info(struct obj *o)
+{
+    static const char *const slot[7] = { "body armour", "shield", "helmet", "gloves",
+                                         "boots", "cloak", "shirt" };
+    std::string s;
+    char b[160];
+    bool tk;
+
+    if (!o || Hallucination)
+        return s;
+    tk = vitem_type_known(o);
+    if ((o->oclass == WEAPON_CLASS || is_weptool(o)) && tk) {
+        int sk = weapon_type(o);
+
+        snprintf(b, sizeof b, "Damage: d%d vs small, d%d vs large%s",
+                 objects[o->otyp].oc_wsdam, objects[o->otyp].oc_wldam,
+                 o->known ? "" : "  (enchantment unknown)");
+        s += b;
+        if (o->known) {
+            snprintf(b, sizeof b, "  %+d", o->spe);
+            s += b;
+        }
+        if (bimanual(o))
+            s += "\nTwo-handed";
+        if (sk != P_NONE) {
+            static const char *const lvl[] = { "Restricted", "Unskilled", "Basic",
+                                               "Skilled", "Expert", "Master",
+                                               "Grand Master" };
+            int p = P_SKILL(sk);
+
+            snprintf(b, sizeof b, "\nSkill: %s (%s)", skill_name(sk),
+                     p >= 0 && p <= 6 ? lvl[p] : "?");
+            s += b;
+        }
+        if (uwep && uwep != o && (uwep->oclass == WEAPON_CLASS || is_weptool(uwep))
+            && vitem_type_known(uwep) && !is_ammo(o) && !is_launcher(o)) {
+            bool ex = true;
+            double d = vitem_avg(o, &ex) - vitem_avg(uwep, &ex);
+
+            snprintf(b, sizeof b, "\nVs your %s: %s%.1f average damage%s",
+                     simpleonames(uwep), d >= 0 ? "+" : "", d, ex ? "" : " (roughly)");
+            s += b;
+        }
+    } else if (o->oclass == ARMOR_CLASS && tk) {
+        int cat = objects[o->otyp].oc_armcat, ac = objects[o->otyp].a_ac;
+        struct obj *w = vworn_in(cat);
+
+        if (o->known)
+            snprintf(b, sizeof b, "Armour class: %d (%d %+d)", ac + o->spe, ac, o->spe);
+        else
+            snprintf(b, sizeof b, "Armour class: %d + enchantment unknown", ac);
+        s += b;
+        snprintf(b, sizeof b, "\nSlot: %s", cat >= 0 && cat < 7 ? slot[cat] : "?");
+        s += b;
+        if (objects[o->otyp].a_can) {
+            snprintf(b, sizeof b, "\nMagic cancellation: %d", objects[o->otyp].a_can);
+            s += b;
+        }
+        if (w && w != o) {
+            if (vitem_type_known(w) && w->known)
+                snprintf(b, sizeof b, "\nWorn now: %s, AC %d", simpleonames(w),
+                         objects[w->otyp].a_ac + w->spe);
+            else
+                snprintf(b, sizeof b, "\nWorn now: %s", simpleonames(w));
+            s += b;
+        } else if (!w) {
+            s += "\nNothing worn in that slot";
+        }
+    } else if (o->oclass == FOOD_CLASS && o->otyp != CORPSE && tk) {
+        snprintf(b, sizeof b, "Nutrition: %d, takes %d turn%s to eat",
+                 objects[o->otyp].oc_nutrition, objects[o->otyp].oc_delay,
+                 objects[o->otyp].oc_delay == 1 ? "" : "s");
+        s += b;
+    } else if (o->oclass == SPBOOK_CLASS && tk && o->otyp != SPE_BLANK_PAPER
+               && o->otyp != SPE_NOVEL && o->otyp != SPE_BOOK_OF_THE_DEAD) {
+        snprintf(b, sizeof b, "Spell level %d", objects[o->otyp].oc_level);
+        s += b;
+    } else if (!tk) {
+        s += "Unidentified";
+    }
+    if (!o->bknown)
+        s += s.empty() ? "Curse status unknown" : "\nCurse status unknown";
+    if (o->oclass == WAND_CLASS && !o->known && tk)
+        s += "\nCharges unknown";
+    snprintf(b, sizeof b, "%sWeight: %d", s.empty() ? "" : "\n", (int) o->owt);
+    s += b;
+    return s;
+}
+
 /* ---- s138: preview area effects before you commit ---- */
 static void vbox(int x, int y, int w, int h, int alpha);
 
@@ -3966,7 +4093,7 @@ vsq_hint(int x, int y)
     case S_fountain:
         return "Drink from it (q) or dip into it (#dip)  -  a gamble";
     case S_altar:
-        return "Drop items on it to learn if they are cursed";
+        return "Drop items on it to learn if they are cursed  -  or click yourself to test them all";
     case S_sink:
         return "Drop a ring in to learn what it does; kick it for surprises";
     case S_throne:
@@ -4576,6 +4703,37 @@ vselftest(void)
 
                 if (jm && getenv("VULTURE_SELFTEST_SLEEP")) /* probe: s137 sleeper */
                     jm->msleeping = 1;
+            }
+        }
+        if (getenv("VULTURE_SELFTEST_ITEMS")) { /* probe: s139 cards + altar test */
+            char fp[700];
+            FILE *f;
+            struct obj *io;
+
+            snprintf(fp, sizeof fp, "%s\\items.txt", dir);
+            if ((f = fopen(fp, "w")) != 0) {
+                for (io = gi.invent; io; io = io->nobj)
+                    fprintf(f, "== %s\n%s\n", doname(io), vulture_item_info(io).c_str());
+                fclose(f);
+            }
+            levl[u.ux][u.uy].typ = ALTAR;
+            levl[u.ux][u.uy].altarmask = AM_CHAOTIC;
+            newsym(u.ux, u.uy);
+            {
+                int nn = 0;
+
+                for (io = gi.invent; io && nn < 3; io = io->nobj)
+                    if (!io->owornmask)
+                        io->bknown = 0, nn++;
+            }
+            (void) vulture_altar_test();
+            snprintf(fp, sizeof fp, "%s\\altar.txt", dir);
+            if ((f = fopen(fp, "w")) != 0) {
+                for (io = svl.level.objects[u.ux][u.uy]; io; io = io->nexthere)
+                    fprintf(f, "floor: %s bknown=%d nomerge=%d\n", doname(io), io->bknown,
+                            io->nomerge);
+                fprintf(f, "queued: %d\n", cmdq_peek(CQ_CANNED) ? 1 : 0);
+                fclose(f);
             }
         }
         lines.push_back("a +0 dagger");

@@ -1923,6 +1923,90 @@ pickup_object(
 }
 
 /*
+ * s139: one-click altar test.  Drops everything whose curse status you
+ * don't know onto the altar you stand on (each flash sets bknown, exactly
+ * as dropping them one by one would), then picks them all back up on the
+ * next turn.  Worn/wielded things, coins, the ball and chain and
+ * loadstones are left alone; dropped items are kept from merging with the
+ * pile so the pick-up finds exactly them.
+ */
+static unsigned vat_ids[64];
+static int vat_n = 0;
+
+staticfn int
+vulture_altar_pickup(void)
+{
+    struct obj *o, *nxt;
+    int got = 0, k, cursed = 0, blessed = 0;
+
+    for (o = svl.level.objects[u.ux][u.uy]; o; o = nxt) {
+        nxt = o->nexthere;
+        for (k = 0; k < vat_n; k++)
+            if (o->o_id == vat_ids[k])
+                break;
+        if (k == vat_n)
+            continue;
+        cursed += o->cursed ? 1 : 0;
+        blessed += o->blessed ? 1 : 0;
+        if (pickup_object(o, o->quan, FALSE) > 0)
+            got++;
+    }
+    if (got)
+        pline("Altar test: %d item%s - %d cursed, %d blessed, %d uncursed.", got,
+              plur(got), cursed, blessed, got - cursed - blessed);
+    if (got < vat_n)
+        pline("Some of them are still on the altar.");
+    vat_n = 0;
+    return got ? ECMD_TIME : ECMD_OK;
+}
+
+int
+vulture_altar_test(void)
+{
+    struct obj *o, *nxt;
+
+    vat_n = 0;
+    if (!IS_ALTAR(levl[u.ux][u.uy].typ) || u.uswallow) {
+        You("need to stand on an altar for that.");
+        return ECMD_OK;
+    }
+    if (Levitation || (u.usteed && !can_reach_floor(TRUE))) {
+        You_cant("reach the altar to pick things back up.");
+        return ECMD_OK;
+    }
+    if (Blind) {
+        You_cant("see the flashes while blind.");
+        return ECMD_OK;
+    }
+    for (o = gi.invent; o && vat_n < 64; o = o->nobj)
+        if (!o->bknown && !o->owornmask && o != uball && o != uchain
+            && o->oclass != COIN_CLASS && o->otyp != LOADSTONE)
+            vat_ids[vat_n++] = o->o_id;
+    if (!vat_n) {
+        pline("Everything you carry already has a known curse status.");
+        return ECMD_OK;
+    }
+    You("lay %d item%s on the altar.", vat_n, plur(vat_n));
+    vulture_sfx("drop");
+    for (o = gi.invent; o; o = nxt) {
+        int k;
+
+        nxt = o->nobj;
+        for (k = 0; k < vat_n; k++)
+            if (o->o_id == vat_ids[k])
+                break;
+        if (k == vat_n)
+            continue;
+        freeinv(o);
+        doaltarobj(o); /* the flash: sets bknown */
+        o->nomerge = 1; /* addinv clears it again */
+        dropy(o);
+    }
+    cmdq_add_ec(CQ_CANNED, vulture_altar_pickup);
+    return ECMD_TIME;
+}
+
+/*
  * Do the actual work of picking otmp from the floor or monster's interior
  * and putting it in the hero's inventory.  Take care of billing.  Return a
  * pointer to the object where otmp ends up.  This may be different

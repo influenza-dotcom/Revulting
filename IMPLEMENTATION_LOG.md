@@ -3005,6 +3005,15 @@ Only for effects the hero knows (an unidentified wand gets the plain aim line, s
 - Skilled fireball / cone of cold (mode 3, getpos): the 3x3 core at the pointer (bright) and the 5x5 spill-over ring (faint) - 2-9 bursts, later ones re-centred within 1. Warnings: over 10 away (dissipates), unseen / wall spot (mind won't lock on), you in the blast, a spill-over can reach you, a friend in the core or spill. Hover cards and the travel path stay hidden meanwhile.
 - Probe: `VULTURE_SELFTEST_AOE=1` (selftest_aim = fire ray at a hostile, selftest_blast = skilled fireball). Note: probe frames can show a panned camera - the probe parks the mouse near the screen edge and edge-scroll moves the view (that was log 136's "black frame").
 
+### 139. Item stat cards + one-click altar test
+
+Already present and on in the new-player rc (no change): `autoid` shop price identification and wand engrave-ID calls, `price_quotes`, pet-reluctance cursed marking (§63), autounlock, autoquiver.
+
+- Inventory hover (objitemwin `handle_timer_event` -> `vulture_item_info`, levelwin.cpp): weapons show damage dice vs small/large (+enchantment when known), two-handed, skill and your level in it, and average-damage difference against your wielded weapon; armour shows AC (base + known enchantment), slot, magic cancellation, and what you wear in that slot now; food shows nutrition and eating time; spellbooks their level; always curse status if unknown, wand charges if unknown, and weight. Only what the hero knows: dice/AC only for a type whose identity is known or that has no random appearance.
+- Tooltips can now have several lines (vulture_mou.cpp splits on newlines).
+- Altar test: standing on an altar, the self-click menu offers "Test my unknown items on the altar" (`vulture_altar_test`, pickup.c): drops every carried item with unknown curse status (not worn/wielded, coins, ball/chain, loadstones; refused when levitating or blind), each gets the normal altar flash, items are kept from merging (`nomerge`, cleared by addinv), and a queued canned command picks exactly those back up next turn with a summary ("4 items - 1 cursed, 2 blessed, 1 uncursed"). The altar hover hint mentions it.
+- Probe: `VULTURE_SELFTEST_ITEMS=1` dumps items.txt (cards) and altar.txt (drop stage).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

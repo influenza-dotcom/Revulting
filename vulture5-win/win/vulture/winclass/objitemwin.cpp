@@ -205,6 +205,21 @@ objitemwin::handle_mousemotion_event(window *target, void *result, int xrel,
     return V_EVENT_HANDLED_NOREDRAW;
 }
 
+/* s139: hover an item for what it does and how it compares */
+std::string vulture_item_info(struct obj *o); /* levelwin.cpp */
+
+eventresult
+objitemwin::handle_timer_event(window *target, void *result, int time)
+{
+    if (time > HOVERTIMEOUT && obj) {
+        std::string s = vulture_item_info(obj);
+
+        if (!s.empty())
+            vulture_mouse_set_tooltip(s);
+    }
+    return V_EVENT_HANDLED_NOREDRAW;
+}
+
 eventresult
 objitemwin::handle_other_event(window *target, void *result, SDL_Event *event)
 {
