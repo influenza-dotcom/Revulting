@@ -3012,6 +3012,7 @@ vprobe_push_key(SDL_Keycode k) /* probe: s145 */
     SDL_PushEvent(&e);
 }
 static void vgs_probe(int stage, const char *dir); /* s145 probe */
+static void vaim_probe(int stage, const char *dir); /* s156 probe */
 static Uint32 vpause_probe_t = 0; /* s145 probe: shoot the pause menu */
 static void vl_relief_set(bool on); /* s145 */
 static void vl_relief_report(FILE *f);
@@ -4845,8 +4846,8 @@ vcard_draw(const std::string &name)
             if (vulture_unaware(m)) /* s146 */
                 snprintf(ob, sizeof ob, "You hit it %d%%  -  it hasn't noticed you: AMBUSH x2", yh);
             else
-                snprintf(ob, sizeof ob, "You hit it %d%%  -  critical hits %d%%", yh,
-                         vulture_crit_chance());
+                snprintf(ob, sizeof ob, "You hit it %d%%  -  crits %d%%  -  Ctrl+click to aim", yh,
+                         vulture_crit_chance()); /* s156 */
             odds1 = ob;
             snprintf(ob, sizeof ob, "It hits you %d%%, ~%d%% of your health", ih, ip);
             odds2 = ob;
@@ -5907,6 +5908,8 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_LEVEL")) /* probe: s155 the real level-up path */
             pluslvl(FALSE);
+        if (getenv("VULTURE_SELFTEST_AIM")) /* probe: s156 aimed blows, stage by stage */
+            vaim_probe(1, dir);
         if (getenv("VULTURE_SELFTEST_WALK")) { /* probe: s147 a held key, then single steps */
             static const SDL_Keycode ks[] = { SDLK_h, SDLK_l, SDLK_j, SDLK_k };
             int q;
@@ -5956,6 +5959,8 @@ vselftest(void)
             }
         break;
     case 2:
+        if (getenv("VULTURE_SELFTEST_AIM")) /* probe: s156 */
+            vaim_probe(2, dir);
         if (getenv("VULTURE_SELFTEST_CLICK") && isok(vck_from.x, vck_from.y)) { /* probe: s145 */
             char fp[700];
             FILE *f;
@@ -5998,6 +6003,8 @@ vselftest(void)
         }
         break;
     case 3:
+        if (getenv("VULTURE_SELFTEST_AIM")) /* probe: s156 */
+            vaim_probe(3, dir);
         if (!getenv("VULTURE_SELFTEST_NOCENTER")) /* probe: undo any edge-scroll */
             levwin->set_view(u.ux, u.uy);
         levwin->force_redraw();
@@ -6032,6 +6039,8 @@ vselftest(void)
         }
         break;
     case 4:
+        if (getenv("VULTURE_SELFTEST_AIM")) /* probe: s156 */
+            vaim_probe(4, dir);
         if (getenv("VULTURE_SELFTEST_READ")) { /* probe: s150 what got identified */
             char fp4[700];
             FILE *f4;
@@ -6137,6 +6146,118 @@ vfx_word(int x, int y, const char *txt, Uint8 r, Uint8 g, Uint8 b, Uint32 dur)
     vfx_list.push_back(e);
 }
 
+/* s156: Ctrl+click an adjacent enemy - pick a body part (Fallout's called
+   shots): each line shows your chance and what a hit there does */
+static bool vauto_step_toward(int tx, int ty);
+static void vauto_result(void *result);
+
+static bool
+vaim_pick(struct monst *m, void *result)
+{
+    static const struct {
+        int part;
+        const char *name, *what;
+    } parts[6] = { { VAP_TORSO, "Torso", "a normal blow" },
+                   { VAP_LEGS, "Legs", "slows it" },
+                   { VAP_ARMS, "Arms", "makes it drop its weapon" },
+                   { VAP_GROIN, "Groin", "x1.2 damage, may stun" },
+                   { VAP_HEAD, "Head", "x1.5 damage, may stun" },
+                   { VAP_EYES, "Eyes", "blinds it" } };
+    contextmenu *menu;
+    int pick = 0, k, yh, ih, ip;
+    bool sure = m->msleeping || !m->mcanmove;
+    char buf[160];
+
+    vodds(m, &yh, &ih, &ip);
+    menu = new contextmenu(levwin);
+    for (k = 0; k < 6; k++) {
+        int pc;
+
+        if (!vulture_aim_has(m, parts[k].part))
+            continue;
+        pc = sure ? 100 : yh - 5 * vulture_aim_penalty(parts[k].part);
+        pc = pc < 5 ? 5 : pc > 95 && !sure ? 95 : pc;
+        if (parts[k].part == VAP_ARMS && !MON_WEP(m))
+            snprintf(buf, sizeof buf, "%-6s %3d%%   x1.2 damage (it holds no weapon)", parts[k].name, pc);
+        else
+            snprintf(buf, sizeof buf, "%-6s %3d%%   %s", parts[k].name, pc, parts[k].what);
+        menu->add_item(buf, parts[k].part);
+    }
+    menu->layout();
+    vulture_sfx("aim_ready");
+    vulture_event_dispatcher(&pick, V_RESPOND_INT, menu);
+    delete menu;
+    if (pick < VAP_TORSO || pick > VAP_GROIN) {
+        vulture_sfx("ui_cancel");
+        return false;
+    }
+    vulture_aim_part = pick, vulture_aim_mid = m->m_id, vulture_aim_moves = svm.moves;
+    if (!vauto_step_toward(m->mx, m->my)) {
+        vulture_aim_part = 0;
+        return false;
+    }
+    vauto_result(result);
+    return true;
+}
+
+/* probe: s156 - an armed, paralysed hill orc beside you; aim at its arms,
+   then eyes, then legs (a real Tab each time); report, then show the menu */
+static void
+vaim_probe(int stage, const char *dir)
+{
+    static unsigned oid = 0;
+    struct monst *m = 0, *q;
+    static const int seq[4] = { 0, VAP_ARMS, VAP_EYES, VAP_LEGS };
+
+    for (q = fmon; q; q = q->nmon)
+        if (!DEADMONSTER(q) && q->m_id == oid)
+            m = q;
+    if (stage == 1) {
+        coord cc;
+
+        if (enexto(&cc, u.ux + 1, u.uy, &mons[PM_HILL_ORC])
+            && (m = makemon(&mons[PM_HILL_ORC], cc.x, cc.y, NO_MM_FLAGS)) != 0) {
+            if (!MON_WEP(m)) {
+                struct obj *w = mksobj(ORCISH_SHORT_SWORD, FALSE, FALSE);
+
+                w->cursed = 0;
+                (void) mpickobj(m, w);
+                m->weapon_check = NEED_HTH_WEAPON;
+                (void) mon_wield_item(m);
+            }
+            m->mhpmax = m->mhp = 200;
+            m->mpeaceful = 0; /* the probe hero is an orc too */
+            m->mcanmove = 0, m->mfrozen = 60; /* every blow lands */
+            oid = m->m_id;
+        }
+    }
+    if (stage >= 1 && stage <= 3 && m) {
+        vulture_aim_part = seq[stage], vulture_aim_mid = m->m_id, vulture_aim_moves = svm.moves;
+        vprobe_push_key(SDLK_TAB);
+    }
+    if (stage == 4) {
+        char fp[700];
+        FILE *f;
+
+        snprintf(fp, sizeof fp, "%s\\aim.txt", dir);
+        if ((f = fopen(fp, "w")) != 0) {
+            if (m)
+                fprintf(f, "orc hp %d/%d weapon=%s blinded=%d cansee=%d speed=%d(slow=%d) aim_left=%d\n",
+                        m->mhp, m->mhpmax, MON_WEP(m) ? "yes" : "no", m->mblinded, m->mcansee,
+                        m->mspeed, MSLOW, vulture_aim_part);
+            else
+                fprintf(f, "orc gone\n");
+            fclose(f);
+        }
+        if (m) { /* the menu, for a screenshot (the run ends here) */
+            int dummy[4];
+
+            vpause_probe_t = SDL_GetTicks();
+            (void) vaim_pick(m, dummy);
+        }
+    }
+}
+
 /* s155: levelling up - golden rings ripple out from your feet, a spiral of
    motes rises around you, the area flashes warm and LEVEL UP! floats up.
    Drawn around wherever you are (vfx kind 11), so it follows you. */
@@ -6197,6 +6318,10 @@ vulture_crit_fx(int x, int y, int kind)
         vfx_word(x, y, "SNEAK ATTACK x3", 255, 215, 90, 1200);
     else if (kind == 2)
         vfx_word(x, y, "AMBUSH x2", 255, 150, 60, 1100);
+    else if (kind == 3) /* s156: an aimed blow to the head or eyes */
+        vfx_word(x, y, "AIMED!", 255, 120, 90, 1000);
+    else if (kind == 4) /* s156: an aimed blow elsewhere */
+        vfx_word(x, y, "AIMED", 230, 200, 160, 900);
     else
         vfx_word(x, y, "CRITICAL x2", 255, 245, 230, 1000);
     vulture_sfx(kind == 0 ? "skill_up" : "backstab");
@@ -9655,6 +9780,19 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
         if (button == SDL_BUTTON_LEFT)
             vpt_click();
         return V_EVENT_HANDLED_REDRAW;
+    }
+    if (button == SDL_BUTTON_LEFT && (SDL_GetModState() & KMOD_CTRL) && isok(mappos.x, mappos.y)
+        && distmin(u.ux, u.uy, mappos.x, mappos.y) == 1) { /* s156: an aimed blow */
+        struct monst *am = m_at(mappos.x, mappos.y);
+
+        if (am && canspotmon(am) && !am->mtame) {
+            if (vaim_pick(am, result)) {
+                force_redraw();
+                return V_EVENT_HANDLED_FINAL;
+            }
+            force_redraw();
+            return V_EVENT_HANDLED_REDRAW;
+        }
     }
     if (button == SDL_BUTTON_LEFT) { /* s108: Dota-style click marker */
         vfx_click_at(mappos.x, mappos.y);

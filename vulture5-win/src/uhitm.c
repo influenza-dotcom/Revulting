@@ -31,6 +31,11 @@ staticfn boolean backstabbable(struct monst *) NONNULLARG1;
 unsigned vulture_sneak_mid = 0; /* s137 */
 long vulture_sneak_move = -1;
 unsigned vulture_ambush_mid = 0; /* s146 */
+/* s156: an aimed blow (Fallout's called shots), set by the interface for the
+   very next attack on that monster this turn */
+int vulture_aim_part = 0;
+unsigned vulture_aim_mid = 0;
+long vulture_aim_moves = -1;
 staticfn void hmon_hitmon_weapon_melee(struct _hitmon_data *, struct monst *,
                              struct obj *) NONNULLARG123;
 staticfn void hmon_hitmon_weapon(struct _hitmon_data *, struct monst *,
@@ -43,6 +48,8 @@ staticfn void hmon_hitmon_do_hit(struct _hitmon_data *, struct monst *,
                              struct obj *) NONNULLARG12;
 staticfn void hmon_hitmon_dmg_recalc(struct _hitmon_data *, struct obj *);
 staticfn void vulture_crit_apply(int *, struct monst *, int); /* s146 */
+staticfn boolean vaim_now(struct monst *); /* s156 */
+staticfn void vulture_aim_effect(int *, struct monst *);
 staticfn void hmon_hitmon_poison(struct _hitmon_data *, struct monst *,
                              struct obj *) NONNULLARG123;
 staticfn void hmon_hitmon_jousting(struct _hitmon_data *, struct monst *,
@@ -427,6 +434,8 @@ find_roll_to_hit(
     } else if (aatyp == AT_KICK && martial_bonus()) {
         tmp += weapon_hit_bonus((struct obj *) 0);
     }
+    if (vaim_now(mtmp)) /* s156: aiming at a body part */
+        tmp -= vulture_aim_penalty(vulture_aim_part);
 
     return tmp;
 }
@@ -445,6 +454,117 @@ force_attack(struct monst *mtmp, boolean pets_too)
     attacked = do_attack(mtmp);
     svc.context.forcefight = save_Forcefight;
     return attacked;
+}
+
+/*
+ * Vulture s156: aimed blows at a body part (Fallout 1's called shots).
+ * The interface sets vulture_aim_part / _mid / _moves and queues the attack;
+ * the to-hit roll takes the part's penalty and a hit does the part's thing:
+ *   torso  -     normal
+ *   legs   -3    slows it
+ *   arms   -4    it drops its weapon (no weapon: x1.2 damage)
+ *   groin  -4    x1.2 damage, may stun (humanoids)
+ *   head   -6    x1.5 damage, may stun
+ *   eyes   -8    blinds it for a few turns
+ * (d20 points: 5% each.)  Sleeping and helpless targets are still always
+ * hit, so an aimed sneak attack can't miss.  One blow, then it resets.
+ */
+int
+vulture_aim_penalty(int part)
+{
+    static const int pen[7] = { 0, 0, 8, 6, 4, 3, 4 };
+
+    return (part >= 0 && part < 7) ? pen[part] : 0;
+}
+
+/* can this monster be hit there at all? */
+boolean
+vulture_aim_has(struct monst *m, int part)
+{
+    struct permonst *p = m->data;
+
+    switch (part) {
+    case VAP_TORSO: return TRUE;
+    case VAP_EYES: return (boolean) haseyes(p);
+    case VAP_HEAD: return (boolean) has_head(p);
+    case VAP_ARMS: return (boolean) (!nohands(p) && !nolimbs(p));
+    case VAP_LEGS: return (boolean) (!nolimbs(p) && !slithy(p) && !is_floater(p));
+    case VAP_GROIN: return (boolean) (humanoid(p) && !is_undead(p) && !nonliving(p));
+    }
+    return FALSE;
+}
+
+staticfn boolean
+vaim_now(struct monst *m)
+{
+    return (boolean) (vulture_aim_part && m && m->m_id == vulture_aim_mid
+                      && vulture_aim_moves == svm.moves);
+}
+
+/* a hit landed where you aimed: its effect (damage multiplier in *dmg) */
+staticfn void
+vulture_aim_effect(int *dmg, struct monst *mon)
+{
+    int part = vulture_aim_part;
+    char whose[BUFSZ];
+
+    vulture_aim_part = 0; /* one blow */
+    Strcpy(whose, s_suffix(mon_nam(mon)));
+    switch (part) {
+    case VAP_EYES:
+        if (!mon->mcansee && mon->mblinded > 3) {
+            pline("You strike %s eyes again!", whose);
+        } else {
+            mon->mcansee = 0;
+            mon->mblinded = (unsigned) min(127, mon->mblinded + rn1(4, 3));
+            pline("You strike %s eyes - it is blinded!", whose);
+        }
+        break;
+    case VAP_HEAD:
+        *dmg = (*dmg * 3 + 1) / 2;
+        if (!rn2(3) && !mon->mstun) {
+            mon->mstun = 1;
+            pline("You strike %s head - it reels, stunned!", whose);
+        } else {
+            pline("You strike %s head!", whose);
+        }
+        break;
+    case VAP_ARMS: {
+        struct obj *w = MON_WEP(mon);
+
+        if (w && !w->cursed && rn2(2)) {
+            pline("You strike %s arm - it drops %s!", whose, the(xname(w)));
+            obj_extract_self(w);
+            possibly_unwield(mon, FALSE);
+            setmnotwielded(mon, w);
+            mdrop_obj(mon, w, FALSE);
+        } else {
+            *dmg = (*dmg * 6 + 4) / 5;
+            pline("You strike %s arm!", whose);
+        }
+        break;
+    }
+    case VAP_LEGS:
+        if (mon->mspeed != MSLOW) {
+            pline("You strike %s legs - it slows!", whose);
+            mon_adjust_speed(mon, -1, (struct obj *) 0);
+        } else {
+            pline("You strike %s legs!", whose);
+        }
+        break;
+    case VAP_GROIN:
+        *dmg = (*dmg * 6 + 4) / 5;
+        if (rn2(2) && !mon->mstun) {
+            mon->mstun = 1;
+            pline("You strike %s groin - it doubles over!", whose);
+        } else {
+            pline("You strike %s groin!", whose);
+        }
+        break;
+    default:
+        break;
+    }
+    vulture_crit_fx(mon->mx, mon->my, part == VAP_HEAD || part == VAP_EYES ? 3 : 4);
 }
 
 /*
@@ -1879,6 +1999,8 @@ hmon_hitmon(
         hmon_hitmon_dmg_recalc(&hmd, obj);
     if (hmd.dmg > 0 && thrown != HMON_KICKED)
         vulture_crit_apply(&hmd.dmg, mon, thrown); /* s146 */
+    if (hmd.dmg > 0 && hmd.hand_to_hand && vaim_now(mon))
+        vulture_aim_effect(&hmd.dmg, mon); /* s156 */
 
     if (hmd.ispoisoned)
         hmon_hitmon_poison(&hmd, mon, obj);

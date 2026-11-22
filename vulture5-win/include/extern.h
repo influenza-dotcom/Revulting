@@ -432,6 +432,18 @@ extern int vulture_ready_weapon(struct obj *);
 extern boolean vulture_unaware(struct monst *); /* s146 */
 extern int vulture_crit_chance(void);
 extern void vulture_crit_fx(int, int, int);
+/* s156: aimed blows */
+#define VAP_TORSO 1
+#define VAP_EYES 2
+#define VAP_HEAD 3
+#define VAP_ARMS 4
+#define VAP_LEGS 5
+#define VAP_GROIN 6
+extern int vulture_aim_part;
+extern unsigned vulture_aim_mid;
+extern long vulture_aim_moves;
+extern int vulture_aim_penalty(int);
+extern boolean vulture_aim_has(struct monst *, int);
 extern void vulture_search_more(void); /* s135 */
 /* Vulture mod s70-71 */
 extern boolean llm_rewrite_line(const char *, char *, size_t, boolean);

@@ -3325,6 +3325,29 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   UP! floats up, and the "gain" sound; it follows you if you move.  Probe
   VULTURE_SELFTEST_LEVEL calls the real pluslvl().
 
+### 156. Aimed blows at body parts (Fallout 1's called shots)
+
+- **Ctrl+click an adjacent enemy**: a menu lists the body parts it has, each
+  with your hit chance and what a hit there does; pick one and the blow is
+  struck (`vaim_pick` sets vulture_aim_part / _mid / _moves and queues the
+  step through vauto_step_toward).  The monster card's odds line now says
+  "Ctrl+click to aim".
+- Core (uhitm.c): `find_roll_to_hit` subtracts the part's penalty for that
+  monster this turn; a melee hit runs `vulture_aim_effect` after the crit
+  check, then the aim is spent (one blow):
+  torso 0 normal; legs -3 slows it (mon_adjust_speed); arms -4 it drops its
+  weapon half the time (possibly_unwield + setmnotwielded + mdrop_obj; not
+  if cursed), else x1.2; groin -4 (humanoid, living) x1.2 and 50% stun;
+  head -6 x1.5 and 1-in-3 stun; eyes -8 blinded 3-6 turns.  Penalties in
+  d20 points (5% each).  `vulture_aim_has` hides parts the body lacks
+  (eyes, head, hands, legs - not slithy / limbless / floating - groin).
+  Sleeping or helpless targets are always hit, so an aimed sneak attack
+  can't miss.  "AIMED!" (head / eyes) or "AIMED" rises over the target.
+- Probe VULTURE_SELFTEST_AIM: a paralysed, armed (made hostile) hill orc;
+  arms, eyes, legs with real Tab presses -> damaged, blinded, slowed (it
+  kept its sword: the arms roll is 50/50 and fell to x1.2 damage); every
+  aim spent; the menu shot shows each part with its chance and effect.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
