@@ -3228,6 +3228,36 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   Probe VULTURE_SELFTEST_READ: unclear taming / food detection reads and a
   see invisible quaff all came back identified with the message.
 
+### 151. Normal maps fixed (they looked broken in real play); weight and impact
+
+- **What went wrong with 149**: tuned from small 800x600 probe shots.  At
+  the player's real settings (1920x1080 fullscreen, wall_opacity 0.3 - now
+  copied into the probe profile's vulture.conf, fullscreen off) it drew a
+  bright diamond grid over every unseen square and a crumpled-foil sheen on
+  every lit floor.  Causes and fixes:
+  - misc.floor_not_visible / floor_highlight / off_map were treated as
+    sprites and got a silhouette bevel, lit by the room key light -> their
+    normal maps are now alpha 0 (never lit);
+  - floor and wall normal maps had a ridge along the tile edge (height
+    meets transparency) -> slope zeroed in a 2 px band along the edge;
+  - strengths halved (floor 5 -> 2.2, wall 4.5 -> 2.5, sprite 4 -> 2.8,
+    sprite bevel 0.6 -> 0.35);
+  - runtime: no relief on remembered ground or away from a real light
+    (L < 0.6 and light-gradient strength < 0.15), key light 0.45 -> 0.30,
+    gain halved, crevices a third and only near a real light, glints only
+    from a real nearby light and capped at +24, total clamp +-60.
+  Measured in the dark around a room: same mean brightness as flat (4.9).
+- **Weight** (`vheft_mon` by size / corpse weight, floaters and flyers
+  light; `vheft_obj` by owt): heavy monsters hop less (0.3x) and land with
+  a harder settle, tiny ones spring (1.4x); a heavy monster's step, a body
+  falling (death anim) and an item landing queue `vimpact` with a delay so
+  it fires on contact: a dust puff along the floor (vfx kind 10), a thud
+  (impact_heavy or drop, by heft, positional) and a short non-blocking
+  camera jolt (damped bounce added to the camera offset, fading with
+  distance).  Dropped items bounce by weight (feather 1.5x, heavy 0.05x).
+  Probe VULTURE_SELFTEST_HEAVY: a mastodon's death fired a heft-5 impact
+  with a 3 px jolt.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -22,12 +22,15 @@ from PIL import Image
 from scipy import ndimage
 
 FAMILY = {
-    'floor': dict(fine=0.8, coarse=5.0, bevel=0.0, strength=5.0),
-    'edge': dict(fine=0.8, coarse=5.0, bevel=0.0, strength=5.0),
-    'wall': dict(fine=0.9, coarse=7.0, bevel=0.25, strength=4.5),
+    'floor': dict(fine=1.0, coarse=5.0, bevel=0.0, strength=2.2),
+    'edge': dict(fine=1.0, coarse=5.0, bevel=0.0, strength=2.2),
+    'wall': dict(fine=1.0, coarse=7.0, bevel=0.15, strength=2.5),
 }
-SPRITE = dict(fine=0.7, coarse=3.5, bevel=0.6, strength=4.0)
+SPRITE = dict(fine=0.9, coarse=3.5, bevel=0.35, strength=2.8)
 SKIP = ('cursor.',)  # UI only
+# overlays drawn over the floor (unseen squares, the hover highlight, the
+# void beyond the map): no normal at all, so they are never lit
+UNLIT = ('misc.floor_not_visible', 'misc.floor_highlight', 'misc.off_map')
 
 
 def height_of(rgba, fam):
@@ -52,9 +55,16 @@ def height_of(rgba, fam):
     return h, a
 
 
-def normals_of(h, a, strength):
+def normals_of(h, a, strength, flat_edges=False):
     gx = ndimage.sobel(h, axis=1) / 8.0
     gy = ndimage.sobel(h, axis=0) / 8.0
+    if flat_edges:
+        # no slope in a 2 px band along the tile's edge: where the height
+        # meets the transparent outside it reads as a ridge, which drew a
+        # diamond grid over the floor
+        inner = ndimage.binary_erosion(a > 0.5, iterations=2)
+        gx = gx * inner
+        gy = gy * inner
     nx, ny, nz = -gx * strength * 8.0, -gy * strength * 8.0, np.ones_like(h)
     inv = 1.0 / np.sqrt(nx * nx + ny * ny + nz * nz)
     n = np.stack([nx * inv, ny * inv, nz * inv], axis=-1)
@@ -68,10 +78,10 @@ def make(src, dst):
     img = Image.open(src).convert('RGBA')
     rgba = np.asarray(img, dtype=np.float64)
     h, a = height_of(rgba, fam)
-    n = normals_of(h, a, fam['strength'])
+    n = normals_of(h, a, fam['strength'], flat_edges=fam is not SPRITE)
     out = np.empty(rgba.shape, dtype=np.uint8)
     out[..., :3] = np.clip((n + 1.0) * 0.5 * 255.0 + 0.5, 0, 255).astype(np.uint8)
-    out[..., 3] = rgba[..., 3].astype(np.uint8)
+    out[..., 3] = 0 if name.startswith(UNLIT) else rgba[..., 3].astype(np.uint8)
     Image.fromarray(out, 'RGBA').save(dst, optimize=True)
 
 

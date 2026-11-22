@@ -305,6 +305,10 @@ vpt_click(void)
  * sprite's own facing is detected once from where its top (head/ears)
  * sits; sprites flip to match travel.  Front-facing art counts as right.
  */
+static int vheft_mon(const struct permonst *p); /* s151 */
+static int vheft_obj(const struct obj *o);
+static void vimpact(int x, int y, int heft, int delay_ms);
+
 struct vtw_ent {
     int x, y;
     signed char face;
@@ -399,6 +403,19 @@ vtw_prepare(int vx, int vy)
     if (moved && !vtw_animating && !vtw_pending) {
         vtw_pending = true;
         vtw_t = 0.0;
+        /* s151: the heavy ones' feet come down at the end of the step */
+        for (it = vtw_cur.begin(); it != vtw_cur.end(); ++it) {
+            struct monst *hm;
+
+            sn = vtw_snap.find(it->first);
+            if (it->first == VTW_HERO || sn == vtw_snap.end() || !snap_ok
+                || (sn->second.x == it->second.x && sn->second.y == it->second.y)
+                || abs(sn->second.x - it->second.x) > 1 || abs(sn->second.y - it->second.y) > 1
+                || !(hm = m_at(it->second.x, it->second.y)) || !canspotmon(hm))
+                continue;
+            if (vheft_mon(hm->data) >= 4)
+                vimpact(it->second.x, it->second.y, vheft_mon(hm->data) - 1, 100);
+        }
     }
     if (!vtw_pending && !vtw_animating) {
         vtw_commit(vx, vy);
@@ -427,8 +444,16 @@ vtw_prepare(int vx, int vy)
             vtw_ox[y][x] = (short) ((1.0 - te) * sx);
             /* s78/s79: a hop on each step - airborne for the first 0.8,
                then a landing squash (drawn in levelwin::draw) */
+            double hopk = 1.0; /* s151: light things spring, heavy ones plod */
+
+            if (it->first != VTW_HERO) {
+                struct monst *hm = m_at(x, y);
+                int hf = hm ? vheft_mon(hm->data) : 2;
+
+                hopk = hf <= 0 ? 1.4 : hf == 1 ? 1.2 : hf == 2 ? 1.0 : hf <= 4 ? 0.6 : 0.3;
+            }
             vtw_oy[y][x] = (short) ((1.0 - te) * sy
-                                    - (vtw_linear ? 2.5 : 6.0) /* s147: was 5 / 12 */
+                                    - hopk * (vtw_linear ? 2.5 : 6.0) /* s147: was 5 / 12 */
                                       * sin(3.14159265358979 * (te < 0.8 ? te / 0.8 : 1.0)));
             vtw_mv[y][x] = 1;
         }
@@ -706,7 +731,7 @@ static int vanim_kind = 0;           /* 0 none, 1 lunge, 2 death */
 static int vanim_ax, vanim_ay, vanim_tx, vanim_ty;
 static double vanim_t = 0.0;
 struct vanim_death {
-    int x, y, tile;
+    int x, y, tile, heft; /* s151: heft */
 };
 static vanim_death vanim_deaths[8];
 static int vanim_ndeaths = 0, vanim_dtile = -1, vanim_dx = 0, vanim_dy = 0;
@@ -811,6 +836,7 @@ vulture_anim_death(int x, int y)
     {
         struct monst *dm = m_at(x, y);
 
+        vanim_deaths[vanim_ndeaths].heft = dm ? vheft_mon(dm->data) : 2; /* s151 */
         if (!dm || !noncorporeal(dm->data))
             vst_add(x, y, 2); /* s93: a death leaves a pool */
     }
@@ -827,6 +853,7 @@ vulture_anim_death(int x, int y)
 static int vanim_drops[8][2];
 static int vanim_ndrops = 0;
 static bool vanim_drop_on[ROWNO][COLNO];
+static signed char vanim_drop_heft[ROWNO][COLNO]; /* s151 */
 
 extern "C" void
 vulture_anim_drop(int x, int y)
@@ -857,6 +884,8 @@ vanim_play_drops(void)
 
         if (map_data->get_glyph(MAP_OBJ, x, y) != V_TILE_NONE) {
             vanim_drop_on[y][x] = true;
+            vanim_drop_heft[y][x] = (signed char) vheft_obj(svl.level.objects[x][y]); /* s151 */
+            vimpact(x, y, vanim_drop_heft[y][x], 80); /* lands about halfway in */
             shown++;
         }
     }
@@ -891,8 +920,10 @@ vanim_draw_object(int j, int i, int x, int y, int tile_id)
         sx = 1.0 + 0.30 * k;
     } else if (t < 0.9) {                /* one bounce */
         double u = (t - 0.65) / 0.25;
+        int hf = vanim_drop_heft[i][j]; /* s151: a feather bounces, an anvil doesn't */
 
-        oy = -9.0 * sin(3.14159265358979 * u);
+        oy = -9.0 * (hf <= 0 ? 1.5 : hf == 1 ? 1.1 : hf == 2 ? 0.6 : hf <= 4 ? 0.25 : 0.05)
+             * sin(3.14159265358979 * u);
     } else {                             /* settle */
         double k = sin(3.14159265358979 * (t - 0.9) / 0.1);
 
@@ -917,6 +948,7 @@ vanim_play_deaths(void)
             continue; /* still shown (lifesaved, or not redrawn): skip */
         vanim_dx = vanim_deaths[i].x, vanim_dy = vanim_deaths[i].y;
         vanim_dtile = vanim_deaths[i].tile;
+        vimpact(vanim_dx, vanim_dy, vanim_deaths[i].heft, 120); /* s151: the body lands */
         vanim_frames(2, 9, 14);
         vanim_dtile = -1;
     }
@@ -1141,6 +1173,117 @@ vfx_burst(int x, int y, Uint8 r, Uint8 g, Uint8 b)
     e.r = r, e.g = g, e.b = b;
     vfx_list.push_back(e);
     vl_flash(x, y, r / 255.0f, g / 255.0f, b / 255.0f, 0.7f, 2.0f, 300); /* s133 */
+}
+
+/*
+ * IMPLEMENTATION_LOG s151: weight.  Heavy things land, fall and walk with
+ * weight: a "heft" (0 feather .. 8 boulder / gigantic) picks a dust puff, a
+ * thud and a short non-blocking camera jolt that fades with distance from
+ * you.  Impacts are queued with a delay so they happen when the foot comes
+ * down, the body hits the floor or the item lands, and fire from the draw.
+ */
+struct vimp_q {
+    int x, y, heft;
+    Uint32 when;
+};
+static std::vector<vimp_q> vimp_queue;
+static Uint32 vimp_t0 = 0;
+static double vimp_amp = 0.0;
+
+/* how heavy a monster is: by size, nudged by its corpse weight */
+static int
+vheft_mon(const struct permonst *p)
+{
+    static const int bysize[8] = { 0, 1, 2, 4, 6, 8, 8, 8 };
+    int h = bysize[p->msize > 7 ? 7 : p->msize];
+
+    if (p->cwt >= 2500 && h < 8)
+        h++;
+    if (is_floater(p) || is_flyer(p) || noncorporeal(p))
+        h = h > 1 ? h / 3 : 0; /* drifting and flapping things don't stomp */
+    return h;
+}
+
+/* how heavy an object is */
+static int
+vheft_obj(const struct obj *o)
+{
+    unsigned w = o ? o->owt : 0;
+
+    return w < 15 ? 0 : w < 60 ? 1 : w < 200 ? 2 : w < 450 ? 4 : w < 1500 ? 6 : 8;
+}
+
+/* queue an impact at (x, y) delay_ms from now */
+static void
+vimpact(int x, int y, int heft, int delay_ms)
+{
+    vimp_q q;
+
+    if (heft < 2 || !isok(x, y) || !cansee(x, y))
+        return;
+    q.x = x, q.y = y, q.heft = heft > 8 ? 8 : heft;
+    q.when = SDL_GetTicks() + (Uint32) (delay_ms < 0 ? 0 : delay_ms);
+    vimp_queue.push_back(q);
+}
+
+/* fire impacts that are due: dust, a thud, a jolt */
+static void
+vimp_tick(void)
+{
+    Uint32 now = SDL_GetTicks();
+    size_t i, n = 0;
+
+    for (i = 0; i < vimp_queue.size(); i++) {
+        vimp_q &q = vimp_queue[i];
+
+        if ((Sint32) (now - q.when) < 0) {
+            vimp_queue[n++] = q;
+            continue;
+        }
+        {
+            vfx_ent e;
+            int d = distmin(u.ux, u.uy, q.x, q.y);
+            double amp = (q.heft >= 4 ? 0.9 * q.heft - 1.5 : 0.0) * (d <= 2 ? 1.0 : d >= 10 ? 0.0 : (10 - d) / 8.0);
+
+            memset(&e, 0, sizeof e);
+            e.kind = 10, e.x = q.x, e.y = q.y, e.t0 = now, e.dur = 420 + 35 * q.heft;
+            e.sub = q.heft;
+            e.r = 150, e.g = 135, e.b = 115;
+            vfx_list.push_back(e);
+            if (amp > vimp_amp * (1.0 - (now - vimp_t0) / 260.0))
+                vimp_amp = amp, vimp_t0 = now;
+            if (getenv("VULTURE_SELFTEST")) { /* probe: s151 */
+                char fpi[700];
+                FILE *fi;
+
+                snprintf(fpi, sizeof fpi, "%s\\impacts.txt", getenv("VULTURE_SELFTEST"));
+                if ((fi = fopen(fpi, "a")) != 0) {
+                    fprintf(fi, "impact heft %d at %d,%d jolt %.1f px\n", q.heft, q.x, q.y, amp);
+                    fclose(fi);
+                }
+            }
+            if (q.heft >= 4)
+                vulture_sfx_at_vol("impact_heavy", q.x - u.ux, q.y - u.uy, 25 + 8 * q.heft);
+            else
+                vulture_sfx_at_vol("drop", q.x - u.ux, q.y - u.uy, 35 + 8 * q.heft);
+        }
+    }
+    vimp_queue.resize(n);
+}
+
+/* this frame's camera jolt: a quick, damped vertical bounce */
+static void
+vimp_offset(int *ox, int *oy)
+{
+    Uint32 age = SDL_GetTicks() - vimp_t0;
+    double k;
+
+    *ox = *oy = 0;
+    if (vimp_amp <= 0.0 || age > 260)
+        return;
+    k = vimp_amp * exp(-age / 70.0);
+    *oy = (int) (k * sin(age / 260.0 * 3.14159265358979 * 5.0));
+    *ox = (int) (0.35 * k * sin(age / 260.0 * 3.14159265358979 * 7.0 + 1.0));
 }
 
 static void
@@ -2014,6 +2157,20 @@ vfx_draw(int cx, int cy, int vx, int vy)
         vfx_ent &e = vfx_list[i];
         double age = (double) (now - e.t0) / e.dur, ts = (now - e.t0) / 1000.0;
 
+        if (age < 1.0 && e.kind == 10) { /* s151: a dust puff along the floor */
+            int nd = 6 + 2 * e.sub, k2;
+            double ease = 1.0 - (1.0 - age) * (1.0 - age), rr = (10 + 3.2 * e.sub) * ease;
+
+            vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
+            for (k2 = 0; k2 < nd; k2++) {
+                double a = k2 * 6.2832 / nd + e.x * 0.7 + e.y * 1.3;
+                int al = (int) ((1.0 - age) * (110 + 12 * e.sub));
+
+                vfx_glowdot(sx + (int) (rr * cos(a)), sy + (int) (rr * 0.5 * sin(a)) - (int) (7 * age),
+                            e.r, e.g, e.b, al > 230 ? 230 : al);
+            }
+            continue;
+        }
         if (age < 1.0 && e.kind == 3) { /* s108 */
             vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
             vfx_draw_click(e, age, sx, sy);
@@ -5557,6 +5714,27 @@ vselftest(void)
             snprintf(fp3, sizeof fp3, "%s\\selftest_mark.bmp", dir);
             SDL_SaveBMP(vulture_screen, fp3);
         }
+        if (getenv("VULTURE_SELFTEST_HEAVY")) { /* probe: s151 a gigantic death + drops */
+            coord hc;
+            struct monst *bm;
+            struct obj *ch, *dg;
+
+            if (enexto(&hc, u.ux + 1, u.uy, &mons[PM_MASTODON])
+                && (bm = makemon(&mons[PM_MASTODON], hc.x, hc.y, NO_MM_FLAGS)) != 0) {
+                bm->mhp = 1;
+                bm->mcanmove = 0, bm->mfrozen = 40;
+                vprobe_push_key(SDLK_TAB);
+                vprobe_push_key(SDLK_TAB);
+            }
+            if (enexto(&hc, u.ux - 1, u.uy, (struct permonst *) 0)) {
+                ch = mksobj_at(CHEST, hc.x, hc.y, FALSE, FALSE);
+                dg = mksobj_at(DAGGER, hc.x, hc.y + 1, FALSE, FALSE);
+                newsym(hc.x, hc.y), newsym(hc.x, hc.y + 1);
+                vulture_anim_drop(hc.x, hc.y);
+                vulture_anim_drop(hc.x, hc.y + 1);
+                nhUse(ch), nhUse(dg);
+            }
+        }
         if (getenv("VULTURE_SELFTEST_READ")) { /* probe: s150 ambiguous reads get identified */
             static const int scr[2] = { SCR_TAMING, SCR_FOOD_DETECTION };
             int q;
@@ -7893,22 +8071,22 @@ vl_nmap(int x0, int y0, int x1, int y1, int gx0, int gy0, int FS)
                 ny = (int) ((pn >> 8) & 255) - 128;
                 nz = (int) (pn & 255) - 128;
                 /* lit where the normal faces the light: n . L */
-                d = ((nx * dx + ny * dy) * 3) >> 9;
-                /* crevices: faces tilted away from you take less of the
-                   light overall (mortar, folds, the gaps between stones) */
-                d -= ((127 - nz) * lv) >> 8;
-                /* a glint where the surface faces the light squarely */
-                if (d > 40)
-                    sp = ((d - 40) * (d - 40) * lv) >> 14;
+                d = (nx * dx + ny * dy) >> 8;
+                /* crevices, near a real light: faces tilted away take a
+                   little less of it (s149b: a third of before) */
+                d -= ((127 - nz) * lv) >> 10;
+                /* a soft glint where a nearby light hits a face squarely */
+                if (d > 30 && lv > 64)
+                    sp = ((d - 30) * (d - 30) * lv) >> 16;
                 d = d * a >> 8;
                 if (!d && !sp)
                     continue;
-                if (d > 110)
-                    d = 110;
-                else if (d < -120)
-                    d = -120;
-                if (sp > 40)
-                    sp = 40;
+                if (d > 60)
+                    d = 60;
+                else if (d < -60)
+                    d = -60;
+                if (sp > 24)
+                    sp = 24;
                 p = row[x], m = 256 + d;
                 r = ((int) (((p >> rs) & 255) * m) >> 8) + sp;
                 g = ((int) (((p >> gs) & 255) * m) >> 8) + sp;
@@ -8092,16 +8270,23 @@ vl_relief_dirs(const std::vector<float> &Lg, int lw, int lh)
             st = mag * 7.0f; /* near a lamp: full strength (s147: 8 px cells) */
             if (st > 1.0f)
                 st = 1.0f;
+            /* s149b: remembered ground (L 0.5, not in sight) and anything
+               not near a real light gets no relief - lighting it drew a
+               bright grid over every unseen square */
+            if (L < 0.6f && st < 0.15f)
+                continue;
             if (L < 1.0f)
                 st *= 0.4f + 0.6f * L;
-            key = 0.45f * (L > 1.0f ? 1.0f : L); /* s149: was 0.22 */
+            key = 0.30f * (L > 1.0f ? 1.0f : L); /* s149b: 0.45 was too much */
             {
                 float ux = mag > 1e-5f ? gx / mag : 0, uy = mag > 1e-5f ? gy / mag : 0;
                 float lx = ux * st - 0.6f * key, ly = uy * st - 0.8f * key;
 
                 vr_dx[(size_t) j * lw + i] = (short) (lx * 256.0f);
                 vr_dy[(size_t) j * lw + i] = (short) (ly * 256.0f);
-                vr_lv[(size_t) j * lw + i] = (short) (256.0f * (L > 1.0f ? 1.0f : L));
+                /* lv now carries how much of it is a real nearby light
+                   (glints and crevices follow that, not the room's key) */
+                vr_lv[(size_t) j * lw + i] = (short) (256.0f * st);
                 if (vr_cmin[j] < 0)
                     vr_cmin[j] = i;
                 vr_cmax[j] = i;
@@ -8363,8 +8548,14 @@ levelwin::draw()
     vtip_tick();    /* s142 */
     vglint_tick();  /* s136 */
     vamb_tick();    /* s136 */
-    map_centre_x += vtw_gx + (int) vpan_px; /* s79: + MMB drag residual */
-    map_centre_y += vtw_gy + (int) vpan_py;
+    vimp_tick(); /* s151 */
+    {
+        int jx, jy;
+
+        vimp_offset(&jx, &jy); /* s151: a heavy landing jolts the view */
+        map_centre_x += vtw_gx + (int) vpan_px + jx; /* s79: + MMB drag residual */
+        map_centre_y += vtw_gy + (int) vpan_py + jy;
+    }
 
     if (vzoom > 1.0)
         prev_cx = -1; /* s121: zoomed, every frame is a full redraw */
@@ -8586,11 +8777,17 @@ levelwin::draw()
                            spread over the last third (the old 26% squash in
                            the final 24 ms showed as a one-frame pop); runs
                            and held keys get less, so they read as walking */
-                        double te = vtw_te, a = vtw_linear ? 0.45 : 1.0;
+                        double te = vtw_te, a = vtw_linear ? 0.45 : 1.0, sq = 1.0, st = 1.0;
+                        struct monst *wm = m_at(j, i); /* s151: weight */
+                        int wf = wm ? vheft_mon(wm->data) : 2;
 
-                        ys = 1.0 + a * 0.05 * sin(3.14159265358979 * (te < 0.7 ? te / 0.7 : 1.0));
+                        if (wf >= 4)
+                            sq = 1.6, st = 0.4; /* heavy: barely lifts, lands hard */
+                        else if (wf <= 1)
+                            sq = 0.7, st = 1.4; /* light: springy */
+                        ys = 1.0 + a * st * 0.05 * sin(3.14159265358979 * (te < 0.7 ? te / 0.7 : 1.0));
                         if (te > 0.62)
-                            ys -= a * 0.07 * sin(3.14159265358979 * (te - 0.62) / 0.38);
+                            ys -= a * sq * 0.07 * sin(3.14159265358979 * (te - 0.62) / 0.38);
                         xs = 1.0 / pow(ys, 0.7);
                         deg = vtw_face[i][j] * 5.0 * a * sin(3.14159265358979 * te);
                     } else {
