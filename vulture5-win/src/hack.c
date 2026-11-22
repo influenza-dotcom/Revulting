@@ -2705,18 +2705,24 @@ domove(void)
 {
         coordxy ux1 = u.ux, uy1 = u.uy;
 
+        d_level lev1 = u.uz;
+
         gd.domove_succeeded = 0L;
         domove_core();
         /* gd.domove_succeeded is available to make assessments now */
         if ((gd.domove_succeeded & (DOMOVE_RUSH | DOMOVE_WALK)) != 0) {
-            extern void vulture_sfx_footstep(int);
-
             maybe_smudge_engr(ux1, uy1, u.ux, u.uy);
             maybe_adjust_hero_bubble();
-            /* Vulture s74: footsteps (none while airborne or riding) */
-            if ((ux1 != u.ux || uy1 != u.uy) && !Levitation && !Flying
-                && !u.usteed && !Underwater)
-                vulture_sfx_footstep(is_pool(u.ux, u.uy) ? 1 : 0);
+        }
+        /* Vulture s74: footsteps (none while airborne or riding).  s150: on
+           EVERY step - the RUSH/WALK flags above are only set on a command's
+           first step, so travel and click-walks used to get one footstep per
+           click.  One square on the same level = a step, not a teleport. */
+        if (on_level(&lev1, &u.uz) && distmin(ux1, uy1, u.ux, u.uy) == 1 && !Levitation
+            && !Flying && !u.usteed && !Underwater) {
+            extern void vulture_sfx_footstep(int);
+
+            vulture_sfx_footstep(is_pool(u.ux, u.uy) ? 1 : 0);
         }
         gd.domove_attempting = 0L;
 

@@ -3211,6 +3211,23 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Also: autosokoban had vanished from the player's two rc files (rewritten
   11-20 21:29 after log 84 enabled it); added back (outside the repo).
 
+### 150. A footstep per step; scrolls and potions always identify
+
+- **Footsteps** (hack.c `domove`): the sound used to need DOMOVE_RUSH /
+  DOMOVE_WALK in domove_succeeded, which only a command's FIRST step has,
+  so travel and click-walks played one footstep per click.  Now any move of
+  exactly one square on the same level plays one (not while levitating,
+  flying, riding or underwater; a splash in water).  Probe (CLICK): a
+  4-square walk logged 4 footsteps.
+- **No more "Call a scroll labeled ...:" / "Call a ... potion:"** -
+  `vulture_read_autoid` (read.c) identifies the item, gives the usual
+  discovery XP and says "(That was a scroll of taming.)".  Used where doread
+  and dodrink used to `trycall` (effect unclear), by `strange_feeling` for
+  scrolls and potions, and by potion vapours (`potionbreathe`).  A thrown
+  potion shattering out of reach still only asks (no free ID-by-throwing).
+  Probe VULTURE_SELFTEST_READ: unclear taming / food detection reads and a
+  see invisible quaff all came back identified with the message.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

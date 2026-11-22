@@ -423,6 +423,7 @@ extern int vulture_aim_mode, vulture_aim_dmg;
 extern int vulture_getdir_ray(int, boolean);
 extern int vulture_aim_end(int);
 extern int vulture_altar_test(void); /* s139 */
+extern void vulture_read_autoid(struct obj *); /* s150 */
 extern void vulture_gear_begin(const unsigned *, const long *, int); /* s145 */
 extern int vulture_gear_pending(void);
 extern int vulture_gear_act(void);

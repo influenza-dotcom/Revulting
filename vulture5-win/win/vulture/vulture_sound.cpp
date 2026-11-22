@@ -357,6 +357,15 @@ extern "C" void vulture_sfx_footstep(int water)
 	static int loaded = 0;
 	Mix_Chunk *c;
 
+	if (getenv("VULTURE_SELFTEST")) { /* probe: s150 one per step */
+		std::string fp = std::string(getenv("VULTURE_SELFTEST")) + "\\steps.txt";
+		FILE *f = fopen(fp.c_str(), "a");
+
+		if (f) {
+			fprintf(f, "step %s\n", water ? "(splash)" : "");
+			fclose(f);
+		}
+	}
 	if (!vulture_sound_inited || !vulture_opts.play_effects)
 		return;
 	if (!loaded) {

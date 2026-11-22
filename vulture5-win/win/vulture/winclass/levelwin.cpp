@@ -5557,6 +5557,35 @@ vselftest(void)
             snprintf(fp3, sizeof fp3, "%s\\selftest_mark.bmp", dir);
             SDL_SaveBMP(vulture_screen, fp3);
         }
+        if (getenv("VULTURE_SELFTEST_READ")) { /* probe: s150 ambiguous reads get identified */
+            static const int scr[2] = { SCR_TAMING, SCR_FOOD_DETECTION };
+            int q;
+            struct monst *pm2;
+
+            for (pm2 = fmon; pm2; pm2 = pm2->nmon) /* nobody to tame */
+                if (!DEADMONSTER(pm2) && distmin(u.ux, u.uy, pm2->mx, pm2->my) <= 2)
+                    mongone(pm2);
+            for (q = 0; q < 2; q++) {
+                struct obj *so = mksobj(scr[q], FALSE, FALSE);
+
+                so->cursed = so->blessed = 0;
+                so = addinv(so);
+                vprobe_push_key(SDLK_r);
+                vprobe_push_key((SDL_Keycode) so->invlet);
+            }
+            {
+                static const int pot[2] = { POT_WATER, POT_SEE_INVISIBLE };
+
+                for (q = 0; q < 2; q++) {
+                    struct obj *po = mksobj(pot[q], FALSE, FALSE);
+
+                    po->cursed = po->blessed = 0;
+                    po = addinv(po);
+                    vprobe_push_key(SDLK_q);
+                    vprobe_push_key((SDL_Keycode) po->invlet);
+                }
+            }
+        }
         if (getenv("VULTURE_SELFTEST_WALK")) { /* probe: s147 a held key, then single steps */
             static const SDL_Keycode ks[] = { SDLK_h, SDLK_l, SDLK_j, SDLK_k };
             int q;
@@ -5682,6 +5711,20 @@ vselftest(void)
         }
         break;
     case 4:
+        if (getenv("VULTURE_SELFTEST_READ")) { /* probe: s150 what got identified */
+            char fp4[700];
+            FILE *f4;
+            static const int ty[4] = { SCR_TAMING, SCR_FOOD_DETECTION, POT_WATER, POT_SEE_INVISIBLE };
+            int q;
+
+            snprintf(fp4, sizeof fp4, "%s\\read.txt", dir);
+            if ((f4 = fopen(fp4, "w")) != 0) {
+                for (q = 0; q < 4; q++)
+                    fprintf(f4, "%s known=%d\n", OBJ_NAME(objects[ty[q]]),
+                            objects[ty[q]].oc_name_known);
+                fclose(f4);
+            }
+        }
         if (getenv("VULTURE_SELFTEST_GEAR"))
             vgs_probe(4, dir);
         if (getenv("VULTURE_SELFTEST_RT")) { /* probe: s140 turns passing */

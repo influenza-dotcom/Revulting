@@ -637,7 +637,7 @@ dopotion(struct obj *otmp)
             makeknown(otmp->otyp);
             more_experienced(0, 10);
         } else
-            trycall(otmp);
+            vulture_read_autoid(otmp); /* s150: was trycall() */
     }
     useup(otmp);
     return ECMD_TIME;
@@ -1472,7 +1472,9 @@ strange_feeling(struct obj *obj, const char *txt)
     if (!obj) /* e.g., crystal ball finds no traps */
         return;
 
-    if (obj->dknown)
+    if (obj->oclass == SCROLL_CLASS || obj->oclass == POTION_CLASS)
+        vulture_read_autoid(obj); /* s150: no guessing for reads and drinks */
+    else if (obj->dknown)
         trycall(obj);
 
     useup(obj);
@@ -2115,7 +2117,7 @@ potionbreathe(struct obj *obj)
         if (kn)
             makeknown(obj->otyp);
         else
-            trycall(obj);
+            vulture_read_autoid(obj); /* s150: vapours identify it too */
     }
     return;
 }

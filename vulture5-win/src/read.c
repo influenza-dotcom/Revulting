@@ -66,6 +66,19 @@ learnscrolltyp(short scrolltyp)
         return FALSE;
 }
 
+/* Vulture s150: a scroll whose effect you couldn't make out is identified
+   anyway, instead of asking you to name it - no wiki, no guessing */
+void
+vulture_read_autoid(struct obj *sobj)
+{
+    if (!sobj || (sobj->oclass != SCROLL_CLASS && sobj->oclass != POTION_CLASS)
+        || objects[sobj->otyp].oc_name_known)
+        return;
+    makeknown(sobj->otyp); /* potions too, s150: drunk or breathed */
+    more_experienced(0, 10);
+    pline("(That was %s.)", an(simple_typename(sobj->otyp)));
+}
+
 /* also called from teleport.c for scroll of teleportation */
 void
 learnscroll(struct obj *sobj)
@@ -638,7 +651,7 @@ doread(void)
             if (gk.known)
                 learnscroll(scroll);
             else
-                trycall(scroll);
+                vulture_read_autoid(scroll); /* s150: was trycall() */
         }
         scroll->in_use = FALSE;
         if (otyp != SCR_BLANK_PAPER)
