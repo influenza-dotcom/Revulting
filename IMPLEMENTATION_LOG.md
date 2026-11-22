@@ -3014,6 +3014,16 @@ Already present and on in the new-player rc (no change): `autoid` shop price ide
 - Altar test: standing on an altar, the self-click menu offers "Test my unknown items on the altar" (`vulture_altar_test`, pickup.c): drops every carried item with unknown curse status (not worn/wielded, coins, ball/chain, loadstones; refused when levitating or blind), each gets the normal altar flash, items are kept from merging (`nomerge`, cleared by addinv), and a queued canned command picks exactly those back up next turn with a summary ("4 items - 1 cursed, 2 blessed, 1 uncursed"). The altar hover hint mentions it.
 - Probe: `VULTURE_SELFTEST_ITEMS=1` dumps items.txt (cards) and altar.txt (drop stage).
 
+### 140. Time modes: real-time, real-time until combat (default), turn-based
+
+- `vulture_rt_step` (levelwin.cpp), called from the map's command-wait loop beside `vulture_auto_step`: when you stand idle for `VRT_MS` (650 ms) it queues one plain wait turn (`vrt_wait`: no search, no safe_wait prompt). Nothing ticks in menus/prompts (a >300 ms gap between loop calls restarts the wait), farlook, aiming, multi-turn actions/occupations, auto actions, or with the window unfocused (`vulture_has_focus`, set from SDL focus events). Acting restarts the wait.
+- Mode 2 (default): no ticks while an awake hostile is in view within 12 squares or right after you lost HP; resumes `VRT_RESUME_MS` (1.2 s) after the fight.
+- Top-left pill: REAL-TIME (with a bar filling toward the next turn) / COMBAT - TURN-BASED / PAUSED / TURN-BASED. Click it or press Pause to cycle (every F-key was taken); kept per Windows user in `%LOCALAPPDATA%\NetHack\5.0\timemode.txt`; missing file = mode 2.
+- Resting (REST button) no longer pulses/pings every turn (`vquiet_search`).
+- **Bug fix (affects logs 129, 135, 139):** `cmdq_add_ec` only finds functions listed in `extcmdlist`; anything else got a NULL entry and rhack() dropped it with a beep. So the "Auto-pickup rules..." self-menu entry, explore's auto-collect and the altar test's pick-up never ran. `cmdq_add_ec` now gives an unlisted function a synthetic table entry (up to 24), so every queued interface action runs.
+- Probe: `VULTURE_SELFTEST_RT=1` (+ `VULTURE_SELFTEST_NOJACKAL=1`) writes rt.txt: real-time advanced turns 3->6 in ~3 s; hybrid with an awake jackal adjacent held at 0 ticks.
+- Groundwork only for multiplayer (no pause/time-scale in MP per the co-op decisions) - nothing networked yet.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
