@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <set>
+#include <map>
 
 extern "C" {
 	#include "hack.h"
@@ -155,6 +156,146 @@ vulture_tile *vulture_tilecache_get(int tile_id)
 }
 
 
+/*
+ * IMPLEMENTATION_LOG s149: normal maps.
+ * Every tile has a normal map in tiles_n/ (same file name; made offline by
+ * toolchain/make_normal_maps.py): RGB = the surface normal in screen space
+ * (x right, y down, z toward you), alpha = the tile's alpha.  While the level
+ * window draws the map it turns vulture_normal_capture on, and every map tile
+ * drawn also lays its normal map into vulture_normal_buf at the same place,
+ * so the buffer ends up holding the normal of whatever is visible at each
+ * pixel.  levelwin's lighting pass then lights each pixel from it.
+ * The alpha is taken from the colour tile as loaded (walls get their
+ * see-through opacity there), so normals blend exactly like the art.
+ * A flipped sprite uses a mirrored copy with x negated.
+ */
+SDL_Surface *vulture_normal_buf = NULL;
+bool vulture_normal_capture = false;
+static std::map<int, SDL_Surface *> vnorm_cache[2]; /* [flipped]; NULL = none */
+
+static SDL_Surface *vnorm_load(int tile_id)
+{
+	int rid = vulture_resolve_tile_id(tile_id);
+	std::string fn;
+	size_t p, q;
+	FILE *fp;
+	long fsize;
+	char *data;
+	SDL_Surface *raw, *n, *col;
+	vulture_tile *t;
+
+	if (rid < 0 || rid >= GAMETILECOUNT)
+		return NULL;
+	fn = vulture_gametiles[rid].filename;
+	p = fn.rfind("tiles/");
+	q = fn.rfind("tiles\\");
+	if (p == std::string::npos || (q != std::string::npos && q > p))
+		p = q;
+	if (p == std::string::npos)
+		return NULL;
+	fn.insert(p + 5, "_n");
+	if (!(fp = fopen(fn.c_str(), "rb")))
+		return NULL;
+	fseek(fp, 0, SEEK_END);
+	fsize = ftell(fp);
+	rewind(fp);
+	if (fsize <= 0) {
+		fclose(fp);
+		return NULL;
+	}
+	data = new char[fsize];
+	if (fread(data, fsize, 1, fp) != 1) {
+		delete[] data;
+		fclose(fp);
+		return NULL;
+	}
+	fclose(fp);
+	raw = vulture_load_surface(data, (unsigned int) fsize);
+	delete[] data;
+	if (!raw)
+		return NULL;
+	n = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_ARGB8888, 0);
+	SDL_FreeSurface(raw);
+	if (!n)
+		return NULL;
+	/* the colour tile's alpha, as loaded (wall opacity included) */
+	t = vulture_get_tile(tile_id);
+	if (t && t->graphic && t->graphic->w == n->w && t->graphic->h == n->h
+	    && (col = SDL_ConvertSurfaceFormat(t->graphic, SDL_PIXELFORMAT_ARGB8888, 0)) != NULL) {
+		int x, y;
+
+		SDL_LockSurface(n);
+		SDL_LockSurface(col);
+		for (y = 0; y < n->h; y++) {
+			Uint32 *d = (Uint32 *) ((Uint8 *) n->pixels + y * n->pitch);
+			Uint32 *s = (Uint32 *) ((Uint8 *) col->pixels + y * col->pitch);
+
+			for (x = 0; x < n->w; x++)
+				d[x] = (d[x] & 0x00FFFFFFu) | (s[x] & 0xFF000000u);
+		}
+		SDL_UnlockSurface(col);
+		SDL_UnlockSurface(n);
+		SDL_FreeSurface(col);
+	}
+	SDL_SetSurfaceBlendMode(n, SDL_BLENDMODE_BLEND);
+	return n;
+}
+
+/* a mirrored copy for sprites drawn facing the other way: x flips sign */
+static SDL_Surface *vnorm_mirror(SDL_Surface *s)
+{
+	SDL_Surface *m;
+	int x, y;
+
+	if (!s || !(m = SDL_CreateRGBSurfaceWithFormat(0, s->w, s->h, 32, SDL_PIXELFORMAT_ARGB8888)))
+		return NULL;
+	SDL_LockSurface(s);
+	SDL_LockSurface(m);
+	for (y = 0; y < s->h; y++) {
+		Uint32 *src = (Uint32 *) ((Uint8 *) s->pixels + y * s->pitch);
+		Uint32 *dst = (Uint32 *) ((Uint8 *) m->pixels + y * m->pitch);
+
+		for (x = 0; x < s->w; x++) {
+			Uint32 p = src[s->w - 1 - x];
+			Uint32 r = 255 - ((p >> 16) & 255);
+
+			dst[x] = (p & 0xFF00FFFFu) | (r << 16);
+		}
+	}
+	SDL_UnlockSurface(m);
+	SDL_UnlockSurface(s);
+	SDL_SetSurfaceBlendMode(m, SDL_BLENDMODE_BLEND);
+	return m;
+}
+
+SDL_Surface *vulture_get_tile_normal(int tile_id, bool flipped)
+{
+	std::map<int, SDL_Surface *> &c = vnorm_cache[flipped ? 1 : 0];
+	std::map<int, SDL_Surface *>::iterator it;
+	SDL_Surface *s;
+
+	if (tile_id < 0 || tile_id >= GAMETILECOUNT)
+		return NULL;
+	if ((it = c.find(tile_id)) != c.end())
+		return it->second;
+	s = flipped ? vnorm_mirror(vulture_get_tile_normal(tile_id, false)) : vnorm_load(tile_id);
+	c[tile_id] = s;
+	return s;
+}
+
+/* lay a tile's normal map into the normal buffer (map drawing only) */
+void vulture_put_normal(int x, int y, int tile_id)
+{
+	SDL_Surface *n;
+	SDL_Rect r;
+
+	if (!vulture_normal_capture || !vulture_normal_buf
+	    || !(n = vulture_get_tile_normal(tile_id, false)))
+		return;
+	r.x = x, r.y = y, r.w = n->w, r.h = n->h;
+	SDL_BlitSurface(n, NULL, vulture_normal_buf, &r);
+}
+
 void vulture_put_tile_shaded(int x, int y, int tile_id, int shadelevel)
 {
 	vulture_tile * tile = NULL;
@@ -164,8 +305,11 @@ void vulture_put_tile_shaded(int x, int y, int tile_id, int shadelevel)
 
 	tile = vulture_get_tile_shaded(tile_id, shadelevel);
 
-	if (tile != NULL)
+	if (tile != NULL) {
 		vulture_put_img(x + tile->xmod, y + tile->ymod, tile->graphic);
+		if (vulture_normal_capture) /* s149 */
+			vulture_put_normal(x + tile->xmod, y + tile->ymod, tile_id);
+	}
 }
 
 

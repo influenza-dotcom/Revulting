@@ -15,6 +15,10 @@ extern "C" {
 
 
 extern void vulture_put_tile_shaded(int x, int y, int tile_id, int shadelevel);
+extern SDL_Surface *vulture_normal_buf; /* s149 */
+extern bool vulture_normal_capture;
+extern SDL_Surface *vulture_get_tile_normal(int tile_id, bool flipped);
+extern void vulture_put_normal(int x, int y, int tile_id);
 /* draw a tile at vulture_ui_scale - object icons inside UI only, NEVER the map */
 extern void vulture_put_tile_ui(int x, int y, int tile_id);
 extern int vulture_load_gametiles(void);

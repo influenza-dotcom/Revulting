@@ -675,6 +675,17 @@ vtw_put_tile_x(int x, int y, int tile_id, int face, double sx, double sy,
         }
     }
     vtx_blit(img, dx, y + tile->ymod, sx, sy, deg, red, alpha);
+    if (vulture_normal_capture && vulture_normal_buf) { /* s149: its normal map, same pose */
+        SDL_Surface *nm = vulture_get_tile_normal(tile_id, img != tile->graphic);
+
+        if (nm) {
+            SDL_Surface *save = vulture_screen;
+
+            vulture_screen = vulture_normal_buf;
+            vtx_blit(nm, dx, y + tile->ymod, sx, sy, deg, false, alpha);
+            vulture_screen = save;
+        }
+    }
 }
 
 
@@ -1856,9 +1867,60 @@ vfx_click_at(int x, int y)
         vbark_move(); /* s109 */
 }
 
+static bool vmagic_light(int tt, int x, int y, double t, double *c, double *pu);
+
+/* s149: motes of magical energy over the magical traps and portals you can
+   see - rising and swaying over traps, circling a portal */
+static void
+vmagic_motes(int cx, int cy, int vx, int vy)
+{
+    double t = SDL_GetTicks() / 1000.0;
+    int x, y, k, sx, sy;
+
+    if (!u.ux || Hallucination)
+        return;
+    for (x = vx - 16; x <= vx + 16; x++)
+        for (y = vy - 16; y <= vy + 16; y++) {
+            int g, tt, n;
+            double c[3], pu;
+
+            if (!isok(x, y) || !cansee(x, y))
+                continue;
+            g = glyph_at(x, y);
+            if (!glyph_is_trap(g))
+                continue;
+            tt = glyph_to_trap(g);
+            if (!vmagic_light(tt, x, y, t, c, &pu))
+                continue;
+            vfx_square_screen(x, y, cx, cy, vx, vy, &sx, &sy);
+            n = tt == MAGIC_PORTAL ? 14 : 8;
+            for (k = 0; k < n; k++) {
+                double seed = k * 0.618 + x * 0.37 + y * 0.71;
+                double ph = fmod(t * (tt == MAGIC_PORTAL ? 0.35 : 0.5) + seed, 1.0);
+                double fade = sin(3.14159265358979 * ph);
+                int px, py, al;
+
+                if (tt == MAGIC_PORTAL) { /* a slow swirl, lifting as it goes */
+                    double a = t * 1.6 + k * 6.2832 / n;
+                    double rr = 20 - 8 * ph;
+
+                    px = sx + (int) (rr * cos(a));
+                    py = sy - 8 + (int) (rr * 0.5 * sin(a)) - (int) (26 * ph);
+                } else { /* rising, swaying */
+                    px = sx + (int) (12 * sin(seed * 9.0) + 4 * sin(t * 2.3 + k));
+                    py = sy - 4 - (int) (40 * ph);
+                }
+                al = (int) (fade * (150 + 90 * pu));
+                vfx_glowdot(px, py, (Uint8) (255 * c[0]), (Uint8) (255 * c[1]),
+                            (Uint8) (255 * c[2]), al > 255 ? 255 : al);
+            }
+        }
+}
+
 static void
 vfx_draw(int cx, int cy, int vx, int vy)
 {
+    vmagic_motes(cx, cy, vx, vy); /* s149 */
     Uint32 now = SDL_GetTicks();
     size_t i;
     int k, sx, sy;
@@ -5288,6 +5350,21 @@ vselftest(void)
                 levl[u.ux + 2][u.uy].typ = FOUNTAIN;
             if (enexto(&cc, u.ux, u.uy + 2, &mons[PM_FIRE_VORTEX]))
                 (void) makemon(&mons[PM_FIRE_VORTEX], cc.x, cc.y, NO_MM_FLAGS);
+            { /* probe: s149 magic that pulses */
+                static const int tts[2] = { MAGIC_TRAP, TELEP_TRAP };
+                int q;
+
+                for (q = 0; q < 2; q++) {
+                    coord tc;
+                    struct trap *tr;
+
+                    if (enexto(&tc, u.ux + (q ? 1 : -1), u.uy - 1, (struct permonst *) 0)
+                        && !t_at(tc.x, tc.y) && (tr = maketrap(tc.x, tc.y, tts[q])) != 0) {
+                        tr->tseen = 1;
+                        newsym(tc.x, tc.y);
+                    }
+                }
+            }
             gv.vision_full_recalc = 1;
             vision_recalc(0);
             for (x = u.ux - 3; x <= u.ux + 3; x++)
@@ -5410,13 +5487,21 @@ vselftest(void)
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_hover.bmp", dir);
         SDL_SaveBMP(vulture_screen, path);
-        if (getenv("VULTURE_SELFTEST_LIGHT")) { /* probe: s145 relief cost */
+        if (getenv("VULTURE_SELFTEST_LIGHT") || getenv("VULTURE_SELFTEST_CMP")) { /* probe: s145 relief cost */
             char fp2[700];
             FILE *f2;
 
             snprintf(fp2, sizeof fp2, "%s/relief.txt", dir);
             if ((f2 = fopen(fp2, "w")) != 0) {
                 vl_relief_report(f2);
+                {
+                    struct trap *tq;
+
+                    for (tq = gf.ftrap; tq; tq = tq->ntrap)
+                        fprintf(f2, "trap %d at %d,%d seen=%d cansee=%d glyph_is_trap=%d (hero %d,%d)\n",
+                                tq->ttyp, tq->tx, tq->ty, tq->tseen, cansee(tq->tx, tq->ty),
+                                glyph_is_trap(glyph_at(tq->tx, tq->ty)), u.ux, u.uy);
+                }
                 fclose(f2);
             }
             vl_relief_set(false); /* the same frame, flat, to compare */
@@ -7419,6 +7504,32 @@ vmp_mark(int cx, int cy, int vx, int vy)
  * the glows, markers and UI.  F9 toggles it.
  */
 static bool vl_on = true;
+static bool vl_relief_on2 = true; /* s149: mirrors vl_relief_on for vnm_begin */
+static bool vnm_ok = false;        /* s149: the buffer holds this frame's normals */
+static bool vl_magic = false;      /* s149: pulsing magic in view: refresh faster */
+
+/* s149: start a frame's normal buffer (cleared, screen-sized) */
+static void
+vnm_begin(void)
+{
+    vnm_ok = false;
+    vulture_normal_capture = false;
+    if (!vl_on || !vl_relief_on2 || !vulture_screen)
+        return;
+    if (!vulture_normal_buf || vulture_normal_buf->w != vulture_screen->w
+        || vulture_normal_buf->h != vulture_screen->h) {
+        if (vulture_normal_buf)
+            SDL_FreeSurface(vulture_normal_buf);
+        vulture_normal_buf = SDL_CreateRGBSurfaceWithFormat(0, vulture_screen->w, vulture_screen->h,
+                                                            32, SDL_PIXELFORMAT_ARGB8888);
+        if (!vulture_normal_buf)
+            return;
+        SDL_SetSurfaceBlendMode(vulture_normal_buf, SDL_BLENDMODE_NONE);
+    }
+    SDL_FillRect(vulture_normal_buf, NULL, 0);
+    vulture_normal_capture = true;
+    vnm_ok = true;
+}
 static float vl_L[ROWNO][COLNO], vl_R[ROWNO][COLNO], vl_G[ROWNO][COLNO], vl_B[ROWNO][COLNO];
 static SDL_Surface *vl_low = NULL, *vl_full = NULL;
 struct vl_flash_t {
@@ -7464,9 +7575,42 @@ vl_add(int cx, int cy, double radius, double inten, double r, double g, double b
         }
 }
 
+/* s149: the colour of a magical trap's light right now (0 = not magical);
+   *pu gets its pulse */
+static bool
+vmagic_light(int tt, int x, int y, double t, double *c, double *pu)
+{
+    double h = 0.5 + 0.5 * sin(t * 1.3 + x * 0.9 + y * 1.1); /* colour drift */
+
+    *pu = 0.5 + 0.5 * sin(t * 3.0 + x + y);
+    switch (tt) {
+    case MAGIC_PORTAL: /* violet <-> cyan */
+        c[0] = 0.80 - 0.45 * h, c[1] = 0.40 + 0.45 * h, c[2] = 1.0;
+        return true;
+    case TELEP_TRAP: /* blue-violet */
+        c[0] = 0.55 - 0.15 * h, c[1] = 0.50 + 0.25 * h, c[2] = 1.0;
+        return true;
+    case LEVEL_TELEP: /* deep violet */
+        c[0] = 0.75, c[1] = 0.30 + 0.15 * h, c[2] = 1.0;
+        return true;
+    case MAGIC_TRAP: /* wandering hue */
+        c[0] = 0.5 + 0.5 * sin(t * 1.7 + x), c[1] = 0.5 + 0.5 * sin(t * 1.7 + x + 2.1),
+        c[2] = 0.5 + 0.5 * sin(t * 1.7 + x + 4.2);
+        return true;
+    case POLY_TRAP: /* green <-> magenta */
+        c[0] = 0.35 + 0.6 * h, c[1] = 0.95 - 0.6 * h, c[2] = 0.55 + 0.4 * h;
+        return true;
+    case ANTI_MAGIC: /* a cold, dim grey-blue */
+        c[0] = 0.45, c[1] = 0.55, c[2] = 0.75 + 0.2 * h;
+        return true;
+    }
+    return false;
+}
+
 static void
 vl_compute(mapdata *md)
 {
+    vl_magic = false; /* s149 */
     int x, y;
     double t = SDL_GetTicks() / 1000.0;
     light_source *ls;
@@ -7550,12 +7694,21 @@ vl_compute(mapdata *md)
                 int tt = glyph_to_trap(g);
                 double pu = 0.5 + 0.5 * sin(t * 3.0 + x + y);
 
-                if (tt == MAGIC_PORTAL)
-                    vl_add(x, y, 3.0, 0.45 + 0.15 * pu, 0.75, 0.45, 1.0);
-                else if (tt == TELEP_TRAP || tt == LEVEL_TELEP || tt == MAGIC_TRAP
-                         || tt == POLY_TRAP || tt == ANTI_MAGIC)
-                    vl_add(x, y, 1.8, 0.18 + 0.12 * pu, 0.7, 0.45, 1.0);
-                else if (tt == FIRE_TRAP)
+                double vc[3];
+
+                /* s149: magic breathes - three beats at once plus a rare
+                   surge, and its colour drifts, so no two seconds look alike */
+                if (vmagic_light(tt, x, y, t, vc, &pu)) {
+                    double s1 = sin(t * 2.1 + x * 1.3), s2 = sin(t * 5.3 + y * 1.7),
+                           s3 = sin(t * 12.7 + x * 3.1 + y), sg = sin(t * 0.83 + x * 7.1 + y * 3.3);
+                    double surge = sg > 0 ? pow(sg, 14.0) : 0.0;
+                    double base = tt == MAGIC_PORTAL ? 0.55 : 0.30;
+                    double I = base * (1.0 + 0.30 * s1 + 0.16 * s2 + 0.08 * s3) + 0.55 * surge;
+                    double R = (tt == MAGIC_PORTAL ? 3.3 : 2.2) * (1.0 + 0.12 * s1 + 0.25 * surge);
+
+                    vl_add(x, y, R, I, vc[0], vc[1], vc[2]);
+                    vl_magic = true;
+                } else if (tt == FIRE_TRAP)
                     vl_add(x, y, 1.6, 0.16 + 0.06 * pu, 1.0, 0.5, 0.2);
             }
         }
@@ -7640,13 +7793,14 @@ vl_sample(double mx, double my, float *L, float *r, float *g, float *b)
  */
 static bool vl_relief_on = true;
 static std::vector<short> vr_dx, vr_dy; /* light direction x strength, per cell */
+static std::vector<short> vr_lv;        /* s149: light level 0..256, per cell */
 static int vr_lw = 0, vr_lh = 0;
 static Uint32 vr_last_ms = 0; /* probe: cost of the last pass */
 
 static void
 vl_relief_set(bool on)
 {
-    vl_relief_on = on;
+    vl_relief_on = vl_relief_on2 = on;
 }
 
 static void
@@ -7657,6 +7811,73 @@ vl_relief_report(FILE *f) /* probe */
 }
 
 static std::vector<int> vr_cmin, vr_cmax; /* lit cells per grid row (-1: none) */
+
+/* s149: light each pixel from its normal-map normal (vulture_normal_buf),
+   facing the light direction of its coarse cell */
+static void
+vl_nmap(int x0, int y0, int x1, int y1, int gx0, int gy0, int FS)
+{
+    SDL_Surface *s = vulture_screen, *nb = vulture_normal_buf;
+    int x, y, rs = s->format->Rshift, gs = s->format->Gshift, bs = s->format->Bshift;
+    Uint32 mask = ~(((Uint32) 255 << rs) | ((Uint32) 255 << gs) | ((Uint32) 255 << bs));
+
+    for (y = y0; y < y1; y++) {
+        int cj = (y - gy0) / FS, ci, ca, cb;
+        Uint32 *row, *nrow;
+
+        if (y < gy0 || cj >= vr_lh || vr_cmin[cj] < 0)
+            continue;
+        row = (Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch);
+        nrow = (Uint32 *) ((Uint8 *) nb->pixels + (size_t) y * nb->pitch);
+        ca = vr_cmin[cj], cb = vr_cmax[cj];
+        for (ci = ca; ci <= cb; ci++) {
+            int k = cj * vr_lw + ci, dx = vr_dx[k], dy = vr_dy[k], lv = vr_lv[k], xs, xe;
+
+            if (!dx && !dy)
+                continue;
+            xs = gx0 + ci * FS, xe = xs + FS;
+            if (xs < x0)
+                xs = x0;
+            if (xe > x1)
+                xe = x1;
+            for (x = xs; x < xe; x++) {
+                Uint32 pn = nrow[x], p;
+                int a = (int) (pn >> 24), nx, ny, nz, d, r, g, b2, m, sp = 0;
+
+                if (a < 24)
+                    continue;
+                nx = (int) ((pn >> 16) & 255) - 128;
+                ny = (int) ((pn >> 8) & 255) - 128;
+                nz = (int) (pn & 255) - 128;
+                /* lit where the normal faces the light: n . L */
+                d = ((nx * dx + ny * dy) * 3) >> 9;
+                /* crevices: faces tilted away from you take less of the
+                   light overall (mortar, folds, the gaps between stones) */
+                d -= ((127 - nz) * lv) >> 8;
+                /* a glint where the surface faces the light squarely */
+                if (d > 40)
+                    sp = ((d - 40) * (d - 40) * lv) >> 14;
+                d = d * a >> 8;
+                if (!d && !sp)
+                    continue;
+                if (d > 110)
+                    d = 110;
+                else if (d < -120)
+                    d = -120;
+                if (sp > 40)
+                    sp = 40;
+                p = row[x], m = 256 + d;
+                r = ((int) (((p >> rs) & 255) * m) >> 8) + sp;
+                g = ((int) (((p >> gs) & 255) * m) >> 8) + sp;
+                b2 = ((int) (((p >> bs) & 255) * m) >> 8) + sp * 3 / 4;
+                if (r > 255) r = 255;
+                if (g > 255) g = 255;
+                if (b2 > 255) b2 = 255;
+                row[x] = (p & mask) | ((Uint32) r << rs) | ((Uint32) g << gs) | ((Uint32) b2 << bs);
+            }
+        }
+    }
+}
 
 static void
 vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
@@ -7676,6 +7897,16 @@ vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
     y1 = ay + h > s->h - 1 ? s->h - 1 : ay + h;
     if (x1 - x0 < 8 || y1 - y0 < 8)
         return;
+    if (vnm_ok && vulture_normal_buf && vulture_normal_buf->w == s->w
+        && vulture_normal_buf->h == s->h) { /* s149: real normal maps */
+        if (SDL_MUSTLOCK(s))
+            SDL_LockSurface(s);
+        vl_nmap(x0, y0, x1, y1, gx0, gy0, FS);
+        if (SDL_MUSTLOCK(s))
+            SDL_UnlockSurface(s);
+        vr_last_ms = SDL_GetTicks() - t0;
+        return;
+    }
     W = s->w;
     rs = s->format->Rshift, gs = s->format->Gshift, bs = s->format->Bshift;
     mask = ~(((Uint32) 255 << rs) | ((Uint32) 255 << gs) | ((Uint32) 255 << bs));
@@ -7803,6 +8034,7 @@ vl_relief_dirs(const std::vector<float> &Lg, int lw, int lh)
     vr_lw = lw, vr_lh = lh;
     vr_dx.assign((size_t) lw * lh, 0);
     vr_dy.assign((size_t) lw * lh, 0);
+    vr_lv.assign((size_t) lw * lh, 0); /* s149 */
     vr_cmin.assign((size_t) lh, -1);
     vr_cmax.assign((size_t) lh, -1);
     for (j = 1; j < lh - 1; j++)
@@ -7819,13 +8051,14 @@ vl_relief_dirs(const std::vector<float> &Lg, int lw, int lh)
                 st = 1.0f;
             if (L < 1.0f)
                 st *= 0.4f + 0.6f * L;
-            key = 0.22f * (L > 1.0f ? 1.0f : L);
+            key = 0.45f * (L > 1.0f ? 1.0f : L); /* s149: was 0.22 */
             {
                 float ux = mag > 1e-5f ? gx / mag : 0, uy = mag > 1e-5f ? gy / mag : 0;
                 float lx = ux * st - 0.6f * key, ly = uy * st - 0.8f * key;
 
                 vr_dx[(size_t) j * lw + i] = (short) (lx * 256.0f);
                 vr_dy[(size_t) j * lw + i] = (short) (ly * 256.0f);
+                vr_lv[(size_t) j * lw + i] = (short) (256.0f * (L > 1.0f ? 1.0f : L));
                 if (vr_cmin[j] < 0)
                     vr_cmin[j] = i;
                 vr_cmax[j] = i;
@@ -7858,7 +8091,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     if (vl_full && c_vx == vx && c_vy == vy && c_ux == u.ux && c_uy == u.uy
         && c_moves == svm.moves && c_rot == vulture_view_rot && c_w == w && c_h == h
         && abs(cx - c_cx) < M && abs(cy - c_cy) < M
-        && (vtw_animating || now - c_when < 90) && vl_flashes.empty()) {
+        && (vtw_animating || now - c_when < (vl_magic ? 33u : 90u)) && vl_flashes.empty()) {
         dst.x = ax - M + (cx - c_cx), dst.y = ay - M + (cy - c_cy);
         vl_relief(max0, may0, mw0, mh0, c_gx0 + (cx - c_cx), c_gy0 + (cy - c_cy), FS);
         SDL_BlitSurface(vl_full, NULL, vulture_screen, &dst);
@@ -8154,6 +8387,8 @@ levelwin::draw()
                 + V_MAP_XMOD * (map_centre_y + 50) + V_MAP_XMOD * V_MAP_YMOD)
                / (2 * V_MAP_XMOD * V_MAP_YMOD);
 
+    vnm_begin(); /* s149: the map's tiles lay their normal maps from here */
+
     /* without the +-1 small corners within the viewport are not drawn */
     diff = map_tr_x - map_tr_y - 1;
     sum = map_tr_x + map_tr_y + 1;
@@ -8366,6 +8601,7 @@ levelwin::draw()
             }
         }
     }
+    vulture_normal_capture = false; /* s149 */
     vl_render(map_data, map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
               this->abs_y, this->w, this->h); /* s133: dynamic lighting */
     vw_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
@@ -8981,13 +9217,13 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
 
     case SDLK_F9: /* s133: dynamic lighting; s145: full / flat / off */
         if (vl_on && vl_relief_on)
-            vl_relief_on = false;
+            vl_relief_set(false);
         else if (vl_on)
             vl_on = false;
         else
-            vl_on = vl_relief_on = true;
-        pline("Dynamic lighting: %s.", !vl_on ? "off" : vl_relief_on ? "full, with surface relief"
-                                                                     : "flat (no surface relief)");
+            vl_on = true, vl_relief_set(true);
+        pline("Dynamic lighting: %s.", !vl_on ? "off" : vl_relief_on ? "full, normal-mapped"
+                                                                     : "flat (no normal maps)");
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
 

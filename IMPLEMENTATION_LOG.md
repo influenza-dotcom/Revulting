@@ -3170,6 +3170,47 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Probe VULTURE_SELFTEST_MARK: wall and boulder sub=7 (blue), plain floor
   sub=0 (green), seen in the shot.
 
+### 149. Real normal maps; magic that pulses
+
+- **Normal maps for every tile** (2405 PNGs, 23 MB) in gamedata/tiles_n/,
+  same names as tiles/, made by toolchain/make_normal_maps.py (numpy +
+  Pillow + SciPy; ~10 s).  RGB = screen-space normal (x right, y down, z to
+  the viewer), alpha = the tile's.  Height model: floors/edges = fine
+  texture only (alpha-weighted high-pass of brightness - the unweighted
+  blur drew a grid along tile edges); walls the same, coarser, slight bevel;
+  sprites (monsters, objects, statues, features) texture + a rounded bevel
+  from the silhouette (distance transform), so they light like volumes.
+  cursor.* skipped.
+- **Normal buffer** (vulture_tile.cpp): `vnm_begin()` clears a screen-sized
+  ARGB buffer before the map loops and turns `vulture_normal_capture` on;
+  `vulture_put_tile_shaded` also blits the tile's normal map there, and
+  `vtw_put_tile_x` draws a monster's normal map with the same scale, lean
+  and flip (a mirrored copy with x negated).  Normal-map alpha is copied
+  from the colour tile as loaded, so see-through walls blend correctly.
+  Capture stops before `vl_render`.  Cached per tile id, flipped separately.
+- **Lighting from the normals** (`vl_nmap`, replaces the luminance relief
+  when the buffer is good): per pixel, n . L with L from the coarse light
+  field's gradient (towards lamps, fires, glows) plus a top-left key (0.45
+  of the light level, was 0.22); faces tilted away darken in proportion to
+  the local light (mortar, folds, gaps); faces squarely lit get a small
+  additive glint.  ~1-2 ms at 1x on the -O2 build.  F9: full (normal
+  mapped) / flat / off.
+- **Magic pulses**: magic portals and teleport / level-teleport / magic /
+  polymorph / anti-magic traps get light that beats on three frequencies
+  with a rare surge, radius breathing with it, and a drifting colour per
+  kind (portal violet-cyan, magic trap a wandering hue, poly green-magenta,
+  anti-magic cold grey-blue) - `vmagic_light`.  While any is in view the
+  light layer refreshes every 33 ms (else 90) so the pulse is smooth.
+  `vmagic_motes`: glowing motes rise and sway over magical traps and swirl
+  up around portals, in the trap's colour.
+- Probes: VULTURE_SELFTEST_CMP takes a relief-off shot of the same frame
+  in a normal lit room; LIGHT also places a magic and a teleport trap by
+  the hero and logs every trap.  Lit room: carved floor and wall faces gain
+  depth; by the fire vortex the stones catch its light; motes seen over the
+  magic trap.
+- Also: autosokoban had vanished from the player's two rc files (rewritten
+  11-20 21:29 after log 84 enabled it); added back (outside the repo).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
