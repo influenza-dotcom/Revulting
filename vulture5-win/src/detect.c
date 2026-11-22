@@ -2015,9 +2015,13 @@ mfind0(struct monst *mtmp, boolean via_warning)
 int
 dosearch0(int aflag) /* intrinsic autosearch vs explicit searching */
 {
+    extern void vulture_search_fx(void); /* s136 */
     coordxy x, y;
     struct trap *trap;
     struct monst *mtmp;
+
+    if (!aflag && !u.uswallow)
+        vulture_search_fx(); /* s136: a visible, audible pulse */
 
     if (u.uswallow) {
         if (!aflag)

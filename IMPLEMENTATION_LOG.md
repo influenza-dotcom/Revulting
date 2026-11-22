@@ -2973,6 +2973,16 @@ What was built:
 - Plain `s` searches 5 turns (`vulture_search_more`, the shared `vq_search_occ` occupation, Esc or a monster stops it); a typed count works as before.
 - Probe: `VULTURE_SELFTEST_ITEM=1` drops a long sword on the hover square.
 
+### 136. Brogue batch 3 + immersion: monster intent, loot glints, search pulse, dungeon ambience, ~40 message sounds
+
+- IN SIGHT panel (Brogue sidebar): each row says what the monster is doing - asleep / trapped / fleeing / hunting (it can see you) / wandering; long names are trimmed to fit. The panel now starts below the minimap (the minimap window was drawing over its top rows).
+- Magic loot in view (potions, scrolls, wands, rings, amulets, spellbooks, gems) glints every ~1-2 s (`vglint_tick`, vfx kind 7).
+- Every explicit search turn sends a blue pulse ring out from the hero with a soft sonar ping (`vulture_search_fx`, called from `dosearch0` when `!aflag`; vfx kind 8).
+- The dungeon breathes: every 18-48 s a quiet faraway sound (drip, creak, chains, rumble; howls from depth 5; moans and more rumble in Gehennom) plays from a random direction (`vamb_tick`, positional).
+- Melee swings are positional (heard from the attacker's side).
+- A blow taking 10%+ of max HP flashes the screen edge red (`vhurt_flash`, reuses the status pulse).
+- toolchain/make_sfx4.py: far_drip/creak/chain/rumble/howl/moan, search_ping, eat_chew, skill_up, gain, room_sting, web, scribble. vulture_sounds.conf: eating, skill advance, ~14 intrinsic gains, special-room entries, temple feelings, prayer, altar flashes, camera flash, webs, engraving, "Nothing happens", wresting, distant noises, fleeing. The repo copy (gamedata/config) re-synced with the game folder (it was stale since log 95).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -764,7 +764,7 @@ vulture_anim_attack(int ax, int ay, int tx, int ty)
         static int sw = 0;
         static const char *const nm[3] = { "swing1", "swing2", "swing3" };
 
-        vulture_sfx(nm[sw]);
+        vulture_sfx_at(nm[sw], ax - u.ux, ay - u.uy); /* s136: heard from where it is */
         sw = (sw + 1) % 3;
     }
     vanim_frames(1, 7, 10);
@@ -1092,6 +1092,9 @@ struct vfx_ent {
     float vx[10], vy[10];
 };
 static std::vector<vfx_ent> vfx_list;
+extern "C" void vulture_sfx_at(const char *, int, int);           /* s136 */
+extern "C" void vulture_sfx_at_vol(const char *, int, int, int); /* s136 */
+static void vhurt_flash(int dmg, int maxhp);                      /* s136 */
 static std::map<unsigned, int> vfx_hp;
 static int vfx_hero_hp = -1, vfx_hero_poly = -1;
 static d_level vfx_lev = { -1, -1 };
@@ -1153,6 +1156,7 @@ vfx_scan(void)
     if (vfx_hero_hp >= 0 && poly == vfx_hero_poly && hp != vfx_hero_hp && hp > 0) {
         if (hp < vfx_hero_hp) {
             vfx_hit(u.ux, u.uy, vfx_hero_hp - hp, 255, 70, 60, true);
+            vhurt_flash(vfx_hero_hp - hp, Upolyd ? u.mhmax : u.uhpmax); /* s136 */
             /* s129: a hit worth a quarter of your max HP lands hard */
             if ((vfx_hero_hp - hp) * 4 >= (Upolyd ? u.mhmax : u.uhpmax)) {
                 vfx_burst(u.ux, u.uy, 255, 60, 50);
@@ -1878,6 +1882,28 @@ vfx_draw(int cx, int cy, int vx, int vy)
             }
             continue;
         }
+        if (age < 1.0 && e.kind == 7) { /* s136: a glint on magic loot */
+            int a = (int) (230 * sin(3.14159265358979 * age)), k2;
+            int arm = 2 + (int) (7 * sin(3.14159265358979 * age));
+
+            vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
+            sx += e.sub, sy -= 10;
+            for (k2 = -arm; k2 <= arm; k2++) {
+                int fa = a * (arm + 1 - abs(k2)) / (arm + 1);
+
+                vfx_glowdot(sx + k2, sy, e.r, e.g, e.b, fa);
+                vfx_glowdot(sx, sy + k2, e.r, e.g, e.b, fa);
+            }
+            vfx_glowdot(sx, sy, 255, 255, 255, a);
+            continue;
+        }
+        if (age < 1.0 && e.kind == 8) { /* s136: Brogue-style search pulse */
+            vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
+            vfx_ring(sx, sy, 10 + 95 * age, e, (int) (200 * (1.0 - age)));
+            if (age > 0.25)
+                vfx_ring(sx, sy, 10 + 95 * (age - 0.25), e, (int) (110 * (1.0 - age)));
+            continue;
+        }
         if (age < 1.0 && e.kind == 5) { /* s117: a speech bubble */
             vsay_draw(e, age, cx, cy, vx, vy);
             continue;
@@ -2476,6 +2502,7 @@ vulture_idle_wait_ms(bool at_map)
 /* one idle frame for bobbing, breathing and combat effects (called from
    the input loop while the map waits for a command) */
 static void vselftest(void); /* s126 probe */
+extern "C" void vulture_search_fx(void); /* s136 */
 
 void
 vulture_idle_bob(bool at_map)
@@ -4075,6 +4102,20 @@ vselftest(void)
         break;
     }
     case 1:
+        if (getenv("VULTURE_SELFTEST_ITEM")) { /* probe: s136 pulse + glint */
+            coord cc;
+            vulture_search_fx();
+            vfx_list.back().t0 -= 380;
+            if (enexto(&cc, u.ux + 2, u.uy, (struct permonst *) 0)) {
+                vfx_ent e;
+                (void) mksobj_at(POT_WATER, cc.x, cc.y, TRUE, FALSE);
+                newsym(cc.x, cc.y);
+                memset(&e, 0, sizeof e);
+                e.kind = 7, e.x = cc.x, e.y = cc.y, e.t0 = SDL_GetTicks() - 320, e.dur = 650;
+                e.r = 255, e.g = 245, e.b = 200;
+                vfx_list.push_back(e);
+            }
+        }
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_hover.bmp", dir);
@@ -4151,6 +4192,108 @@ vtint(int x, int y, int w, int h, Uint8 r, Uint8 g, Uint8 b, int a)
 
 static Uint32 vst_pulse_t = 0;
 static Uint8 vst_r, vst_g, vst_b;
+
+/* s136: the screen edge flashes red when a blow really lands */
+static void
+vhurt_flash(int dmg, int maxhp)
+{
+    if (maxhp <= 0 || dmg * 10 < maxhp)
+        return;
+    vst_pulse_t = SDL_GetTicks() | 1;
+    vst_r = 210, vst_g = 25, vst_b = 20;
+}
+
+/* s136: magic loot in view glints now and then, so you notice it (Brogue) */
+static void
+vglint_tick(void)
+{
+    static Uint32 next = 0;
+    Uint32 now = SDL_GetTicks();
+    int x, y, n = 0, pick;
+    static short cx[COLNO * ROWNO], cy[COLNO * ROWNO];
+
+    if (now < next || Hallucination || Blind)
+        return;
+    next = now + 900 + rand() % 900;
+    for (x = 1; x < COLNO; x++)
+        for (y = 0; y < ROWNO; y++) {
+            int g, oc;
+
+            if (!cansee(x, y) || u_at(x, y))
+                continue;
+            g = glyph_at(x, y);
+            if (!glyph_is_object(g))
+                continue;
+            oc = objects[glyph_to_obj(g)].oc_class;
+            if (oc == POTION_CLASS || oc == SCROLL_CLASS || oc == WAND_CLASS
+                || oc == RING_CLASS || oc == AMULET_CLASS || oc == SPBOOK_CLASS
+                || oc == GEM_CLASS)
+                cx[n] = (short) x, cy[n++] = (short) y;
+        }
+    if (!n)
+        return;
+    pick = rand() % n;
+    {
+        vfx_ent e;
+
+        memset(&e, 0, sizeof e);
+        e.kind = 7, e.x = cx[pick], e.y = cy[pick], e.t0 = now, e.dur = 650;
+        e.r = 255, e.g = 245, e.b = 200;
+        e.sub = rand() % 17 - 8;
+        vfx_list.push_back(e);
+    }
+}
+
+/* s136: the dungeon breathes - quiet faraway sounds from random directions */
+static void
+vamb_tick(void)
+{
+    static Uint32 next = 0;
+    Uint32 now = SDL_GetTicks();
+    const char *pool[10];
+    int n = 0;
+    double a;
+    int d;
+
+    if (!next)
+        next = now + 12000 + rand() % 15000;
+    if (now < next || !u.ux || u.uhp <= 0)
+        return;
+    next = now + 18000 + rand() % 30000;
+    if (Deaf)
+        return;
+    pool[n++] = "far_drip";
+    pool[n++] = "far_creak";
+    pool[n++] = "far_chain";
+    pool[n++] = "far_rumble";
+    if (depth(&u.uz) >= 5)
+        pool[n++] = "far_howl";
+    if (Inhell) {
+        pool[n++] = "far_moan";
+        pool[n++] = "far_rumble";
+        pool[n++] = "far_moan";
+    }
+    a = (rand() % 360) * 3.14159265358979 / 180.0;
+    d = 7 + rand() % 4;
+    vulture_sfx_at_vol(pool[rand() % n], (int) (d * cos(a)), (int) (d * sin(a)),
+                       45 + rand() % 30);
+}
+
+/* s136: each search turn sends a pulse out from the hero (called from
+   dosearch0) */
+extern "C" void
+vulture_search_fx(void)
+{
+    vfx_ent e;
+
+    if (!levwin || !u.ux)
+        return;
+    memset(&e, 0, sizeof e);
+    e.kind = 8, e.x = u.ux, e.y = u.uy, e.t0 = SDL_GetTicks(), e.dur = 700;
+    e.r = 150, e.g = 220, e.b = 255;
+    vfx_list.push_back(e);
+    vulture_sfx("search_ping");
+}
 
 static void
 vstatus_scan(void)
@@ -4583,6 +4726,11 @@ vmp_draw(int ax, int ay, int w, int h)
     vmp.w = V_UI(200);
     vmp.x = ax + w - vmp.w - V_UI(10);
     vmp.y = ay + h * 11 / 100;
+    if (levwin) /* s136: start below the minimap so it never covers a row */
+        for (window *c = levwin->first_child; c; c = c->sib_next)
+            if (c->visible && c->menu_id == V_WIN_MINIMAP && c->x < vmp.x + vmp.w
+                && vmp.y < c->abs_y + c->h + 6)
+                vmp.y = c->abs_y + c->h + 6;
     vmp.n = n;
     for (i = 0; i < n; i++)
         vmp.mid[i] = list[i]->m_id;
@@ -4608,6 +4756,31 @@ vmp_draw(int ax, int ay, int w, int h)
             nm[0] = (char) toupper((unsigned char) nm[0]);
         if (has_mgivenname(m))
             nm = std::string(MGIVENNAME(m)) + " (" + nm + ")";
+        { /* s136: Brogue-style - what it is doing, right-aligned */
+            const char *st = NULL;
+            Uint8 sr = 160, sg = 160, sb = 160;
+
+            if (m->msleeping || !m->mcanmove)
+                st = "asleep";
+            else if (m->mtrapped)
+                st = "trapped", sr = 200, sg = 170, sb = 120;
+            else if (m->mflee)
+                st = "fleeing", sr = 230, sg = 210, sb = 110;
+            else if (!m->mtame && !m->mpeaceful)
+                st = m_canseeu(m) ? "hunting" : "wandering",
+                sr = m_canseeu(m) ? 255 : 170, sg = m_canseeu(m) ? 110 : 170,
+                sb = m_canseeu(m) ? 90 : 170;
+            if (st) {
+                int sw = vulture_text_length(V_FONT_SMALL, st), room;
+
+                room = vmp.w - V_UI(28) - sw - 8;
+                while (nm.size() > 3 && vulture_text_length(V_FONT_SMALL, nm) > room)
+                    nm.resize(nm.size() - 1);
+                vulture_put_text_shadow(V_FONT_SMALL, st, vulture_screen,
+                                        vmp.x + vmp.w - V_UI(8) - sw, ry,
+                                        SDL_MapRGB(vulture_screen->format, sr, sg, sb), black);
+            }
+        }
         vulture_put_text_shadow(V_FONT_SMALL, nm, vulture_screen, vmp.x + V_UI(20), ry,
                                 SDL_MapRGB(vulture_screen->format, 235, 230, 220), black);
         if ((m->mtame || m->mhp < m->mhpmax) && m->mhpmax > 0) {
@@ -5011,6 +5184,8 @@ levelwin::draw()
     vtw_prepare(view_x, view_y);
     vfx_scan(); /* s85: damage numbers / blood from HP changes */
     vstatus_scan(); /* s129 */
+    vglint_tick();  /* s136 */
+    vamb_tick();    /* s136 */
     map_centre_x += vtw_gx + (int) vpan_px; /* s79: + MMB drag residual */
     map_centre_y += vtw_gy + (int) vpan_py;
 
