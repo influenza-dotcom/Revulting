@@ -2983,6 +2983,19 @@ What was built:
 - A blow taking 10%+ of max HP flashes the screen edge red (`vhurt_flash`, reuses the status pulse).
 - toolchain/make_sfx4.py: far_drip/creak/chain/rumble/howl/moan, search_ping, eat_chew, skill_up, gain, room_sting, web, scribble. vulture_sounds.conf: eating, skill advance, ~14 intrinsic gains, special-room entries, temple feelings, prayer, altar flashes, camera flash, webs, engraving, "Nothing happens", wresting, distant noises, fleeing. The repo copy (gamedata/config) re-synced with the game folder (it was stale since log 95).
 
+### 137. Stealth and sleep, communicated (Brogue-style), no rule changes
+
+Audit (vanilla rules, unchanged): `disturb()` wakes a sleeper that can see you within 10 squares unless you are Stealthy (ettins excepted); dogs and humans at once, others 1 in 7 a turn; nymphs/leprechauns/jabberwocks rarely. Entering a zoo/court/swamp/morgue without Stealth wakes ~1/3. Sneak attacks get +2 to hit (asleep), +4 (helpless); Rogues backstab for +d(level). Plain melee is silent; kicks, locks, digging, horns etc. call `wake_nearto`. None of this reached the screen.
+
+- Stealth badge above the portrait: STEALTHY / NOISY / AGGRAVATING (Aggravate only when its source is known, so no unidentified-ring leak); hover says why (nature, worn gear, riding cancels it) and what it means.
+- Sleepers show drifting "z Z" over their heads; helpless (paralysed) monsters get circling stars. Threat colours on the card and the IN SIGHT dot are dimmed while asleep.
+- Hover card for a sleeping/helpless hostile replaces the misleading "It hits you N%" with: hit chance + "sneak attack, +2/+4" (+ "backstab" for Rogues), "Asleep - it won't fight back until it wakes" / "Helpless for about N more turns", and a wake line from the real rules (stealthy / ettin / deep sleeper / aggravating / wakes on sight / 1 in 7), coloured green/amber/red.
+- Payoff: `do_attack` records a target that was asleep/helpless (`vulture_sneak_mid` + move); if `xkilled` gets it the same turn -> "SILENT KILL" popup, violet burst, hit-stop, `silent_kill` sound. Rogue backstab -> "BACKSTAB" popup + sound.
+- Noise: `wake_nearto_core` -> `vulture_noise` draws a ripple sized to the real waking radius (within 16 squares); visible monsters it woke get "?" (and the `wake_q` sound) instead of "!" (seen you); unseen hostiles it woke -> "You hear something stir." The monster you just attacked gets no bubble.
+- Special-room entry (zoo, court, beehive, barracks...): "Your entrance wakes N of them - you are not stealthy; M still sleep." / "You slip in unheard. M of them sleep on." / "M of them are asleep. Tread carefully."
+- Sleepers are opportunities, not alarms: the new-hostile alert plays a soft `sleeper_spot` cue for them; auto-explore says "A sleeping X is in view - sneak past it or strike first."; FIGHT/Tab announces "Sneak attack on the sleeping X!".
+- toolchain/make_sfx5.py: silent_kill, backstab, sleeper_spot, wake_q. Probe: `VULTURE_SELFTEST_SLEEP=1`.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

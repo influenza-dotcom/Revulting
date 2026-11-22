@@ -3515,6 +3515,11 @@ xkilled(
     int tmp, mndx;
     coordxy x = mtmp->mx, y = mtmp->my;
     struct monst museum = cg.zeromonst;
+
+    if (mtmp->m_id == vulture_sneak_mid && vulture_sneak_move == svm.moves) {
+        vulture_silent_kill(x, y); /* s137: killed before it could react */
+        vulture_sneak_mid = 0;
+    }
     struct permonst *mdat;
     struct obj *otmp;
     struct trap *t;
@@ -4410,11 +4415,19 @@ staticfn void
 wake_nearto_core(coordxy x, coordxy y, int distance, boolean petcall)
 {
     struct monst *mtmp;
+    int unseen = 0; /* s137 */
 
+    vulture_noise(x, y, distance); /* s137: show how far the noise carries */
     for (mtmp = fmon; mtmp; mtmp = mtmp->nmon) {
         if (DEADMONSTER(mtmp))
             continue;
         if (distance == 0 || dist2(mtmp->mx, mtmp->my, x, y) < distance) {
+            if (mtmp->msleeping) { /* s137: woken by a noise, not by sight */
+                if (canseemon(mtmp))
+                    vulture_heard(mtmp->m_id);
+                else if (!mtmp->mtame && !mtmp->mpeaceful)
+                    unseen++;
+            }
             /* sleep for N turns uses mtmp->mfrozen, but so does paralysis
                so we leave mfrozen monsters alone */
             wake_msg(mtmp, FALSE);
@@ -4431,6 +4444,8 @@ wake_nearto_core(coordxy x, coordxy y, int distance, boolean petcall)
             }
         }
     }
+    if (unseen && !Deaf && !svc.context.mon_moving) /* s137 */
+        You_hear("%s stir.", unseen > 1 ? "several things" : "something");
     disturb_buried_zombies(x, y);
 }
 

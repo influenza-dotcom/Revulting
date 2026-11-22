@@ -3777,18 +3777,28 @@ check_special_room(boolean newlev)
                     break;
                 }
             }
-            if (rt == COURT || rt == SWAMP || rt == MORGUE || rt == ZOO)
+            {
+                int vz = 0, vwoke = 0; /* s137: tell the player how it went */
+
                 for (mtmp = fmon; mtmp; mtmp = mtmp->nmon) {
                     if (DEADMONSTER(mtmp))
                         continue;
                     if (!isok(mtmp->mx,mtmp->my)
                         || roomno != (int) levl[mtmp->mx][mtmp->my].roomno)
                         continue;
-                    if (!Stealth && !rn2(3)) {
+                    if ((rt == COURT || rt == SWAMP || rt == MORGUE || rt == ZOO)
+                        && !Stealth && !rn2(3)) {
+                        if (mtmp->msleeping && canspotmon(mtmp))
+                            vwoke++;
                         wake_msg(mtmp, FALSE);
                         mtmp->msleeping = 0;
                     }
+                    if ((mtmp->msleeping || !mtmp->mcanmove) && canspotmon(mtmp)
+                        && !mtmp->mtame && !mtmp->mpeaceful)
+                        vz++;
                 }
+                vulture_room_sleepers(vz, vwoke, Stealth ? 1 : 0);
+            }
         }
     }
     return;

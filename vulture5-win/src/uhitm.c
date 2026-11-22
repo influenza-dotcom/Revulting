@@ -28,6 +28,8 @@ staticfn void hmon_hitmon_barehands(struct _hitmon_data *,
 staticfn void hmon_hitmon_weapon_ranged(struct _hitmon_data *, struct monst *,
                              struct obj *) NONNULLARG123;
 staticfn boolean backstabbable(struct monst *) NONNULLARG1;
+unsigned vulture_sneak_mid = 0; /* s137 */
+long vulture_sneak_move = -1;
 staticfn void hmon_hitmon_weapon_melee(struct _hitmon_data *, struct monst *,
                              struct obj *) NONNULLARG123;
 staticfn void hmon_hitmon_weapon(struct _hitmon_data *, struct monst *,
@@ -449,6 +451,11 @@ boolean
 do_attack(struct monst *mtmp)
 {
     struct permonst *mdat = mtmp->data;
+
+    /* s137: remember a sneak attack (target asleep or helpless) so a kill
+       this turn can be celebrated */
+    vulture_sneak_mid = (mtmp->msleeping || !mtmp->mcanmove) ? mtmp->m_id : 0;
+    vulture_sneak_move = svm.moves;
 
     /* This section of code provides protection against accidentally
      * hitting peaceful (like '@') and tame (like 'd') monsters.
@@ -968,6 +975,7 @@ hmon_hitmon_weapon_melee(
                /* multi-shot throwing is too powerful here */
                && hmd->hand_to_hand) {
         You("strike %s from behind!", mon_nam(mon));
+        vulture_backstab(mon->mx, mon->my); /* s137 */
         hmd->dmg += rnd(u.ulevel);
         hmd->hittxt = TRUE;
     } else if (hmd->dieroll == 2 && obj == uwep

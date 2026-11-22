@@ -408,6 +408,14 @@ extern coord descend_target;
 /* Vulture mod §49: auto-explore (state read by vulture_qol_pass) */
 extern int doautoexplore(void);
 extern int autoexplore_collect(void);   /* s135 */
+/* s137: stealth / sleep communication hooks (Vulture interface) */
+extern unsigned vulture_sneak_mid;  /* monster that was asleep/helpless when you swung */
+extern long vulture_sneak_move;
+extern void vulture_silent_kill(int, int);
+extern void vulture_backstab(int, int);
+extern void vulture_noise(int, int, int);
+extern void vulture_heard(unsigned);
+extern void vulture_room_sleepers(int, int, int);
 extern void vulture_search_more(void); /* s135 */
 /* Vulture mod s70-71 */
 extern boolean llm_rewrite_line(const char *, char *, size_t, boolean);

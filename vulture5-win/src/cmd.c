@@ -5754,7 +5754,22 @@ doautoexplore(void)
         return ECMD_OK;
     }
     if (autoexplore_hostile_in_view()) {
-        pline("Not with enemies in sight.");
+        struct monst *zm, *awake = 0, *zz = 0; /* s137: say if it's asleep */
+
+        for (zm = fmon; zm; zm = zm->nmon)
+            if (!DEADMONSTER(zm) && !zm->mpeaceful && !zm->mtame
+                && canspotmon(zm) && couldsee(zm->mx, zm->my)) {
+                if (zm->msleeping || !zm->mcanmove)
+                    zz = zm;
+                else
+                    awake = zm;
+            }
+        if (!awake && zz)
+            pline("%s is in view - sneak past it or strike first.",
+                  upstart(x_monnam(zz, ARTICLE_A, zz->msleeping ? "sleeping"
+                                                    : "helpless", 0, FALSE)));
+        else
+            pline("Not with enemies in sight.");
         return ECMD_OK;
     }
     if (++autoexplore_legs > AUTOEXPLORE_MAX_LEGS) {

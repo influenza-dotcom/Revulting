@@ -1853,6 +1853,38 @@ vfx_draw(int cx, int cy, int vx, int vy)
         }
     }
 
+    if (!Hallucination) { /* s137: you can see who is asleep at a glance */
+        struct monst *zm;
+
+        for (zm = fmon; zm; zm = zm->nmon) {
+            if (DEADMONSTER(zm) || !canseemon(zm) || !(zm->msleeping || !zm->mcanmove))
+                continue;
+            vfx_square_screen(zm->mx, zm->my, cx, cy, vx, vy, &sx, &sy);
+            if (zm->msleeping) {
+                for (k = 0; k < 3; k++) {
+                    double ph = fmod(now / 2200.0 + k / 3.0 + (zm->m_id % 7) * 0.13, 1.0);
+                    int c = (int) (255 * sin(3.14159265358979 * ph));
+                    char zs[2] = { ph > 0.55 ? 'Z' : 'z', 0 };
+
+                    vulture_put_text_shadow(V_FONT_SMALL, zs, vulture_screen,
+                                            sx + 10 + (int) (16 * ph)
+                                                + (int) (3 * sin(ph * 9 + k)),
+                                            sy - 66 - (int) (30 * ph),
+                                            SDL_MapRGB(vulture_screen->format, c * 170 / 255,
+                                                       c * 200 / 255, c),
+                                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+                }
+            } else { /* helpless: stars circling its head */
+                for (k = 0; k < 3; k++) {
+                    double a = now / 300.0 + k * 2.0944;
+
+                    vfx_glowdot(sx + (int) (13 * cos(a)), sy - 62 + (int) (5 * sin(a)),
+                                255, 230, 120, 220);
+                }
+            }
+        }
+    }
+
     for (i = 0; i < vfx_list.size(); i++) {
         vfx_ent &e = vfx_list[i];
         double age = (double) (now - e.t0) / e.dur, ts = (now - e.t0) / 1000.0;
@@ -1895,6 +1927,29 @@ vfx_draw(int cx, int cy, int vx, int vy)
                 vfx_glowdot(sx, sy + k2, e.r, e.g, e.b, fa);
             }
             vfx_glowdot(sx, sy, 255, 255, 255, a);
+            continue;
+        }
+        if (age < 1.0 && e.kind == 9) { /* s137: how far a noise carries */
+            int ring;
+
+            vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
+            for (ring = 0; ring < 2; ring++) {
+                double f = age - ring * 0.18, ea, rw, rh;
+                int n2, k2, al;
+
+                if (f <= 0)
+                    continue;
+                ea = 1.0 - (1.0 - f) * (1.0 - f);
+                rw = e.sub * ea * 79.0 / 10.0, rh = e.sub * ea * 31.0 / 10.0;
+                al = (int) ((ring ? 110 : 190) * (1.0 - f));
+                n2 = 24 + (int) (rw / 4);
+                for (k2 = 0; k2 < n2; k2++) {
+                    double an = 2 * 3.14159265358979 * k2 / n2;
+
+                    vfx_glowdot(sx + (int) (rw * cos(an)), sy + (int) (rh * sin(an)),
+                                e.r, e.g, e.b, al);
+                }
+            }
             continue;
         }
         if (age < 1.0 && e.kind == 8) { /* s136: Brogue-style search pulse */
@@ -3374,6 +3429,8 @@ vcard_draw(const std::string &name)
         threat = "Dangerous", tr = 255, tg = 160, tb = 60;
     else
         threat = "Deadly", tr = 255, tg = 70, tb = 60;
+    if (!m->mtame && (m->msleeping || !m->mcanmove)) /* s137: asleep = no threat now */
+        tr = (Uint8) ((tr + 140) / 2), tg = (Uint8) ((tg + 150) / 2), tb = (Uint8) ((tb + 170) / 2);
     tags = threat;
     if (m->msleeping)
         tags += "  -  asleep";
@@ -3386,19 +3443,50 @@ vcard_draw(const std::string &name)
     if (!title.empty())
         title[0] = (char) toupper((unsigned char) title[0]);
     bar = m->mtame || m->mhp < m->mhpmax;
-    std::string odds1, odds2;
-    int risk = 0;
+    std::string odds1, odds2, odds3;
+    int risk = 0, wcol = 0;
+    bool zz = m->msleeping || !m->mcanmove;
 
     if (!m->mtame && !m->mpeaceful) { /* s134 */
         int yh, ih, ip;
         char ob[96];
 
         vodds(m, &yh, &ih, &ip);
-        snprintf(ob, sizeof ob, "You hit it %d%% of the time", yh);
-        odds1 = ob;
-        snprintf(ob, sizeof ob, "It hits you %d%%, ~%d%% of your health", ih, ip);
-        odds2 = ob;
-        risk = ip * ih / 100;
+        if (zz) { /* s137: what a sneak attack gets you, and will it wake */
+            snprintf(ob, sizeof ob, "You hit it %d%%  -  sneak attack, +%d%s", yh,
+                     (m->msleeping ? 2 : 0) + (!m->mcanmove ? 4 : 0),
+                     Role_if(PM_ROGUE) ? ", backstab" : "");
+            odds1 = ob;
+            if (m->msleeping)
+                odds2 = "Asleep  -  it won't fight back until it wakes";
+            else if (m->mfrozen) {
+                snprintf(ob, sizeof ob, "Helpless for about %d more turn%s", m->mfrozen,
+                         m->mfrozen == 1 ? "" : "s");
+                odds2 = ob;
+            } else
+                odds2 = "Helpless  -  it can't fight back";
+            if (m->msleeping) {
+                if (Stealth && m->data != &mons[PM_ETTIN])
+                    odds3 = "Your steps won't wake it  -  you're stealthy", wcol = 0;
+                else if (m->data == &mons[PM_ETTIN] && Stealth)
+                    odds3 = "Ettins hear even stealthy steps", wcol = 1;
+                else if (m->data->mlet == S_NYMPH || m->data->mlet == S_LEPRECHAUN
+                         || m->data == &mons[PM_JABBERWOCK])
+                    odds3 = "A deep sleeper  -  it rarely wakes", wcol = 0;
+                else if (Aggravate_monster)
+                    odds3 = "You aggravate monsters  -  it wakes once it sees you", wcol = 2;
+                else if (m->data->mlet == S_DOG || m->data->mlet == S_HUMAN)
+                    odds3 = "Wakes the moment it sees you", wcol = 2;
+                else
+                    odds3 = "Each turn it sees you nearby: 1 in 7 it wakes", wcol = 1;
+            }
+        } else {
+            snprintf(ob, sizeof ob, "You hit it %d%% of the time", yh);
+            odds1 = ob;
+            snprintf(ob, sizeof ob, "It hits you %d%%, ~%d%% of your health", ih, ip);
+            odds2 = ob;
+            risk = ip * ih / 100;
+        }
     }
     bw = vulture_text_length(V_FONT_SMALL, title);
     if (vulture_text_length(V_FONT_SMALL, tags) > bw)
@@ -3407,10 +3495,13 @@ vcard_draw(const std::string &name)
         bw = vulture_text_length(V_FONT_SMALL, odds2);
     if (!odds1.empty() && vulture_text_length(V_FONT_SMALL, odds1) > bw)
         bw = vulture_text_length(V_FONT_SMALL, odds1);
+    if (!odds3.empty() && vulture_text_length(V_FONT_SMALL, odds3) > bw) /* s137 */
+        bw = vulture_text_length(V_FONT_SMALL, odds3);
     bw += 26;
     if (bw < 150)
         bw = 150;
-    bh = 2 * lh + 14 + (bar ? 10 : 0) + (odds1.empty() ? 0 : 2 * lh + 4);
+    bh = 2 * lh + 14 + (bar ? 10 : 0) + (odds1.empty() ? 0 : 2 * lh + 4)
+         + (odds3.empty() ? 0 : lh); /* s137 */
     bx = mp.x + 20, by = mp.y + 24;
     if (bx + bw > vulture_screen->w - 4)
         bx = mp.x - 20 - bw;
@@ -3433,7 +3524,14 @@ vcard_draw(const std::string &name)
         vulture_put_text_shadow(V_FONT_SMALL, odds1, vulture_screen, bx + 12, oy,
                                 SDL_MapRGB(vulture_screen->format, 200, 210, 230),
                                 SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        if (!odds3.empty()) /* s137: will it wake? */
+            vulture_put_text_shadow(V_FONT_SMALL, odds3, vulture_screen, bx + 12, oy + 2 * lh,
+                                    wcol == 2 ? SDL_MapRGB(vulture_screen->format, 255, 120, 90)
+                                    : wcol == 1 ? SDL_MapRGB(vulture_screen->format, 240, 200, 100)
+                                    : SDL_MapRGB(vulture_screen->format, 130, 220, 140),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
         vulture_put_text_shadow(V_FONT_SMALL, odds2, vulture_screen, bx + 12, oy + lh,
+                                zz ? SDL_MapRGB(vulture_screen->format, 150, 200, 255) :
                                 risk >= 25 ? SDL_MapRGB(vulture_screen->format, 255, 90, 70)
                                 : risk >= 10 ? SDL_MapRGB(vulture_screen->format, 255, 190, 80)
                                 : SDL_MapRGB(vulture_screen->format, 200, 210, 230),
@@ -4092,8 +4190,12 @@ vselftest(void)
         if (getenv("VULTURE_SELFTEST")) { /* probe: a hostile to hover (odds) */
             coord cc;
 
-            if (enexto(&cc, u.ux, u.uy, &mons[PM_JACKAL]))
-                (void) makemon(&mons[PM_JACKAL], cc.x, cc.y, NO_MM_FLAGS);
+            if (enexto(&cc, u.ux, u.uy, &mons[PM_JACKAL])) {
+                struct monst *jm = makemon(&mons[PM_JACKAL], cc.x, cc.y, NO_MM_FLAGS);
+
+                if (jm && getenv("VULTURE_SELFTEST_SLEEP")) /* probe: s137 sleeper */
+                    jm->msleeping = 1;
+            }
         }
         lines.push_back("a +0 dagger");
         lines.push_back("2 uncursed food rations");
@@ -4138,6 +4240,15 @@ vselftest(void)
             }
         break;
     case 2:
+        if (getenv("VULTURE_SELFTEST_SLEEP")) { /* probe: s137 ripple + payoff */
+            vulture_noise(u.ux, u.uy, 25);
+            vfx_list.back().t0 -= 260;
+            vulture_silent_kill(u.ux - 2, u.uy + 1);
+            for (size_t q = 0; q < vfx_list.size(); q++)
+                if (vfx_list[q].kind == 1 || vfx_list[q].kind == 6)
+                    vfx_list[q].t0 -= 200;
+            vhitstop_ms = 0;
+        }
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_card.bmp", dir);
@@ -4192,6 +4303,158 @@ vtint(int x, int y, int w, int h, Uint8 r, Uint8 g, Uint8 b, int a)
 
 static Uint32 vst_pulse_t = 0;
 static Uint8 vst_r, vst_g, vst_b;
+
+/* ---- s137: stealth and sleep, communicated ---- */
+static std::map<unsigned, bool> vheard; /* woken by a noise this frame: "?" */
+
+static void
+vfx_word(int x, int y, const char *txt, Uint8 r, Uint8 g, Uint8 b, Uint32 dur)
+{
+    vfx_ent e;
+
+    memset(&e, 0, sizeof e);
+    e.kind = 1, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = dur;
+    snprintf(e.txt, sizeof e.txt, "%s", txt);
+    e.r = r, e.g = g, e.b = b;
+    vfx_list.push_back(e);
+}
+
+/* a sleeping or helpless monster died to your attack the same turn */
+extern "C" void
+vulture_silent_kill(int x, int y)
+{
+    if (!levwin)
+        return;
+    vfx_word(x, y, "SILENT KILL", 235, 215, 255, 1500);
+    vfx_burst(x, y, 170, 120, 255);
+    vhitstop_ms = 95;
+    vulture_sfx("silent_kill");
+}
+
+extern "C" void
+vulture_backstab(int x, int y)
+{
+    if (!levwin)
+        return;
+    vfx_word(x, y, "BACKSTAB", 255, 170, 70, 1100);
+    vulture_sfx("backstab");
+}
+
+/* a noise woke monsters within sqrt(dist2) squares of (x, y) */
+extern "C" void
+vulture_noise(int x, int y, int dist2v)
+{
+    vfx_ent e;
+    int r;
+
+    if (!levwin || !u.ux || !isok(x, y) || distmin(u.ux, u.uy, x, y) > 16)
+        return;
+    r = dist2v <= 0 ? 18 : (int) sqrt((double) dist2v);
+    if (r < 1)
+        return;
+    if (r > 18)
+        r = 18;
+    memset(&e, 0, sizeof e);
+    e.kind = 9, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = 650 + 40 * r;
+    e.sub = r * 10; /* tenths of a square, see the draw */
+    e.r = 255, e.g = 235, e.b = 170;
+    vfx_list.push_back(e);
+}
+
+extern "C" void
+vulture_heard(unsigned mid)
+{
+    vheard[mid] = true;
+}
+
+/* entering a special room: how many sleep, how many your entrance woke */
+extern "C" void
+vulture_room_sleepers(int asleep, int woke, int stealthy)
+{
+    if (asleep + woke < 2)
+        return;
+    if (woke)
+        pline("Your entrance wakes %d of them%s; %d still sleep%s.", woke,
+              stealthy ? "" : " - you are not stealthy", asleep,
+              asleep == 1 ? "s" : "");
+    else if (stealthy)
+        pline("You slip in unheard.  %d of them sleep on.", asleep);
+    else
+        pline("%d of them are asleep.  Tread carefully.", asleep);
+    vulture_sfx(woke ? "wake_q" : "sleeper_spot");
+}
+
+/* the stealth badge above the portrait: STEALTHY / NOISY / AGGRAVATING */
+static SDL_Rect vsb_rect = { 0, 0, 0, 0 };
+
+static const char *
+vstealth_state(Uint8 *r, Uint8 *g, Uint8 *b, std::string *why)
+{
+    bool aggr_known = HAggravate_monster
+        || (uleft && uleft->otyp == RIN_AGGRAVATE_MONSTER
+            && objects[RIN_AGGRAVATE_MONSTER].oc_name_known)
+        || (uright && uright->otyp == RIN_AGGRAVATE_MONSTER
+            && objects[RIN_AGGRAVATE_MONSTER].oc_name_known);
+
+    if (Stealth) {
+        *why = HStealth ? "Stealthy by nature" : "Stealthy thanks to something you wear";
+        if (HStealth && EStealth)
+            *why = "Stealthy by nature and by what you wear";
+        *why += " - your steps never wake sleeping monsters (ettins excepted)";
+        *r = 120, *g = 220, *b = 140;
+        return "STEALTHY";
+    }
+    if (aggr_known) {
+        *why = "You aggravate monsters - sleepers wake as soon as they see you";
+        *r = 255, *g = 90, *b = 70;
+        return "AGGRAVATING";
+    }
+    if ((HStealth || EStealth) && BStealth)
+        *why = "Riding cancels your stealth - ";
+    else
+        *why = "";
+    *why += "sleepers that see you may wake: dogs and humans at once, others 1 in 7 a turn";
+    *r = 200, *g = 170, *b = 120;
+    return "NOISY";
+}
+
+static void
+vstealth_draw(void)
+{
+    Uint8 r, g, b;
+    std::string why;
+    const char *lab;
+    int ps, px, py, tw, lh = vulture_get_lineheight(V_FONT_SMALL);
+    SDL_Rect rc;
+
+    vsb_rect.w = 0;
+    if (!stwin || !stwin->visible || !u.ux)
+        return;
+    lab = vstealth_state(&r, &g, &b, &why);
+    ps = stwin->h, px = stwin->abs_x - V_UI(4) - ps, py = stwin->abs_y;
+    tw = vulture_text_length(V_FONT_SMALL, lab);
+    rc.w = tw + 14 > ps ? tw + 14 : ps, rc.h = lh + 4;
+    rc.x = px, rc.y = py - rc.h - 3;
+    if (rc.x < 0)
+        rc.x = 0;
+    vbox(rc.x, rc.y, rc.w, rc.h, 200);
+    {
+        SDL_Rect bar = { (Sint16) rc.x, (Sint16) (rc.y + rc.h - 2), (Uint16) rc.w, 2 };
+
+        SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, r, g, b));
+    }
+    vulture_put_text_shadow(V_FONT_SMALL, lab, vulture_screen, rc.x + (rc.w - tw) / 2, rc.y + 2,
+                            SDL_MapRGB(vulture_screen->format, r, g, b),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    vsb_rect = rc;
+}
+
+static bool
+vstealth_hit(int mx, int my)
+{
+    return vsb_rect.w && mx >= vsb_rect.x && mx < vsb_rect.x + vsb_rect.w && my >= vsb_rect.y
+           && my < vsb_rect.y + vsb_rect.h;
+}
 
 /* s136: the screen edge flashes red when a blow really lands */
 static void
@@ -4364,21 +4627,30 @@ vstatus_scan(void)
             if (DEADMONSTER(m) || !canspotmon(m) || m->mtame || m->mpeaceful)
                 continue;
             z = m->msleeping || !m->mcanmove;
-            if (!fresh && dozing.count(m->m_id) && dozing[m->m_id] && !z) {
-                vulture_say_above(m->m_id, m->mx, m->my, "!");
-                vulture_sfx("spotted");
+            if (!fresh && dozing.count(m->m_id) && dozing[m->m_id] && !z
+                && m->m_id != vulture_sneak_mid) { /* s137 */
+                bool noise = vheard.count(m->m_id) != 0;
+
+                vulture_say_above(m->m_id, m->mx, m->my, noise ? "?" : "!");
+                vulture_sfx(noise ? "wake_q" : "spotted");
             }
             dozing[m->m_id] = z;
         }
+        vheard.clear(); /* s137 */
+        bool anyz = false; /* s137 */
+
         for (m = fmon; m; m = m->nmon)
             if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame && !m->mpeaceful
                 && !seen.count(m->m_id)) {
                 seen[m->m_id] = true;
-                any = true;
+                if (m->msleeping || !m->mcanmove)
+                    anyz = true; /* s137: a sleeper is an opportunity, not an alarm */
+                else
+                    any = true;
             }
-        if (any && !fresh && SDL_GetTicks() - last_alert > 1200) {
+        if ((any || anyz) && !fresh && SDL_GetTicks() - last_alert > 1200) {
             last_alert = SDL_GetTicks();
-            vulture_sfx("alert");
+            vulture_sfx(any ? "alert" : "sleeper_spot");
         }
     }
 }
@@ -4497,6 +4769,9 @@ vauto_fight(void *result)
 
     if (!m || !vauto_step_toward(m->mx, m->my))
         return false;
+    if ((m->msleeping || !m->mcanmove) && distmin(u.ux, u.uy, m->mx, m->my) <= 1)
+        pline("Sneak attack on the %s %s!", m->msleeping ? "sleeping" : "helpless",
+              pmname(m->data, Mgender(m))); /* s137 */
     vauto_result(result);
     return true;
 }
@@ -4747,6 +5022,8 @@ vmp_draw(int ax, int ay, int w, int h)
 
         m = list[i];
         (void) vthreat(m, &r, &g, &b);
+        if (!m->mtame && (m->msleeping || !m->mcanmove)) /* s137 */
+            r = (Uint8) ((r + 140) / 2), g = (Uint8) ((g + 150) / 2), b = (Uint8) ((b + 170) / 2);
         if (i == hov)
             vtint(vmp.x + 2, ry - 2, vmp.w - 4, vmp.rowh, 255, 255, 255, 30);
         rc.x = vmp.x + V_UI(8), rc.y = ry + lh / 2 - 3, rc.w = 6, rc.h = 6;
@@ -5478,6 +5755,7 @@ levelwin::draw()
               this->abs_y, this->w, this->h); /* s100: toasts, card, waypoint */
     vhb_draw(this->abs_x, this->abs_y, this->w, this->h);   /* s126 */
     vbtn_draw();                                            /* s130 */
+    vstealth_draw();                                        /* s137 */
     vhere_draw(this->abs_x, this->abs_y, this->w, this->h); /* s125 */
     if (isok(vhv.x, vhv.y) && !vaim_on) /* s125: monster hover card */
         vcard_draw(map_data->map_square_description(vhv, 0));
@@ -5623,6 +5901,14 @@ levelwin::handle_timer_event(window *target, void *result, int time)
         }
         if (vmp_hit(mp.x, mp.y) >= 0)
             return V_EVENT_HANDLED_NOREDRAW;
+        if (vstealth_hit(mp.x, mp.y)) { /* s137 */
+            Uint8 r, g, b;
+            std::string why;
+
+            (void) vstealth_state(&r, &g, &b, &why);
+            vulture_mouse_set_tooltip(why);
+            return V_EVENT_HANDLED_NOREDRAW;
+        }
         if (vhb_hit(mp.x, mp.y) >= 0) { /* s126 */
             vulture_mouse_set_tooltip(vhb_tip(vhb_hit(mp.x, mp.y)));
             return V_EVENT_HANDLED_NOREDRAW;
