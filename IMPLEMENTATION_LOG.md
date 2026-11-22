@@ -3414,6 +3414,20 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Probe VULTURE_SELFTEST_PORTAL: a seen magic trap beside the hero; three
   frames show its sprite's colour and brightness changing - the pulse works.
 
+### 167. Lighting on every core (GPU project, stage 1)
+
+- The GPU move needs the map and the interface split into separate layers
+  (the light belongs between them, and today everything shares one software
+  surface) - see docs/GPU_RENDERING_PLAN.md.  First, a win that keeps the
+  normal maps: both light passes treat each row on its own, so `vpar_rows`
+  runs them in horizontal bands on up to 6 threads (std::thread; the light
+  layer's scratch rows are now per thread; VULTURE_THREADS overrides the
+  count).  <thread> is included before hack.h - NetHack's min/max macros
+  break it otherwise.
+- At 1920x1080 (probe, player's settings): lighting 9 -> 3 ms per frame,
+  frame 15 -> 9 ms, idle frame 16 -> 10 ms; frames drawn in the same run
+  244 -> 442.  No band seams; a 2-minute soak ran clean.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

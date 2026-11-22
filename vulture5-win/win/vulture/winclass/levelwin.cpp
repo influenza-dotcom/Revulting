@@ -3,6 +3,7 @@
 #include "vulture_sdl.h" /* XXX this must be the first include,
                              no idea why but it won't compile otherwise */
 
+#include <thread> /* s167: before NetHack's min/max macros */
 extern "C" {
 #include "hack.h"
 }
@@ -9007,6 +9008,42 @@ vl_relief_report(FILE *f) /* probe */
 
 static std::vector<int> vr_cmin, vr_cmax; /* lit cells per grid row (-1: none) */
 
+/* s167: run fn over [y0, y1) in horizontal bands, one per core (up to 6) -
+   the light passes treat every row on its own, so the bands never touch */
+template <typename Fn>
+static void
+vpar_rows(int y0, int y1, Fn fn)
+{
+    static int ncpu = 0;
+    int n, k, step;
+
+    if (!ncpu) {
+        ncpu = (int) std::thread::hardware_concurrency();
+        if (getenv("VULTURE_THREADS"))
+            ncpu = atoi(getenv("VULTURE_THREADS"));
+        ncpu = ncpu < 1 ? 1 : ncpu > 6 ? 6 : ncpu;
+    }
+    n = ncpu;
+    if (y1 - y0 < 64 || n == 1) {
+        fn(y0, y1);
+        return;
+    }
+    step = (y1 - y0 + n - 1) / n;
+    {
+        std::vector<std::thread> pool;
+
+        for (k = 1; k < n; k++) {
+            int a = y0 + k * step, z = a + step > y1 ? y1 : a + step;
+
+            if (a < z)
+                pool.emplace_back(fn, a, z);
+        }
+        fn(y0, y0 + step > y1 ? y1 : y0 + step); /* this thread takes the first band */
+        for (k = 0; k < (int) pool.size(); k++)
+            pool[k].join();
+    }
+}
+
 /* s149: light each pixel from its normal-map normal (vulture_normal_buf),
    facing the light direction of its coarse cell */
 static void
@@ -9096,7 +9133,7 @@ vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
         && vulture_normal_buf->h == s->h) { /* s149: real normal maps */
         if (SDL_MUSTLOCK(s))
             SDL_LockSurface(s);
-        vl_nmap(x0, y0, x1, y1, gx0, gy0, FS);
+        vpar_rows(y0, y1, [&](int a, int z) { vl_nmap(x0, a, x1, z, gx0, gy0, FS); }); /* s167 */
         if (SDL_MUSTLOCK(s))
             SDL_UnlockSurface(s);
         vr_last_ms = SDL_GetTicks() - t0;
@@ -9296,10 +9333,11 @@ vl_blit_visible(SDL_Surface *layer, int dx, int dy, int mx, int my, int mw, int 
  * the screen.  Same result as the old stretch + blend.
  */
 static void
-vl_apply(SDL_Surface *low, int mx, int my, int mw, int mh, int ox, int oy, int FS)
+vl_apply_band(SDL_Surface *low, int mx, int my, int mw, int mh, int ox, int oy, int FS, int by0,
+              int by1)
 {
     SDL_Surface *s = vulture_screen;
-    static std::vector<int> rA, rR, rG, rB;
+    std::vector<int> rA, rR, rG, rB; /* s167: per thread */
     int lw = low->w, lh = low->h, x, y, x0, y0, x1, y1, rs, gs, bs;
     Uint32 mask;
 
@@ -9308,14 +9346,15 @@ vl_apply(SDL_Surface *low, int mx, int my, int mw, int mh, int ox, int oy, int F
     x0 = mx < 0 ? 0 : mx, y0 = my < 0 ? 0 : my;
     x1 = mx + mw > s->w ? s->w : mx + mw;
     y1 = my + mh > s->h ? s->h : my + mh;
+    if (y0 < by0)
+        y0 = by0;
+    if (y1 > by1)
+        y1 = by1;
     if (x1 <= x0 || y1 <= y0)
         return;
     rs = s->format->Rshift, gs = s->format->Gshift, bs = s->format->Bshift;
     mask = ~(((Uint32) 255 << rs) | ((Uint32) 255 << gs) | ((Uint32) 255 << bs));
     rA.resize(lw), rR.resize(lw), rG.resize(lw), rB.resize(lw);
-    if (SDL_MUSTLOCK(s))
-        SDL_LockSurface(s);
-    SDL_LockSurface(low);
     for (y = y0; y < y1; y++) {
         int fy = y - oy, j = fy >= 0 ? fy / FS : -1, t = fy >= 0 ? ((fy % FS) << 8) / FS : 0, i;
         Uint32 *row = (Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch);
@@ -9385,6 +9424,21 @@ vl_apply(SDL_Surface *low, int mx, int my, int mw, int mh, int ox, int oy, int F
             }
         }
     }
+}
+
+static void
+vl_apply(SDL_Surface *low, int mx, int my, int mw, int mh, int ox, int oy, int FS)
+{
+    SDL_Surface *s = vulture_screen;
+
+    if (!s || !low || s->format->BytesPerPixel != 4)
+        return;
+    if (SDL_MUSTLOCK(s))
+        SDL_LockSurface(s);
+    SDL_LockSurface(low);
+    vpar_rows(my < 0 ? 0 : my, my + mh > s->h ? s->h : my + mh, [&](int a, int z) {
+        vl_apply_band(low, mx, my, mw, mh, ox, oy, FS, a, z);
+    });
     SDL_UnlockSurface(low);
     if (SDL_MUSTLOCK(s))
         SDL_UnlockSurface(s);
