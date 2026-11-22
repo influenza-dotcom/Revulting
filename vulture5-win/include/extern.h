@@ -433,6 +433,8 @@ extern boolean vulture_unaware(struct monst *); /* s146 */
 extern int vulture_crit_chance(void);
 extern void vulture_crit_fx(int, int, int);
 extern void vulture_object_impact(int, int, int); /* s157 */
+extern void vulture_run_summary(int); /* s165 */
+extern void vulture_dmg_taken_add(int);
 /* s156: aimed blows */
 #define VAP_TORSO 1
 #define VAP_EYES 2

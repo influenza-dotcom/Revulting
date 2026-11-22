@@ -3364,6 +3364,42 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   The probe could not push the boulder (movement keys follow the view
   rotation; the hero walked past it), so this hook is untested.
 
+### 158-165. Shadows, less clutter, atmosphere, effect toggles, injuries, telegraphs, comparisons, run summary
+
+- **158 contact shadows** (`vshadow`): a soft radial ellipse (cached per
+  width) on the floor under every object and monster; monsters' follow the
+  slide; flyers / floaters get a smaller, fainter one.
+- **159 clutter pass**: the stealth badge shows STEALTHY / AGGRAVATING always
+  but NOISY only while a sleeper is in view; the speed badge only when not
+  normal; the SET buttons only once a set is saved or spare armour is
+  carried; the In-sight panel only when something other than your pet is
+  visible.  Badges lay out in a row that closes up (vbadge_row_*).
+- **160 atmosphere** (`vambient_draw`): stateless particles over the map -
+  dust motes in the dungeon, drips and spores in the Mines, rising embers in
+  Gehennom; fade at the map edges.
+- **161 Visual effects menu** (pause menu "Visual effects"): normal maps,
+  shadows, atmosphere, step puffs, camera jolts and rising words each switch
+  on/off; saved in effects.txt and loaded at the first map draw.
+- **162 injury feedback**: monster cards add blinded / stunned / confused /
+  slowed; stunned or confused monsters sway on the map.
+- **163 telegraphs** (`vtele_*`): a ready (not on cooldown) breath or spit
+  attacker lined up with you within 8 squares on a clear path shows a
+  pulsing dotted line in the attack's colour and a warning spark, and its
+  card says "Lined up with you - it can breathe fire!"; otherwise the card
+  says it breathes in straight lines; gaze attackers that can see you get
+  an eye ring.  Probe VULTURE_SELFTEST_TELE (red dragon 3 away): card line
+  confirmed.
+- **164 item comparison** (`vitem_compare`): armour "Instead of your X: AC n
+  better/worse" (+ magic cancellation, enchantment caveat) or "AC n better -
+  nothing worn there now"; weapons "+n damage vs your X" and a warning when
+  a two-handed weapon would take your shield off; shown on inventory cards
+  and on floor hover cards once the item's type is known.
+- **165 run summary** (`vulture_run_summary`, end.c, before the end
+  questions on a real death): how it ended (formatkiller), turns, deepest
+  level, XP level, kills, damage dealt (summed in hmon_hitmon) and taken
+  (losehp), best weapon and armour.  Probe VULTURE_SELFTEST_DIE shot the
+  window.  (The insertion first split `staticfn` off really_done - fixed.)
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

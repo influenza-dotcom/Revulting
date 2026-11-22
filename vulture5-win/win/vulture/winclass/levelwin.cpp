@@ -711,6 +711,56 @@ vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
     SDL_FreeSurface(src);
 }
 
+/*
+ * IMPLEMENTATION_LOG s158: contact shadows.  A soft dark ellipse on the
+ * floor under every monster and object grounds them (they floated before).
+ * Pre-rendered per width (radial falloff), cached; monsters' follow the
+ * slide, a hopping sprite's shadow stays on the floor and shrinks a little.
+ */
+static void
+vshadow(int cx, int cy, int w, int alpha)
+{
+    static std::map<int, SDL_Surface *> cache;
+    SDL_Surface *s;
+    SDL_Rect d;
+    int h;
+
+    if (w < 8)
+        return;
+    w = (w + 3) & ~3; /* a few sizes only */
+    if (w > 120)
+        w = 120;
+    h = w * 2 / 5;
+    if (cache.count(w)) {
+        s = cache[w];
+    } else {
+        int x, y;
+
+        s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+        if (s) {
+            SDL_LockSurface(s);
+            for (y = 0; y < h; y++) {
+                Uint32 *row = (Uint32 *) ((Uint8 *) s->pixels + y * s->pitch);
+
+                for (x = 0; x < w; x++) {
+                    double dx = (x + 0.5 - w / 2.0) / (w / 2.0), dy = (y + 0.5 - h / 2.0) / (h / 2.0);
+                    double r = dx * dx + dy * dy, a = r >= 1.0 ? 0.0 : (1.0 - r) * (1.0 - r);
+
+                    row[x] = (Uint32) (a * 255) << 24;
+                }
+            }
+            SDL_UnlockSurface(s);
+            SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+        }
+        cache[w] = s;
+    }
+    if (!s)
+        return;
+    SDL_SetSurfaceAlphaMod(s, (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
+    d.x = cx - w / 2, d.y = cy - h / 2, d.w = w, d.h = h;
+    SDL_BlitSurface(s, NULL, vulture_screen, &d);
+}
+
 /* draw a tile facing `face`, transformed */
 static void
 vtw_put_tile_x(int x, int y, int tile_id, int face, double sx, double sy,
@@ -1208,6 +1258,11 @@ static d_level vfx_lev = { -1, -1 };
 
 /* s129: big hits freeze the frame for a beat (hit-stop) and burst */
 static int vhitstop_ms = 0;
+static bool vfx_shadows = true;   /* s158: contact shadows (Effects menu) */
+static bool vfx_ambient = true;   /* s160: area atmosphere particles */
+static bool vfx_jolts = true;     /* s161: camera jolts from heavy impacts */
+static bool vfx_puffs = true;     /* s161: dust puffs from steps */
+static bool vfx_words = true;     /* s161: rising words (SNEAK ATTACK, LEVEL UP...) */
 static void vl_flash(int x, int y, float r, float g, float b, float inten, float rad,
                      Uint32 dur); /* s133 */
 
@@ -1336,6 +1391,8 @@ vstep_puff(int x, int y, int sub, bool wet)
 {
     vfx_ent e;
 
+    if (!vfx_puffs) /* s161 */
+        return;
     memset(&e, 0, sizeof e);
     e.kind = 10, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = wet ? 420 : 340;
     e.sub = sub;
@@ -1357,7 +1414,7 @@ vimp_offset(int *ox, int *oy)
     double k;
 
     *ox = *oy = 0;
-    if (vimp_amp <= 0.0 || age > 260)
+    if (!vfx_jolts || vimp_amp <= 0.0 || age > 260) /* s161 */
         return;
     /* s152: (double) first - "-age" on an unsigned age wrapped to ~4e9,
        exp() gave infinity, and the map was drawn 2^31 px away: SDL crashed */
@@ -2093,6 +2150,69 @@ vfx_click_at(int x, int y)
 }
 
 static bool vmagic_light(int tt, int x, int y, double t, double *c, double *pu);
+
+/*
+ * IMPLEMENTATION_LOG s160: atmosphere.  A few dozen particles over the map,
+ * by area: dust motes drifting and twinkling in the dungeon, drips falling
+ * (and a few spores) in the Gnomish Mines, embers rising in Gehennom.  Each
+ * particle's place is a formula of time and its index - no state, nearly
+ * free - and they fade towards the map's edges.
+ */
+static void
+vambient_draw(int ax, int ay, int w, int h)
+{
+    double t = SDL_GetTicks() / 1000.0;
+    int k, kind, n;
+
+    if (!vfx_ambient || !u.ux || u.uswallow || Underwater || w < 64 || h < 64)
+        return;
+    kind = Inhell ? 2 : In_mines(&u.uz) ? 1 : 0;
+    n = kind == 2 ? 46 : kind == 1 ? 34 : 40;
+    for (k = 0; k < n; k++) {
+        double s1 = fmod(k * 0.6180339 + 0.13, 1.0), s2 = fmod(k * 0.7548777 + 0.29, 1.0);
+        double s3 = fmod(k * 0.5698403 + 0.71, 1.0), x, y, edge;
+        int px, py, al;
+
+        if (kind == 2) { /* embers: rise, sway, flare and die */
+            double ph = fmod(t * (0.10 + 0.08 * s3) + s2, 1.0);
+
+            x = ax + w * s1 + 18 * sin(t * (0.9 + s3) + k);
+            y = ay + h * (1.0 - ph);
+            al = (int) (200 * sin(3.14159265358979 * ph) * (0.6 + 0.4 * sin(t * 7 + k)));
+            px = (int) x, py = (int) y;
+            edge = fmin(fmin(x - ax, ax + w - x), fmin(y - ay, ay + h - y)) / 80.0;
+            if (edge < 1.0)
+                al = (int) (al * (edge < 0 ? 0 : edge));
+            if (al > 6)
+                vfx_glowdot(px, py, 255, (Uint8) (110 + 60 * s3), 40, al);
+        } else if (kind == 1 && k < 20) { /* drips: fall as short streaks */
+            double ph = fmod(t * (0.45 + 0.3 * s3) + s2, 1.0);
+
+            x = ax + w * s1, y = ay + h * ph;
+            al = (int) (110 * (ph < 0.85 ? 1.0 : (1.0 - ph) / 0.15));
+            px = (int) x, py = (int) y;
+            if (al > 6) {
+                vfx_glowdot(px, py, 140, 180, 230, al);
+                vfx_glowdot(px, py - 5, 140, 180, 230, al / 2);
+                vfx_glowdot(px, py - 10, 140, 180, 230, al / 4);
+            }
+        } else { /* dust (or Mines spores): slow drift, a soft twinkle */
+            x = ax + fmod(w * s1 + t * (6 + 8 * s3) + 25 * sin(t * 0.21 + k), (double) w);
+            y = ay + fmod(h * s2 + t * (kind == 1 ? -4.0 : 3.0) * (0.5 + s3) + h, (double) h);
+            al = (int) ((kind == 1 ? 70 : 55) * (0.55 + 0.45 * sin(t * (0.8 + s3) + k * 1.7)));
+            edge = fmin(fmin(x - ax, ax + w - x), fmin(y - ay, ay + h - y)) / 90.0;
+            if (edge < 1.0)
+                al = (int) (al * (edge < 0 ? 0 : edge));
+            px = (int) x, py = (int) y;
+            if (al > 5) {
+                if (kind == 1)
+                    vfx_glowdot(px, py, 150, 210, 140, al);
+                else
+                    vfx_glowdot(px, py, 230, 220, 195, al);
+            }
+        }
+    }
+}
 
 /* s154: the sprite of a portal or magical trap throbs: drawn again on top,
    additively, in the trap's drifting colour, on the same beats as its light */
@@ -3825,6 +3945,121 @@ vspeed_words(struct monst *m)
     return b;
 }
 
+/*
+ * IMPLEMENTATION_LOG s163: telegraphs.  A hostile with a breath or spit
+ * attack that is ready (not on cooldown), lined up with you within 8
+ * squares and with a clear path shows a pulsing dotted line to you in the
+ * attack's colour, and its card says so; a gaze attacker that can see you
+ * gets an eye ring.  What the wiki teaches ("don't stand in line with a
+ * dragon"), drawn.
+ */
+static int
+vtele_attack(struct monst *m, int *adtyp)
+{
+    int k;
+
+    for (k = 0; k < NATTK; k++) {
+        const struct attack *a = &m->data->mattk[k];
+
+        if (a->aatyp == AT_BREA || a->aatyp == AT_SPIT || a->aatyp == AT_GAZE) {
+            *adtyp = a->adtyp;
+            return a->aatyp;
+        }
+    }
+    return 0;
+}
+
+/* 1 if m is ready and lined up to breathe / spit at you right now */
+static bool
+vtele_lined(struct monst *m)
+{
+    int ad, at = vtele_attack(m, &ad), dx = u.ux - m->mx, dy = u.uy - m->my;
+
+    if ((at != AT_BREA && at != AT_SPIT) || m->mpeaceful || m->mtame || m->msleeping
+        || !m->mcanmove || m->mcan || (at == AT_BREA && m->mspec_used))
+        return false;
+    if (!(dx == 0 || dy == 0 || abs(dx) == abs(dy)) || distmin(m->mx, m->my, u.ux, u.uy) > 8
+        || distmin(m->mx, m->my, u.ux, u.uy) < 2)
+        return false;
+    return clear_path(m->mx, m->my, u.ux, u.uy) != 0;
+}
+
+static void
+vtele_colour(int ad, Uint8 *r, Uint8 *g, Uint8 *b)
+{
+    switch (ad) {
+    case AD_FIRE: *r = 255, *g = 120, *b = 40; break;
+    case AD_COLD: *r = 140, *g = 200, *b = 255; break;
+    case AD_ELEC: *r = 255, *g = 245, *b = 120; break;
+    case AD_ACID: case AD_DRST: *r = 140, *g = 240, *b = 90; break;
+    case AD_SLEE: *r = 190, *g = 140, *b = 255; break;
+    case AD_DISN: *r = 255, *g = 255, *b = 255; break;
+    case AD_BLND: *r = 255, *g = 255, *b = 200; break;
+    default: *r = 255, *g = 90, *b = 90; break;
+    }
+}
+
+static const char *
+vtele_word(int ad)
+{
+    switch (ad) {
+    case AD_FIRE: return "fire";
+    case AD_COLD: return "frost";
+    case AD_ELEC: return "lightning";
+    case AD_ACID: return "acid";
+    case AD_DRST: return "poison";
+    case AD_SLEE: return "sleep gas";
+    case AD_DISN: return "disintegration";
+    case AD_MAGM: return "magic missiles";
+    case AD_BLND: return "blinding venom";
+    }
+    return "something nasty";
+}
+
+static void
+vtele_draw(int cx, int cy, int vx, int vy)
+{
+    struct monst *m;
+    double t = SDL_GetTicks() / 1000.0;
+
+    if (!u.ux || Hallucination || vulture_whatis_active)
+        return;
+    for (m = fmon; m; m = m->nmon) {
+        int ad = 0, at, sx, sy;
+        Uint8 r, g, b;
+
+        if (DEADMONSTER(m) || !canspotmon(m) || distmin(u.ux, u.uy, m->mx, m->my) > 12)
+            continue;
+        at = vtele_attack(m, &ad);
+        if (!at)
+            continue;
+        vtele_colour(ad, &r, &g, &b);
+        if (vtele_lined(m)) { /* the line it would fire along */
+            int dx = sgn(u.ux - m->mx), dy = sgn(u.uy - m->my), x = m->mx, y = m->my, k = 0;
+
+            while (!(x == u.ux && y == u.uy) && k < 10) {
+                x += dx, y += dy, k++;
+                vfx_square_screen(x, y, cx, cy, vx, vy, &sx, &sy);
+                vfx_glowdot(sx, sy - 4, r, g, b,
+                            (int) (150 + 90 * sin(t * 6.0 - k * 0.8)));
+            }
+            vfx_square_screen(m->mx, m->my, cx, cy, vx, vy, &sx, &sy);
+            vfx_glowdot(sx, sy - 70, r, g, b, (int) (200 + 55 * sin(t * 8.0))); /* a warning spark */
+            vfx_glowdot(sx, sy - 76, r, g, b, (int) (160 + 55 * sin(t * 8.0)));
+        } else if (at == AT_GAZE && !m->mpeaceful && !m->mtame && m->mcansee
+                   && !m->msleeping && couldsee(m->mx, m->my)) { /* an eye ring */
+            int k;
+
+            vfx_square_screen(m->mx, m->my, cx, cy, vx, vy, &sx, &sy);
+            for (k = 0; k < 10; k++) {
+                double a = k * 0.628 + t * 1.5;
+
+                vfx_glowdot(sx + (int) (14 * cos(a)), sy - 70 + (int) (6 * sin(a)), r, g, b, 160);
+            }
+        }
+    }
+}
+
 /* tint the squares where m can reach you before your next action */
 static void vtile_mark(int x, int y, Uint8 r, Uint8 g, Uint8 b, int alpha, int cx, int cy,
                        int vx, int vy);
@@ -4173,6 +4408,69 @@ vworn_in(int cat)
     return (struct obj *) 0;
 }
 
+/* s164: one line comparing o with what you use now ("" if nothing to say) */
+static std::string
+vitem_compare(struct obj *o)
+{
+    char b[200];
+
+    if (!o || Hallucination || !vitem_type_known(o))
+        return "";
+    if ((o->oclass == WEAPON_CLASS || is_weptool(o)) && !is_ammo(o) && !is_launcher(o)) {
+        std::string s;
+
+        if (uwep && uwep != o && (uwep->oclass == WEAPON_CLASS || is_weptool(uwep))
+            && vitem_type_known(uwep)) {
+            bool ex = true;
+            double d = vitem_avg(o, &ex) - vitem_avg(uwep, &ex);
+
+            snprintf(b, sizeof b, "%s%.1f damage vs your %s%s", d >= 0 ? "+" : "", d,
+                     simpleonames(uwep), ex ? "" : " (roughly)");
+            s = b;
+        } else if (!uwep) {
+            s = "Better than bare hands";
+        }
+        if (bimanual(o) && uarms)
+            s += s.empty() ? "Two-handed: your shield would come off"
+                           : "  -  two-handed: your shield would come off";
+        return s;
+    }
+    if (o->oclass == ARMOR_CLASS) {
+        int cat = objects[o->otyp].oc_armcat, mine = objects[o->otyp].a_ac + (o->known ? o->spe : 0);
+        struct obj *w = vworn_in(cat);
+
+        if (w == o)
+            return "";
+        if (!w) {
+            snprintf(b, sizeof b, "AC %d better - nothing worn there now%s", mine,
+                     o->known ? "" : " (enchantment unknown)");
+            return b;
+        }
+        if (vitem_type_known(w)) {
+            int theirs = objects[w->otyp].a_ac + (w->known ? w->spe : 0), d = mine - theirs;
+            int mc = objects[o->otyp].a_can - objects[w->otyp].a_can;
+
+            if (d)
+                snprintf(b, sizeof b, "Instead of your %s: AC %d %s", simpleonames(w), d > 0 ? d : -d,
+                         d > 0 ? "better" : "worse");
+            else
+                snprintf(b, sizeof b, "Same AC as your %s", simpleonames(w));
+            if (mc) {
+                size_t l = strlen(b);
+
+                snprintf(b + l, sizeof b - l, ", magic cancellation %+d", mc);
+            }
+            if (!o->known || !w->known) {
+                size_t l = strlen(b);
+
+                snprintf(b + l, sizeof b - l, " (enchantments not all known)");
+            }
+            return b;
+        }
+    }
+    return "";
+}
+
 std::string
 vulture_item_info(struct obj *o)
 {
@@ -4197,7 +4495,7 @@ vulture_item_info(struct obj *o)
             s += b;
         }
         if (bimanual(o))
-            s += "\nTwo-handed";
+            s += uarms ? "\nTwo-handed - your shield would come off" : "\nTwo-handed"; /* s164 */
         if (sk != P_NONE) {
             static const char *const lvl[] = { "Restricted", "Unskilled", "Basic",
                                                "Skilled", "Expert", "Master",
@@ -4232,15 +4530,13 @@ vulture_item_info(struct obj *o)
             snprintf(b, sizeof b, "\nMagic cancellation: %d", objects[o->otyp].a_can);
             s += b;
         }
-        if (w && w != o) {
-            if (vitem_type_known(w) && w->known)
-                snprintf(b, sizeof b, "\nWorn now: %s, AC %d", simpleonames(w),
-                         objects[w->otyp].a_ac + w->spe);
-            else
-                snprintf(b, sizeof b, "\nWorn now: %s", simpleonames(w));
-            s += b;
-        } else if (!w) {
-            s += "\nNothing worn in that slot";
+        {
+            std::string cmp = vitem_compare(o); /* s164 */
+
+            if (!cmp.empty())
+                s += "\n" + cmp;
+            else if (w && w != o)
+                s += std::string("\nWorn now: ") + simpleonames(w);
         }
     } else if (o->otyp == CORPSE && ismnum(o->corpsenm)) { /* s141 */
         std::vector<std::string> ln;
@@ -4821,6 +5117,14 @@ vcard_draw(const std::string &name)
         tags += "  -  fleeing";
     if (m->mtrapped)
         tags += "  -  trapped";
+    if (!m->mcansee) /* s162: what your blows (and spells) did to it */
+        tags += "  -  blinded";
+    if (m->mstun)
+        tags += "  -  stunned";
+    if (m->mconf)
+        tags += "  -  confused";
+    if (m->mspeed == MSLOW)
+        tags += "  -  slowed";
     if (!title.empty())
         title[0] = (char) toupper((unsigned char) title[0]);
     bar = m->mtame || m->mhp < m->mhpmax;
@@ -4870,6 +5174,22 @@ vcard_draw(const std::string &name)
             snprintf(ob, sizeof ob, "It hits you %d%%, ~%d%% of your health", ih, ip);
             odds2 = ob;
             risk = ip * ih / 100;
+            { /* s163: the telegraph, in words */
+                static char tb[96];
+                int ad2 = 0, at2 = vtele_attack(m, &ad2);
+
+                if (vtele_lined(m)) {
+                    snprintf(tb, sizeof tb, "Lined up with you - it can %s %s!",
+                             at2 == AT_SPIT ? "spit" : "breathe", vtele_word(ad2));
+                    odds3 = tb, wcol = 2;
+                } else if (at2 == AT_BREA || at2 == AT_SPIT) {
+                    snprintf(tb, sizeof tb, "It %s %s in straight lines - stay off them",
+                             at2 == AT_SPIT ? "spits" : "breathes", vtele_word(ad2));
+                    odds3 = tb, wcol = 1;
+                } else if (at2 == AT_GAZE) {
+                    odds3 = "Its gaze works whenever it can see you", wcol = 1;
+                }
+            }
         }
     }
     /* s141: the codex - hold Shift for everything about it */
@@ -5038,6 +5358,16 @@ vsq_hint(int x, int y)
                 return cs.c_str();
             }
             return "Click to walk there  -  eat it fresh or not at all";
+        }
+        { /* s164: how it compares with what you use */
+            static std::string fs;
+            struct obj *fo = vobj_at(x, y);
+            std::string cmp = fo ? vitem_compare(fo) : "";
+
+            if (!cmp.empty()) {
+                fs = cmp + "  -  click to pick it up";
+                return fs.c_str();
+            }
         }
         return "Click to walk there and pick it up";
     }
@@ -5697,6 +6027,22 @@ vselftest(void)
             vision_recalc(0);
             vl_flash(u.ux - 3, u.uy, 1.0f, 0.6f, 0.3f, 0.9f, 2.5f, 60000);
         }
+        if (getenv("VULTURE_SELFTEST_TELE")) { /* probe: s163 a dragon lined up with you */
+            int dd;
+            static const int ddx[8] = { 1, -1, 0, 0, 1, 1, -1, -1 }, ddy[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
+
+            for (dd = 0; dd < 8; dd++) {
+                int tx2 = u.ux + 3 * ddx[dd], ty2 = u.uy + 3 * ddy[dd];
+                struct monst *dm;
+
+                if (isok(tx2, ty2) && ACCESSIBLE(levl[tx2][ty2].typ) && !m_at(tx2, ty2)
+                    && clear_path(u.ux, u.uy, tx2, ty2)
+                    && (dm = makemon(&mons[PM_RED_DRAGON], tx2, ty2, NO_MM_FLAGS)) != 0) {
+                    dm->mpeaceful = 0, dm->mspec_used = 0, dm->msleeping = 0;
+                    break;
+                }
+            }
+        }
         if (getenv("VULTURE_SELFTEST") && !getenv("VULTURE_SELFTEST_NOJACKAL")) { /* probe: a hostile to hover (odds) */
             coord cc;
 
@@ -5747,6 +6093,17 @@ vselftest(void)
             FILE *f;
             struct obj *io;
 
+            { /* probe: s164 things to compare */
+                static const int extra[3] = { LEATHER_ARMOR, ELVEN_CLOAK, DAGGER };
+                int q;
+
+                for (q = 0; q < 3; q++) {
+                    struct obj *xo = mksobj(extra[q], FALSE, FALSE);
+
+                    xo->known = xo->dknown = 1, xo->cursed = 0;
+                    (void) addinv(xo);
+                }
+            }
             snprintf(fp, sizeof fp, "%s\\items.txt", dir);
             if ((f = fopen(fp, "w")) != 0) {
                 for (io = gi.invent; io; io = io->nobj)
@@ -5926,6 +6283,17 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_LEVEL")) /* probe: s155 the real level-up path */
             pluslvl(FALSE);
+        if (getenv("VULTURE_SELFTEST_DIE")) { /* probe: s165 the run summary on death */
+            extern long vulture_dmg_dealt;
+
+            vulture_dmg_dealt += 37;
+            vulture_dmg_taken_add(12);
+            u.uhp = 0;
+            svk.killer.format = KILLED_BY_AN;
+            Strcpy(svk.killer.name, "probe gremlin");
+            vpause_probe_t = SDL_GetTicks(); /* shoots the window that's up */
+            done(DIED);
+        }
         if (getenv("VULTURE_SELFTEST_AIM")) /* probe: s156 aimed blows, stage by stage */
             vaim_probe(1, dir);
         if (getenv("VULTURE_SELFTEST_BOULDER")) { /* probe: s157 push a boulder twice */
@@ -6180,6 +6548,8 @@ vfx_word(int x, int y, const char *txt, Uint8 r, Uint8 g, Uint8 b, Uint32 dur)
 {
     vfx_ent e;
 
+    if (!vfx_words) /* s161 */
+        return;
     memset(&e, 0, sizeof e);
     e.kind = 1, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = dur;
     snprintf(e.txt, sizeof e.txt, "%s", txt);
@@ -6426,6 +6796,7 @@ vulture_room_sleepers(int asleep, int woke, int stealthy)
 /* the stealth badge above the portrait: STEALTHY / NOISY / AGGRAVATING */
 static SDL_Rect vsb_rect = { 0, 0, 0, 0 };
 static SDL_Rect vspd_rect = { 0, 0, 0, 0 }; /* s144 */
+static int vbadge_row_x = 0, vbadge_row_y = 0, vbadge_row_h = 0, vbadge_row_w = 0; /* s159 */
 static double vhero_speed(void);
 
 static const char *
@@ -6469,6 +6840,8 @@ vstealth_draw(void)
     SDL_Rect rc;
 
     vsb_rect.w = 0;
+    vspd_rect.w = 0;
+    vbadge_row_w = 0; /* s159 */
     if (!stwin || !stwin->visible || !u.ux)
         return;
     lab = vstealth_state(&r, &g, &b, &why);
@@ -6478,20 +6851,33 @@ vstealth_draw(void)
     rc.x = px, rc.y = py - rc.h - 3;
     if (rc.x < 0)
         rc.x = 0;
-    vbox(rc.x, rc.y, rc.w, rc.h, 200);
+    /* s159: badges only when they say something - the row closes up */
+    vbadge_row_x = rc.x, vbadge_row_y = rc.y, vbadge_row_h = rc.h, vbadge_row_w = 0;
     {
-        SDL_Rect bar = { (Sint16) rc.x, (Sint16) (rc.y + rc.h - 2), (Uint16) rc.w, 2 };
+        bool sleepers = false;
+        struct monst *sm;
 
-        SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, r, g, b));
+        for (sm = fmon; sm && !sleepers; sm = sm->nmon)
+            if (!DEADMONSTER(sm) && canspotmon(sm) && sm->msleeping && !sm->mtame)
+                sleepers = true;
+        if (strcmp(lab, "NOISY") || sleepers) {
+            vbox(rc.x, rc.y, rc.w, rc.h, 200);
+            {
+                SDL_Rect bar = { (Sint16) rc.x, (Sint16) (rc.y + rc.h - 2), (Uint16) rc.w, 2 };
+
+                SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, r, g, b));
+            }
+            vulture_put_text_shadow(V_FONT_SMALL, lab, vulture_screen, rc.x + (rc.w - tw) / 2,
+                                    rc.y + 2, SDL_MapRGB(vulture_screen->format, r, g, b),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+            vsb_rect = rc;
+            vbadge_row_w = rc.w + 4;
+        }
     }
-    vulture_put_text_shadow(V_FONT_SMALL, lab, vulture_screen, rc.x + (rc.w - tw) / 2, rc.y + 2,
-                            SDL_MapRGB(vulture_screen->format, r, g, b),
-                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
-    vsb_rect = rc;
-    { /* s144: your speed, beside it */
+    { /* s144: your speed, beside it - s159: only when it isn't normal */
         double s = vhero_speed();
-        const char *sl;
-        Uint8 sr, sg, sb;
+        const char *sl = NULL;
+        Uint8 sr = 0, sg = 0, sb = 0;
         int tw2;
         SDL_Rect r2;
 
@@ -6499,22 +6885,23 @@ vstealth_draw(void)
             sl = "VERY FAST", sr = 120, sg = 230, sb = 255;
         else if (s >= 15)
             sl = "FAST", sr = 140, sg = 220, sb = 255;
-        else if (s >= 11.5)
-            sl = "SPEED: NORMAL", sr = 190, sg = 190, sb = 200;
-        else
+        else if (s < 11.5)
             sl = "SLOW", sr = 255, sg = 150, sb = 80;
-        tw2 = vulture_text_length(V_FONT_SMALL, sl);
-        r2.x = rc.x + rc.w + 4, r2.y = rc.y, r2.w = tw2 + 14, r2.h = rc.h;
-        vbox(r2.x, r2.y, r2.w, r2.h, 200);
-        {
-            SDL_Rect bar = { (Sint16) r2.x, (Sint16) (r2.y + r2.h - 2), (Uint16) r2.w, 2 };
+        if (sl) {
+            tw2 = vulture_text_length(V_FONT_SMALL, sl);
+            r2.x = vbadge_row_x + vbadge_row_w, r2.y = rc.y, r2.w = tw2 + 14, r2.h = rc.h;
+            vbox(r2.x, r2.y, r2.w, r2.h, 200);
+            {
+                SDL_Rect bar = { (Sint16) r2.x, (Sint16) (r2.y + r2.h - 2), (Uint16) r2.w, 2 };
 
-            SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, sr, sg, sb));
+                SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, sr, sg, sb));
+            }
+            vulture_put_text_shadow(V_FONT_SMALL, sl, vulture_screen, r2.x + 7, r2.y + 2,
+                                    SDL_MapRGB(vulture_screen->format, sr, sg, sb),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+            vspd_rect = r2;
+            vbadge_row_w += r2.w + 4;
         }
-        vulture_put_text_shadow(V_FONT_SMALL, sl, vulture_screen, r2.x + 7, r2.y + 2,
-                                SDL_MapRGB(vulture_screen->format, sr, sg, sb),
-                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
-        vspd_rect = r2;
     }
 }
 
@@ -7342,10 +7729,21 @@ vgs_draw(void)
     int i, x;
 
     memset(vgs_rect, 0, sizeof vgs_rect);
-    if (!vspd_rect.w || !u.ux)
+    if (!vbadge_row_h || !u.ux)
         return;
     vgs_load();
-    x = vspd_rect.x + vspd_rect.w + 4;
+    { /* s159: only once there's something to swap - a saved set, or spare
+         armour in the pack */
+        bool any = vgs[0].n || vgs[1].n || vgs[2].n;
+        struct obj *so;
+
+        for (so = gi.invent; so && !any; so = so->nobj)
+            if (so->oclass == ARMOR_CLASS && !so->owornmask)
+                any = true;
+        if (!any)
+            return;
+    }
+    x = vbadge_row_x + vbadge_row_w;
     for (i = 0; i < VGS_N; i++) {
         char lab[16];
         int st = vgs_state(i), tw;
@@ -7355,7 +7753,7 @@ vgs_draw(void)
 
         snprintf(lab, sizeof lab, "SET %d", i + 1);
         tw = vulture_text_length(V_FONT_SMALL, lab);
-        rc.x = x, rc.y = vspd_rect.y, rc.w = tw + 14, rc.h = vspd_rect.h;
+        rc.x = x, rc.y = vbadge_row_y, rc.w = tw + 14, rc.h = vbadge_row_h; /* s159 */
         if (going) {
             int p = 170 + (int) (85 * (0.5 + 0.5 * sin(SDL_GetTicks() / 120.0)));
 
@@ -7769,6 +8167,118 @@ vulture_auto_step(void *result)
     return true;
 }
 
+/* ---- s161: Visual effects - every new effect can be switched off ----
+   Kept per Windows user in effects.txt. */
+static void vl_relief_set(bool on);
+static bool vl_relief_get(void);
+
+static std::string
+vfxm_path(void)
+{
+    const char *la = getenv("LOCALAPPDATA");
+    char buf[700];
+
+    snprintf(buf, sizeof buf, "%s\\NetHack\\5.0\\effects.txt", la ? la : ".");
+    return buf;
+}
+
+static void
+vfxm_save(void)
+{
+    FILE *f = fopen(vfxm_path().c_str(), "w");
+
+    if (!f)
+        return;
+    fprintf(f, "normalmaps=%d\nshadows=%d\natmosphere=%d\npuffs=%d\njolts=%d\nwords=%d\n",
+            (int) vl_relief_get(), (int) vfx_shadows, (int) vfx_ambient, (int) vfx_puffs,
+            (int) vfx_jolts, (int) vfx_words);
+    fclose(f);
+}
+
+static void
+vfxm_load(void)
+{
+    static bool done = false;
+    FILE *f;
+    char ln[80];
+
+    if (done)
+        return;
+    done = true;
+    if ((f = fopen(vfxm_path().c_str(), "r")) == 0)
+        return;
+    while (fgets(ln, sizeof ln, f)) {
+        int v = 1;
+        char *eq = strchr(ln, '=');
+
+        if (!eq)
+            continue;
+        v = atoi(eq + 1);
+        *eq = 0;
+        if (!strcmp(ln, "normalmaps"))
+            vl_relief_set(v != 0);
+        else if (!strcmp(ln, "shadows"))
+            vfx_shadows = v != 0;
+        else if (!strcmp(ln, "atmosphere"))
+            vfx_ambient = v != 0;
+        else if (!strcmp(ln, "puffs"))
+            vfx_puffs = v != 0;
+        else if (!strcmp(ln, "jolts"))
+            vfx_jolts = v != 0;
+        else if (!strcmp(ln, "words"))
+            vfx_words = v != 0;
+    }
+    fclose(f);
+}
+
+static void
+vfx_menu(void)
+{
+    for (;;) {
+        int winid, n, pick;
+        anything any;
+        menu_item *sel = NULL;
+        char lb[6][80];
+        const char *nm[6] = { "Normal-mapped lighting", "Contact shadows", "Atmosphere particles",
+                              "Dust puffs when walking", "Camera jolts from heavy impacts",
+                              "Rising words (SNEAK ATTACK, LEVEL UP...)" };
+        bool on[6];
+        int k;
+
+        on[0] = vl_relief_get(), on[1] = vfx_shadows, on[2] = vfx_ambient, on[3] = vfx_puffs;
+        on[4] = vfx_jolts, on[5] = vfx_words;
+        winid = vulture_create_nhwindow(NHW_MENU);
+        vulture_start_menu(winid, MENU_BEHAVE_STANDARD);
+        for (k = 0; k < 6; k++) {
+            snprintf(lb[k], sizeof lb[k], "%s  -  %s", nm[k], on[k] ? "ON" : "off");
+            any = cg.zeroany;
+            any.a_int = k + 1;
+            vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, (char) ('a' + k), 0,
+                             on[k] ? ATR_BOLD : ATR_NONE, NO_COLOR, lb[k], MENU_ITEMFLAGS_NONE);
+        }
+        vulture_end_menu(winid, "Visual effects  -  pick one to switch it");
+        n = vulture_select_menu(winid, PICK_ONE, &sel);
+        vulture_destroy_nhwindow(winid);
+        pick = (n > 0 && sel) ? sel[0].item.a_int : 0;
+        if (sel)
+            free((genericptr_t) sel);
+        if (pick < 1 || pick > 6)
+            return;
+        switch (pick) {
+        case 1: vl_relief_set(!vl_relief_get()); break;
+        case 2: vfx_shadows = !vfx_shadows; break;
+        case 3: vfx_ambient = !vfx_ambient; break;
+        case 4: vfx_puffs = !vfx_puffs; break;
+        case 5: vfx_jolts = !vfx_jolts; break;
+        case 6: vfx_words = !vfx_words; break;
+        }
+        vfxm_save();
+        vulture_sfx("ui_click");
+        if (levwin)
+            levwin->force_redraw();
+    }
+}
+
 /* ---- s145: the pause menu (Esc during play) ----
    Nothing moves while it is open: turns only pass on commands, and the
    real-time clock never ticks inside a menu.  Game commands are queued so
@@ -7788,6 +8298,7 @@ vpause_menu(void *result)
                   { 2, 'o', "Game options" },
                   { 3, 'i', "Interface options" },
                   { 4, 't', NULL },
+                  { 8, 'v', "Visual effects" },
                   { 5, 'h', "Help and keys" },
                   { 6, 's', "Save and quit" },
                   { 7, 'q', "Quit without saving" } };
@@ -7823,6 +8334,9 @@ vpause_menu(void *result)
         return false;
     case 4:
         vrt_cycle();
+        return false;
+    case 8: /* s161 */
+        vfx_menu();
         return false;
     case 5:
         cmdq_add_ec(CQ_CANNED, dohelp);
@@ -7938,11 +8452,18 @@ vmp_draw(int ax, int ay, int w, int h)
     vmp.n = 0;
     if (!u.ux || Hallucination || vulture_whatis_active)
         return;
-    for (m = fmon; m && n < 64; m = m->nmon)
-        if (!DEADMONSTER(m) && canspotmon(m))
-            list[n++] = m;
-    if (!n)
-        return;
+    {
+        bool others = false; /* s159: just your pet in view - no panel */
+
+        for (m = fmon; m && n < 64; m = m->nmon)
+            if (!DEADMONSTER(m) && canspotmon(m)) {
+                list[n++] = m;
+                if (!m->mtame)
+                    others = true;
+            }
+        if (!n || !others)
+            return;
+    }
     /* hostiles nearest first, then peacefuls, then pets */
     for (i = 1; i < n; i++)
         for (j = i; j > 0; j--) {
@@ -8371,6 +8892,12 @@ static void
 vl_relief_set(bool on)
 {
     vl_relief_on = vl_relief_on2 = on;
+}
+
+static bool
+vl_relief_get(void) /* s161 */
+{
+    return vl_relief_on;
 }
 
 static void
@@ -9008,6 +9535,7 @@ levelwin::draw()
     vtip_tick();    /* s142 */
     vglint_tick();  /* s136 */
     vamb_tick();    /* s136 */
+    vfxm_load(); /* s161: saved effect choices */
     vimp_tick(); /* s151 */
     {
         int jx, jy;
@@ -9229,6 +9757,12 @@ levelwin::draw()
                 vmagic_sprite(j, i, x, y, map_data->get_glyph(MAP_TRAP, j, i)); /* s154 */
 
                 /* 4. Objects (s83: falling while a drop plays) */
+                if (map_obj != V_TILE_NONE && vfx_shadows) { /* s158: grounded */
+                    vulture_tile *ot = vulture_get_tile(map_obj);
+
+                    if (ot && ot->graphic)
+                        vshadow(x, y + 2, ot->graphic->w * 3 / 4, 90);
+                }
                 vanim_draw_object(j, i, x, y, map_obj);
 
                 /* 5. Monsters */
@@ -9238,6 +9772,17 @@ levelwin::draw()
                         ty = y + vtw_oy[i][j] + vbob_offset(j, i); /* s82 */
                     double xs = 1.0, ys = 1.0, deg = 0.0;
                     bool red = false;
+
+                    if (vfx_shadows && cur_tile->graphic) { /* s158: a shadow on the floor */
+                        struct monst *sm = m_at(j, i);
+                        int sw = cur_tile->graphic->w * 3 / 5;
+                        bool up = sm && (is_flyer(sm->data) || is_floater(sm->data));
+
+                        if (sw < 18)
+                            sw = 18;
+                        vshadow(tx, ty - vbob_offset(j, i) + 3, up ? sw * 3 / 4 : sw,
+                                up ? 90 : 150);
+                    }
 
                     /* s79: squash & stretch + lean while stepping */
                     if (vtw_mv[i][j]) {
@@ -9260,6 +9805,16 @@ levelwin::draw()
                         deg = vtw_face[i][j] * 5.0 * a * sin(3.14159265358979 * te);
                     } else {
                         vfx_breathe(j, i, &xs, &ys); /* s85 */
+                        { /* s162: stunned or confused, it sways */
+                            struct monst *wm2 = m_at(j, i);
+
+                            if (wm2 && (wm2->mstun || wm2->mconf) && !wm2->msleeping) {
+                                double tt2 = SDL_GetTicks() / 1000.0;
+
+                                deg += (wm2->mstun ? 9.0 : 6.0) * sin(tt2 * (wm2->mstun ? 5.0 : 3.3) + j);
+                                tx += (int) (2.0 * sin(tt2 * 2.7 + i));
+                            }
+                        }
                     }
                     vanim_xform(j, i, &tx, &ty, &xs, &ys, &deg, &red);
                     vtw_put_tile_x(tx, ty, map_mon, vtw_face[i][j], xs, ys,
@@ -9317,10 +9872,12 @@ levelwin::draw()
     vw_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
     Uint32 vpf_d = SDL_GetTicks(); /* probe */
+    vambient_draw(this->abs_x, this->abs_y, this->w, this->h); /* s160 */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
     vpath_draw(map_centre_x, map_centre_y, view_x, view_y); /* s125 */
     vmp_mark(map_centre_x, map_centre_y, view_x, view_y);   /* s130 */
     vthreat_draw(map_centre_x, map_centre_y, view_x, view_y); /* s144 */
+    vtele_draw(map_centre_x, map_centre_y, view_x, view_y);   /* s163 */
     vaim_draw(map_centre_x, map_centre_y, view_x, view_y);  /* s125 */
     vblast_draw(map_centre_x, map_centre_y, view_x, view_y); /* s138 */
     vzoom_apply(this->abs_x, this->abs_y, this->w, this->h); /* s121 */

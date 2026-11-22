@@ -4287,9 +4287,19 @@ showdamage(int dmg)
     pline("[HP %i, %i left]", -dmg, Upolyd ? u.mh : u.uhp);
 }
 
+long vulture_dmg_taken = 0L; /* s165: for the run summary */
+
+void
+vulture_dmg_taken_add(int n) /* s165 */
+{
+    if (n > 0)
+        vulture_dmg_taken += n;
+}
+
 void
 losehp(int n, const char *knam, schar k_format)
 {
+    vulture_dmg_taken_add(n); /* s165 */
 #if 0   /* code below is prepared to handle negative 'loss' so don't add this
          * until we've verified that no callers intentionally rely on that */
     if (n <= 0) {

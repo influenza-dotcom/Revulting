@@ -33,6 +33,7 @@ long vulture_sneak_move = -1;
 unsigned vulture_ambush_mid = 0; /* s146 */
 /* s156: an aimed blow (Fallout's called shots), set by the interface for the
    very next attack on that monster this turn */
+long vulture_dmg_dealt = 0L; /* s165 */
 int vulture_aim_part = 0;
 unsigned vulture_aim_mid = 0;
 long vulture_aim_moves = -1;
@@ -2001,6 +2002,11 @@ hmon_hitmon(
         vulture_crit_apply(&hmd.dmg, mon, thrown); /* s146 */
     if (hmd.dmg > 0 && hmd.hand_to_hand && vaim_now(mon))
         vulture_aim_effect(&hmd.dmg, mon); /* s156 */
+    if (hmd.dmg > 0) {
+        extern long vulture_dmg_dealt;
+
+        vulture_dmg_dealt += hmd.dmg; /* s165: for the run summary */
+    }
 
     if (hmd.ispoisoned)
         hmon_hitmon_poison(&hmd, mon, obj);

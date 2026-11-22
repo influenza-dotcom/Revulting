@@ -1158,6 +1158,66 @@ done(int how)
     /*NOTREACHED*/
 }
 
+/*
+ * Vulture s165: the run in one screen, before the usual end questions -
+ * how it ended, how long and how deep, what you fought with, the damage
+ * either way and the best of your gear.
+ */
+void
+vulture_run_summary(int how)
+{
+    extern long vulture_dmg_dealt, vulture_dmg_taken;
+    winid w;
+    char buf[BUFSZ], kb[BUFSZ];
+    struct obj *o, *bestw = 0, *besta = 0;
+    long bw = -1, ba = -1;
+
+    for (o = gi.invent; o; o = o->nobj) {
+        if (o->oclass == WEAPON_CLASS) {
+            long v = (long) (objects[o->otyp].oc_wsdam + objects[o->otyp].oc_wldam)
+                     + 2L * (o->known ? o->spe : 0);
+
+            if (v > bw)
+                bw = v, bestw = o;
+        } else if (o->oclass == ARMOR_CLASS) {
+            long v = (long) objects[o->otyp].a_ac + (o->known ? o->spe : 0);
+
+            if (v > ba)
+                ba = v, besta = o;
+        }
+    }
+    w = create_nhwindow(NHW_TEXT);
+    putstr(w, ATR_BOLD, "        The run");
+    putstr(w, 0, "");
+    formatkiller(kb, sizeof kb, how, TRUE);
+    Sprintf(buf, "  How it ended:     %s", kb);
+    putstr(w, 0, buf);
+    Sprintf(buf, "  Turns survived:   %ld", svm.moves);
+    putstr(w, 0, buf);
+    Sprintf(buf, "  Deepest level:    %d   (died on %d)", (int) deepest_lev_reached(FALSE),
+            (int) depth(&u.uz));
+    putstr(w, 0, buf);
+    Sprintf(buf, "  Experience level: %d", u.ulevel);
+    putstr(w, 0, buf);
+    Sprintf(buf, "  Monsters you killed: %ld", u.uconduct.killer);
+    putstr(w, 0, buf);
+    Sprintf(buf, "  Damage you dealt:    %ld", vulture_dmg_dealt);
+    putstr(w, 0, buf);
+    Sprintf(buf, "  Damage you took:     %ld", vulture_dmg_taken);
+    putstr(w, 0, buf);
+    if (bestw) {
+        Sprintf(buf, "  Best weapon:  %s", doname(bestw));
+        putstr(w, 0, buf);
+    }
+    if (besta) {
+        Sprintf(buf, "  Best armour:  %s", doname(besta));
+        putstr(w, 0, buf);
+    }
+    putstr(w, 0, "");
+    display_nhwindow(w, TRUE);
+    destroy_nhwindow(w);
+}
+
 /* separated from done() in order to specify the __noreturn__ attribute */
 staticfn void
 really_done(int how)
@@ -1228,6 +1288,8 @@ really_done(int how)
 
     if (have_windows)
         wait_synch(); /* flush screen output */
+    if (have_windows && how < PANICKED && !done_stopprint)
+        vulture_run_summary(how); /* s165 */
 #ifndef NO_SIGNAL
     (void) signal(SIGINT, (SIG_RET_TYPE) done_intr);
 #if defined(UNIX) || defined(VMS) || defined(__EMX__)
