@@ -360,6 +360,11 @@ pluslvl(
             Sprintf(tb, "Experience level %d", u.ulevel);
             vulture_toast("LEVEL UP", tb);
             vulture_bark(VB_LEVELUP); /* s113 */
+            {
+                extern void vulture_levelup_fx(void);
+
+                vulture_levelup_fx(); /* s155: a burst of light around you */
+            }
         }
         adjabil(u.ulevel - 1, u.ulevel); /* give new intrinsics */
         SoundAchievement(0, sa2_xplevelup, 0);

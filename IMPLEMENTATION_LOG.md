@@ -3301,6 +3301,30 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   application ~8 ms vs SDL's ~6, so a whole frame stays ~17 ms.  Beyond
   this needs GPU rendering.
 
+### 154-155. Step puffs, throbbing portals, blows land where you are, level-up burst
+
+- **Movement particles** (`vstep_puff`): every step - yours and every seen
+  monster's, not flyers / floaters / ghosts, not while you levitate, fly or
+  ride - kicks up a small puff (vfx kind 10) on the square it left: dust,
+  or a blue splash when either square is water.  Probe WALK: 10 puffs for
+  the hero and the kitten.
+- **The portal sprite itself pulses** (`vmagic_sprite`): magic portals and
+  magical traps are drawn a second time on top with SDL additive blending,
+  colour-modulated to the trap's drifting colour and alpha-modulated on
+  the same three-beat-plus-surge pulse as their light.
+- **Enemies hit the square you were walking into**: you and a monster can
+  both act in one turn before the screen draws your step, so the lunge
+  aimed at your new square while you were drawn on the old one.
+  `vulture_anim_attack` now draws once (which notices the pending moves)
+  and plays them out first.  (A block-scope extern for vulture_tween_run
+  inside the extern "C" function got C linkage and broke the link - it is
+  declared at file scope now.)
+- **Level up** (`vulture_levelup_fx`, from pluslvl next to the toast): three
+  golden rings ripple out from your feet, a soft beam of light rises from
+  you, 40 motes spiral up with bright cores, the area flashes warm, LEVEL
+  UP! floats up, and the "gain" sound; it follows you if you move.  Probe
+  VULTURE_SELFTEST_LEVEL calls the real pluslvl().
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

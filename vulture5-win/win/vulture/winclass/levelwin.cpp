@@ -305,9 +305,11 @@ vpt_click(void)
  * sprite's own facing is detected once from where its top (head/ears)
  * sits; sprites flip to match travel.  Front-facing art counts as right.
  */
+void vulture_tween_run(void); /* s154: file scope, C++ linkage like its callers */
 static int vheft_mon(const struct permonst *p); /* s151 */
 static int vheft_obj(const struct obj *o);
 static void vimpact(int x, int y, int heft, int delay_ms);
+static void vstep_puff(int x, int y, int sub, bool wet); /* s154 */
 
 struct vtw_ent {
     int x, y;
@@ -403,6 +405,33 @@ vtw_prepare(int vx, int vy)
     if (moved && !vtw_animating && !vtw_pending) {
         vtw_pending = true;
         vtw_t = 0.0;
+        /* s154: every step kicks up a little puff where it left from -
+           dust, or a splash in water; nothing for flyers and ghosts */
+        for (it = vtw_cur.begin(); it != vtw_cur.end(); ++it) {
+            struct monst *pm3 = 0;
+            int ox2, oy2;
+
+            sn = vtw_snap.find(it->first);
+            if (sn == vtw_snap.end() || !snap_ok
+                || (sn->second.x == it->second.x && sn->second.y == it->second.y)
+                || abs(sn->second.x - it->second.x) > 1 || abs(sn->second.y - it->second.y) > 1)
+                continue;
+            ox2 = sn->second.x, oy2 = sn->second.y;
+            if (it->first == VTW_HERO) {
+                if (Levitation || Flying || u.usteed)
+                    continue;
+            } else if (!(pm3 = m_at(it->second.x, it->second.y)) || !canspotmon(pm3)
+                       || is_floater(pm3->data) || is_flyer(pm3->data)
+                       || noncorporeal(pm3->data)) {
+                continue;
+            }
+            if (isok(ox2, oy2) && cansee(ox2, oy2)) {
+                int sub = pm3 ? (vheft_mon(pm3->data) > 2 ? 2 : vheft_mon(pm3->data)) : 1;
+
+                vstep_puff(ox2, oy2, sub < 1 ? 1 : sub,
+                           is_pool(ox2, oy2) || is_pool(it->second.x, it->second.y));
+            }
+        }
         /* s151: the heavy ones' feet come down at the end of the step */
         for (it = vtw_cur.begin(); it != vtw_cur.end(); ++it) {
             struct monst *hm;
@@ -809,6 +838,18 @@ vulture_anim_attack(int ax, int ay, int tx, int ty)
         return;
     if (abs(ax - tx) > 1 || abs(ay - ty) > 1 || (ax == tx && ay == ty))
         return;
+    { /* s154: finish any step first.  You and the monster can move in the
+         same turn before the screen catches up; the lunge then struck at
+         the square you were walking into while you were still drawn on the
+         old one.  Draw once (which notices the pending moves) and play them
+         out, so the blow lands where you visibly are. */
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        if (vtw_pending)
+            vulture_tween_run();
+        if (vanim_kind || vtw_animating)
+            return;
+    }
     vanim_ax = ax, vanim_ay = ay, vanim_tx = tx, vanim_ty = ty;
     { /* s132: a swing you can hear, three variants in turn */
         static int sw = 0;
@@ -1269,6 +1310,25 @@ vimp_tick(void)
         }
     }
     vimp_queue.resize(n);
+}
+
+/* s154: the puff a step kicks up behind it */
+static void
+vstep_puff(int x, int y, int sub, bool wet)
+{
+    vfx_ent e;
+
+    memset(&e, 0, sizeof e);
+    e.kind = 10, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = wet ? 420 : 340;
+    e.sub = sub;
+    if (getenv("VULTURE_SELFTEST")) /* probe: s154 */
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "puff at %d,%d size %d%s\n", x, y, sub,
+                          wet ? " (splash)" : "");
+    if (wet)
+        e.r = 130, e.g = 180, e.b = 235;
+    else
+        e.r = 150, e.g = 136, e.b = 116;
+    vfx_list.push_back(e);
 }
 
 /* this frame's camera jolt: a quick, damped vertical bounce */
@@ -2016,6 +2076,41 @@ vfx_click_at(int x, int y)
 
 static bool vmagic_light(int tt, int x, int y, double t, double *c, double *pu);
 
+/* s154: the sprite of a portal or magical trap throbs: drawn again on top,
+   additively, in the trap's drifting colour, on the same beats as its light */
+static void
+vmagic_sprite(int j, int i, int x, int y, int tile_id)
+{
+    vulture_tile *tile;
+    double t = SDL_GetTicks() / 1000.0, c[3], pu;
+    int g, tt, al;
+
+    if (tile_id == V_TILE_NONE || tile_id < 0 || Hallucination)
+        return;
+    g = glyph_at(j, i);
+    if (!glyph_is_trap(g))
+        return;
+    tt = glyph_to_trap(g);
+    if (!vmagic_light(tt, j, i, t, c, &pu) || !(tile = vulture_get_tile(tile_id)) || !tile->graphic)
+        return;
+    {
+        double s1 = sin(t * 2.1 + j * 1.3), s2 = sin(t * 5.3 + i * 1.7), sg = sin(t * 0.83 + j * 7.1 + i * 3.3);
+        double surge = sg > 0 ? pow(sg, 14.0) : 0.0;
+        double k = 0.5 + 0.30 * s1 + 0.15 * s2 + 0.6 * surge;
+
+        al = (int) ((tt == MAGIC_PORTAL ? 150 : 110) * (k < 0 ? 0 : k));
+    }
+    if (al <= 4)
+        return;
+    SDL_SetSurfaceBlendMode(tile->graphic, SDL_BLENDMODE_ADD);
+    SDL_SetSurfaceColorMod(tile->graphic, (Uint8) (255 * c[0]), (Uint8) (255 * c[1]), (Uint8) (255 * c[2]));
+    SDL_SetSurfaceAlphaMod(tile->graphic, (Uint8) (al > 255 ? 255 : al));
+    vulture_put_img(x + tile->xmod, y + tile->ymod, tile->graphic);
+    SDL_SetSurfaceAlphaMod(tile->graphic, 255);
+    SDL_SetSurfaceColorMod(tile->graphic, 255, 255, 255);
+    SDL_SetSurfaceBlendMode(tile->graphic, SDL_BLENDMODE_BLEND);
+}
+
 /* s149: motes of magical energy over the magical traps and portals you can
    see - rising and swaying over traps, circling a portal */
 static void
@@ -2161,6 +2256,46 @@ vfx_draw(int cx, int cy, int vx, int vy)
         vfx_ent &e = vfx_list[i];
         double age = (double) (now - e.t0) / e.dur, ts = (now - e.t0) / 1000.0;
 
+        if (age < 1.0 && e.kind == 11) { /* s155: level up, around you */
+            int k3;
+
+            vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &sx, &sy);
+            for (k3 = 0; k3 < 3; k3++) { /* rings rippling out from the feet */
+                double a3 = (age - 0.12 * k3) / 0.55;
+
+                if (a3 > 0.0 && a3 < 1.0)
+                    vfx_ring(sx, sy, 10 + 46 * a3, e, (int) (230 * (1.0 - a3)));
+            }
+            { /* a soft beam of light rising from you, swelling then fading */
+                double bl = age < 0.15 ? age / 0.15 : age > 0.6 ? (1.0 - age) / 0.4 : 1.0;
+                int yy;
+
+                for (yy = 0; yy < 130; yy += 3) {
+                    double hf = 1.0 - yy / 130.0;
+                    int al = (int) (150 * bl * hf * hf);
+
+                    if (al <= 4)
+                        continue;
+                    vfx_glowdot(sx - 5, sy - 8 - yy, 255, 225, 140, al);
+                    vfx_glowdot(sx + 5, sy - 8 - yy, 255, 225, 140, al);
+                    vfx_glowdot(sx, sy - 10 - yy, 255, 240, 190, al);
+                }
+            }
+            for (k3 = 0; k3 < 40; k3++) { /* a spiral of motes climbing */
+                double ph = age * 1.6 - k3 * 0.025;
+                double ang = ph * 9.0 + k3 * 0.9, rr = 26 - 12 * (ph > 1 ? 1 : ph);
+                int px3, py3, al3;
+
+                if (ph <= 0.0 || ph >= 1.0)
+                    continue;
+                px3 = sx + (int) (rr * cos(ang));
+                py3 = sy - 6 + (int) (rr * 0.45 * sin(ang)) - (int) (110 * ph);
+                al3 = (int) (255 * sin(3.14159265358979 * ph) * (1.0 - age * 0.4));
+                vfx_glowdot(px3, py3, 255, (Uint8) (205 + 40 * (k3 & 1)), 120, al3);
+                vfx_glowdot(px3 + 1, py3 - 1, 255, 250, 210, al3 / 2); /* a bright core */
+            }
+            continue;
+        }
         if (age < 1.0 && e.kind == 10) { /* s151: a dust puff along the floor */
             int nd = 6 + 2 * e.sub, k2;
             double ease = 1.0 - (1.0 - age) * (1.0 - age), rr = (10 + 3.2 * e.sub) * ease;
@@ -5770,6 +5905,8 @@ vselftest(void)
                 }
             }
         }
+        if (getenv("VULTURE_SELFTEST_LEVEL")) /* probe: s155 the real level-up path */
+            pluslvl(FALSE);
         if (getenv("VULTURE_SELFTEST_WALK")) { /* probe: s147 a held key, then single steps */
             static const SDL_Keycode ks[] = { SDLK_h, SDLK_l, SDLK_j, SDLK_k };
             int q;
@@ -5998,6 +6135,25 @@ vfx_word(int x, int y, const char *txt, Uint8 r, Uint8 g, Uint8 b, Uint32 dur)
             e.sub = 3;
     }
     vfx_list.push_back(e);
+}
+
+/* s155: levelling up - golden rings ripple out from your feet, a spiral of
+   motes rises around you, the area flashes warm and LEVEL UP! floats up.
+   Drawn around wherever you are (vfx kind 11), so it follows you. */
+extern "C" void
+vulture_levelup_fx(void)
+{
+    vfx_ent e;
+
+    if (!levwin || !u.ux)
+        return;
+    memset(&e, 0, sizeof e);
+    e.kind = 11, e.x = u.ux, e.y = u.uy, e.t0 = SDL_GetTicks(), e.dur = 1900;
+    e.r = 255, e.g = 215, e.b = 110;
+    vfx_list.push_back(e);
+    vfx_word(u.ux, u.uy, "LEVEL UP!", 255, 225, 120, 1700);
+    vl_flash(u.ux, u.uy, 1.0f, 0.85f, 0.45f, 1.1f, 4.5f, 900);
+    vulture_sfx("gain");
 }
 
 /* a sleeping or helpless monster died to your attack the same turn */
@@ -8894,6 +9050,7 @@ levelwin::draw()
 
                 /* 3. Traps */
                 vulture_put_tile(x, y, map_data->get_glyph(MAP_TRAP, j, i));
+                vmagic_sprite(j, i, x, y, map_data->get_glyph(MAP_TRAP, j, i)); /* s154 */
 
                 /* 4. Objects (s83: falling while a drop plays) */
                 vanim_draw_object(j, i, x, y, map_obj);
