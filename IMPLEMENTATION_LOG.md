@@ -3258,6 +3258,32 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   Probe VULTURE_SELFTEST_HEAVY: a mastodon's death fired a heft-5 impact
   with a 3 px jolt.
 
+### 152. Crash fix (impact jolt); lighting you can see; lighter light layer
+
+- **The crashes** (3 in the player's Event Log, all SDL2.dll+0xdec20, an
+  access violation in a blitter): reproduced at 1920x1080 by the HEAVY and
+  WALK probes; a symbols build (LDFLAGS -s dropped temporarily) under gdb
+  showed `vulture_put_tile_shaded(x=-2147483640, y=2147483638)`.  Cause:
+  `vimp_offset` computed `exp(-age / 70.0)` with an UNSIGNED age, so -age
+  wrapped to ~4e9, exp() = inf, and the camera jolt sent the whole map 2^31
+  px away whenever something heavy landed near you (a jackal corpse is
+  enough).  Fixed with a (double) cast plus a +-40 px guard.  All crash
+  cases and the probe suite now survive at 1920x1080.
+- **Lighting visible again**: lit rooms 0.93 -> 0.80 (lights had nothing to
+  brighten); the hero carries a warm, softly flickering pool (radius 3.6);
+  normal-map relief halfway back up (1.5x gain, clamp +-80, glint cap 32,
+  key 0.36).
+- **Lighter light layer**: blended only where it covers the map
+  (`vl_blit_visible`; the slide margins were blended too), margin 96 -> 64,
+  rebuilds every 120 ms (was 90) / 50 ms with magic (was 33), normal buffer
+  cleared only over the map.  Measured at 1920x1080 in the probe: frame
+  ~17 ms median (tiles 9, light 8), idle frame ~26 ms - the light blend
+  itself (~6 ms, SDL software blending of a full-screen layer) is the
+  remaining cost; not solved here.
+- Probe timing: per-stage frame log and idle-frame log under
+  VULTURE_SELFTEST.  The probe profile now uses the player's vulture.conf
+  (1920x1080, wall_opacity 0.3).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

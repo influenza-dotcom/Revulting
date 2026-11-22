@@ -1281,7 +1281,11 @@ vimp_offset(int *ox, int *oy)
     *ox = *oy = 0;
     if (vimp_amp <= 0.0 || age > 260)
         return;
-    k = vimp_amp * exp(-age / 70.0);
+    /* s152: (double) first - "-age" on an unsigned age wrapped to ~4e9,
+       exp() gave infinity, and the map was drawn 2^31 px away: SDL crashed */
+    k = vimp_amp * exp(-(double) age / 70.0);
+    if (!(k > -40.0 && k < 40.0))
+        k = 0.0; /* belt and braces: never a wild offset */
     *oy = (int) (k * sin(age / 260.0 * 3.14159265358979 * 5.0));
     *ox = (int) (0.35 * k * sin(age / 260.0 * 3.14159265358979 * 7.0 + 1.0));
 }
@@ -2924,6 +2928,8 @@ vulture_idle_bob(bool at_map)
     /* keep idle drawing to about a third of the time at most */
     took = SDL_GetTicks() - now;
     vidle_interval = took * 3 > 33 ? (took * 3 > 400 ? 400 : took * 3) : 33; /* s147 */
+    if (getenv("VULTURE_SELFTEST")) /* probe: s152 whole idle frame */
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "idle frame %u ms\n", (unsigned) took);
 }
 
 /* play the in-between frames of a pending tween, then any queued death
@@ -7747,7 +7753,13 @@ vnm_begin(void)
             return;
         SDL_SetSurfaceBlendMode(vulture_normal_buf, SDL_BLENDMODE_NONE);
     }
-    SDL_FillRect(vulture_normal_buf, NULL, 0);
+    if (levwin) { /* s152: only the map's part */
+        SDL_Rect mr = { (Sint16) levwin->abs_x, (Sint16) levwin->abs_y, (Uint16) levwin->w,
+                        (Uint16) levwin->h };
+
+        SDL_FillRect(vulture_normal_buf, &mr, 0);
+    } else
+        SDL_FillRect(vulture_normal_buf, NULL, 0);
     vulture_normal_capture = true;
     vnm_ok = true;
 }
@@ -7845,7 +7857,7 @@ vl_compute(mapdata *md)
             if (!levl[x][y].seenv)
                 base = 0.0f;
             else if (cansee(x, y))
-                base = levl[x][y].lit ? 0.93f : 0.38f;
+                base = levl[x][y].lit ? 0.80f : 0.38f; /* s152: 0.93 left lights nothing to do */
             else
                 base = 0.50f; /* remembered, out of sight */
             if (base > 0.0f && !IS_STWALL(levl[x][y].typ)) { /* s143: contact shadows */
@@ -7963,7 +7975,12 @@ vl_compute(mapdata *md)
         }
     }
     if (u.ux)
+    { /* s152: you carry a warm pool of light - surroundings catch it as you move */
+        double fl = 0.94 + 0.04 * sin(t * 7.0) + 0.02 * sin(t * 17.0);
+
         vl_add(u.ux, u.uy, 1.6, 0.30, 1.0, 0.95, 0.85); /* you can always see yourself */
+        vl_add(u.ux, u.uy, 3.6, 0.32 * fl, 1.0, 0.82, 0.58);
+    }
     for (i = 0; i < vl_flashes.size(); i++) {
         vl_flash_t &f = vl_flashes[i];
         double age = (double) (now - f.t0) / f.dur;
@@ -8071,22 +8088,22 @@ vl_nmap(int x0, int y0, int x1, int y1, int gx0, int gy0, int FS)
                 ny = (int) ((pn >> 8) & 255) - 128;
                 nz = (int) (pn & 255) - 128;
                 /* lit where the normal faces the light: n . L */
-                d = (nx * dx + ny * dy) >> 8;
+                d = ((nx * dx + ny * dy) * 3) >> 9; /* s152: 1.5x */
                 /* crevices, near a real light: faces tilted away take a
-                   little less of it (s149b: a third of before) */
-                d -= ((127 - nz) * lv) >> 10;
+                   little less of it */
+                d -= ((127 - nz) * lv) >> 9;
                 /* a soft glint where a nearby light hits a face squarely */
                 if (d > 30 && lv > 64)
                     sp = ((d - 30) * (d - 30) * lv) >> 16;
                 d = d * a >> 8;
                 if (!d && !sp)
                     continue;
-                if (d > 60)
-                    d = 60;
-                else if (d < -60)
-                    d = -60;
-                if (sp > 24)
-                    sp = 24;
+                if (d > 80)
+                    d = 80;
+                else if (d < -80)
+                    d = -80;
+                if (sp > 32)
+                    sp = 32;
                 p = row[x], m = 256 + d;
                 r = ((int) (((p >> rs) & 255) * m) >> 8) + sp;
                 g = ((int) (((p >> gs) & 255) * m) >> 8) + sp;
@@ -8277,7 +8294,7 @@ vl_relief_dirs(const std::vector<float> &Lg, int lw, int lh)
                 continue;
             if (L < 1.0f)
                 st *= 0.4f + 0.6f * L;
-            key = 0.30f * (L > 1.0f ? 1.0f : L); /* s149b: 0.45 was too much */
+            key = 0.36f * (L > 1.0f ? 1.0f : L); /* s149b: 0.45 too much; s152: 0.30 too little */
             {
                 float ux = mag > 1e-5f ? gx / mag : 0, uy = mag > 1e-5f ? gy / mag : 0;
                 float lx = ux * st - 0.6f * key, ly = uy * st - 0.8f * key;
@@ -8294,6 +8311,23 @@ vl_relief_dirs(const std::vector<float> &Lg, int lw, int lh)
         }
 }
 
+/* s152: blend only the part of the (margin-padded) light layer that covers
+   the map - the margins are there for sliding, not for drawing */
+static void
+vl_blit_visible(SDL_Surface *layer, int dx, int dy, int mx, int my, int mw, int mh)
+{
+    SDL_Rect src, dst;
+    int x0 = dx > mx ? dx : mx, y0 = dy > my ? dy : my;
+    int x1 = dx + layer->w < mx + mw ? dx + layer->w : mx + mw;
+    int y1 = dy + layer->h < my + mh ? dy + layer->h : my + mh;
+
+    if (x1 <= x0 || y1 <= y0)
+        return;
+    src.x = x0 - dx, src.y = y0 - dy, src.w = x1 - x0, src.h = y1 - y0;
+    dst.x = x0, dst.y = y0, dst.w = src.w, dst.h = src.h;
+    SDL_BlitSurface(layer, &src, vulture_screen, &dst);
+}
+
 static void
 vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, int h)
 {
@@ -8304,7 +8338,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     /* s147: 8 px cells (was 4) - pools are bilinear across 56 px squares, so
        it looks the same at a quarter of the sampling */
     int FS = 8 * (vulture_render_scale > 0 ? vulture_render_scale : 1);
-    int M = 96; /* margin: a cached layer can slide with the camera */
+    int M = 64; /* margin: a cached layer can slide with the camera (s152: was 96) */
     int lw, lh, i, j;
     Uint32 now = SDL_GetTicks();
     SDL_Rect src, dst;
@@ -8319,10 +8353,10 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     if (vl_full && c_vx == vx && c_vy == vy && c_ux == u.ux && c_uy == u.uy
         && c_moves == svm.moves && c_rot == vulture_view_rot && c_w == w && c_h == h
         && abs(cx - c_cx) < M && abs(cy - c_cy) < M
-        && (vtw_animating || now - c_when < (vl_magic ? 33u : 90u)) && vl_flashes.empty()) {
+        && (vtw_animating || now - c_when < (vl_magic ? 50u : 120u)) && vl_flashes.empty()) {
         dst.x = ax - M + (cx - c_cx), dst.y = ay - M + (cy - c_cy);
         vl_relief(max0, may0, mw0, mh0, c_gx0 + (cx - c_cx), c_gy0 + (cy - c_cy), FS);
-        SDL_BlitSurface(vl_full, NULL, vulture_screen, &dst);
+        vl_blit_visible(vl_full, dst.x, dst.y, max0, may0, mw0, mh0); /* s152 */
         return;
     }
     c_cx = cx, c_cy = cy, c_vx = vx, c_vy = vy, c_ux = u.ux, c_uy = u.uy;
@@ -8401,8 +8435,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     c_gx0 = ax - FS / 2, c_gy0 = ay - FS / 2; /* cell i covers ax+i*FS +- FS/2 */
     vl_relief(max0, may0, mw0, mh0, c_gx0, c_gy0, FS);
     Uint32 vt_r = SDL_GetTicks(); /* probe: s147 */
-    dst.x = ax, dst.y = ay;
-    SDL_BlitSurface(vl_full, NULL, vulture_screen, &dst);
+    vl_blit_visible(vl_full, ax, ay, max0, may0, mw0, mh0); /* s152 */
     if (getenv("VULTURE_SELFTEST")) /* probe: s147 cost of a fresh lighting layer */
         vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
                           "light: fresh %u ms = compute %u grid %u stretch %u relief %u blit %u\n",
@@ -8621,6 +8654,7 @@ levelwin::draw()
                 + V_MAP_XMOD * (map_centre_y + 50) + V_MAP_XMOD * V_MAP_YMOD)
                / (2 * V_MAP_XMOD * V_MAP_YMOD);
 
+    Uint32 vpf_a = SDL_GetTicks(); /* probe: s152 frame stages */
     vnm_begin(); /* s149: the map's tiles lay their normal maps from here */
 
     /* without the +-1 small corners within the viewport are not drawn */
@@ -8842,10 +8876,13 @@ levelwin::draw()
         }
     }
     vulture_normal_capture = false; /* s149 */
+    Uint32 vpf_b = SDL_GetTicks(); /* probe */
     vl_render(map_data, map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
               this->abs_y, this->w, this->h); /* s133: dynamic lighting */
+    Uint32 vpf_c = SDL_GetTicks(); /* probe */
     vw_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
+    Uint32 vpf_d = SDL_GetTicks(); /* probe */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
     vpath_draw(map_centre_x, map_centre_y, view_x, view_y); /* s125 */
     vmp_mark(map_centre_x, map_centre_y, view_x, view_y);   /* s130 */
@@ -8853,7 +8890,9 @@ levelwin::draw()
     vaim_draw(map_centre_x, map_centre_y, view_x, view_y);  /* s125 */
     vblast_draw(map_centre_x, map_centre_y, view_x, view_y); /* s138 */
     vzoom_apply(this->abs_x, this->abs_y, this->w, this->h); /* s121 */
+    Uint32 vpf_e = SDL_GetTicks(); /* probe */
     vulture_draw_vignette(this->abs_x, this->abs_y, this->w, this->h); /* s74 */
+    Uint32 vpf_f = SDL_GetTicks(); /* probe */
     vstatus_pulse_draw(this->abs_x, this->abs_y, this->w, this->h); /* s129 */
     vmp_draw(this->abs_x, this->abs_y, this->w, this->h); /* s130 */
     vhud_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
@@ -8885,6 +8924,13 @@ levelwin::draw()
     vulture_tilecache_age();
 
     vulture_map_draw_msecs = SDL_GetTicks() - startticks;
+    if (getenv("VULTURE_SELFTEST")) /* probe: s152 where a frame goes */
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                          "frame %u: pre %u tiles %u light %u vw %u fx %u vignette %u hud %u\n",
+                          (unsigned) vulture_map_draw_msecs, (unsigned) (vpf_a - startticks),
+                          (unsigned) (vpf_b - vpf_a), (unsigned) (vpf_c - vpf_b),
+                          (unsigned) (vpf_d - vpf_c), (unsigned) (vpf_e - vpf_d),
+                          (unsigned) (vpf_f - vpf_e), (unsigned) (SDL_GetTicks() - vpf_f));
     vulture_map_draw_lastmove = svm.moves;
 
     return true;
