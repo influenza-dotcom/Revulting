@@ -2552,6 +2552,11 @@ donull(void)
                           "Are you waiting to get hit?",
                           &gd.did_nothing_flag))
         return ECMD_OK;
+    {
+        extern void vulture_rest_fx(void); /* s144: the "resting" icon */
+
+        vulture_rest_fx();
+    }
     return ECMD_TIME; /* Do nothing, but let other things happen */
 }
 

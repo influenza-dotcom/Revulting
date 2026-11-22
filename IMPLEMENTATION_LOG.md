@@ -3049,6 +3049,14 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Probe: `VULTURE_SELFTEST_LIGHT=1`; probe screenshots now re-centre on the hero first (`VULTURE_SELFTEST_NOCENTER=1` to skip) - this fixes the panned/black probe frames.
 - NOT verified visually: the random probe levels never placed the test altar/fountain where the frame could show them; only contact shadows and fire light were seen.
 
+### 144. Searching vs resting icon; speed made visible (threat zones, speed badge)
+
+- Above the hero for ~1 s after each turn of it: a sweeping magnifying glass + "searching" (explicit `s`, incl. the 5-turn search) or an hourglass + "resting" (the REST button, `.` and counted rests via a hook in `donull`). Real-time idle ticks show nothing (the time pill covers that).
+- Speed model (from u_calc_moveamt / mcalcmove): your speed = form speed, +4 average when Fast (extra action 1 turn in 3), +8 when Very fast, x3/4 / 1/2 / 1/4 / 1/8 for Burdened..Overloaded; a monster's = `mcalcmove(m, FALSE)` (haste/slow included). Ratio = its actions per one of yours.
+- Threat zone: hovering a hostile tints every square where it can reach you AND hit you before your next action (path length over known open ground <= its actions): red = every time, orange = only with a lucky extra move (fractional speed; slow monsters threaten their neighbours in orange). Hold Alt: the combined zone of every awake hostile within 14 squares (Alt/Shift presses redraw).
+- Monster card (compact and Shift): "Moves 2.0 squares per move of yours - you can't outrun it" / "Moves once per 1.5 of your moves - you can outrun it", orange when faster than you.
+- Speed badge beside the stealth badge: SPEED: NORMAL / FAST / VERY FAST / SLOW; tooltip gives actions per turn, the Fast/Very fast rule, load warning, and the Alt hint.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

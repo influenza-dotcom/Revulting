@@ -1081,6 +1081,8 @@ vst_draw(int j, int i, int x, int y)
  */
 #include <vector>
 
+static Uint32 vsr_t = 0;            /* s144: last search / rest turn */
+static int vsr_kind = 0;            /* s144: 1 searching, 2 resting */
 struct vfx_ent {
     int kind;                 /* 1 number, 2 blood, 3 click marker (s108) */
     int x, y;                 /* map square */
@@ -1853,6 +1855,39 @@ vfx_draw(int cx, int cy, int vx, int vy)
         }
     }
 
+    if (u.ux && vsr_kind && now - vsr_t < 1100) { /* s144: searching vs resting */
+        int hx2, hy2, k2;
+        double ph2 = now / 160.0;
+        vfx_ent ic;
+
+        memset(&ic, 0, sizeof ic);
+        vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &hx2, &hy2);
+        hx2 += 22, hy2 -= 96;
+        if (vsr_kind == 1) { /* a magnifying glass, sweeping */
+            int ox = (int) (3 * sin(ph2));
+
+            ic.r = 150, ic.g = 220, ic.b = 255;
+            for (k2 = 0; k2 < 16; k2++) {
+                double a = 2 * 3.14159265358979 * k2 / 16;
+
+                vfx_glowdot(hx2 + ox + (int) (6 * cos(a)), hy2 + (int) (6 * sin(a)), 150, 220, 255, 230);
+            }
+            vfx_dline(hx2 + ox + 4, hy2 + 4, hx2 + ox + 10, hy2 + 10, ic, 240);
+            vulture_put_text_shadow(V_FONT_SMALL, "searching", vulture_screen, hx2 - 20, hy2 + 12,
+                                    SDL_MapRGB(vulture_screen->format, 150, 220, 255),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        } else { /* an hourglass */
+            ic.r = 255, ic.g = 225, ic.b = 160;
+            vfx_dline(hx2 - 5, hy2 - 7, hx2 + 5, hy2 - 7, ic, 230);
+            vfx_dline(hx2 - 5, hy2 + 7, hx2 + 5, hy2 + 7, ic, 230);
+            vfx_dline(hx2 - 5, hy2 - 7, hx2 + 5, hy2 + 7, ic, 230);
+            vfx_dline(hx2 + 5, hy2 - 7, hx2 - 5, hy2 + 7, ic, 230);
+            vfx_glowdot(hx2, hy2 + 5 - (int) (fmod(now / 300.0, 1.0) * 4), 255, 225, 160, 255);
+            vulture_put_text_shadow(V_FONT_SMALL, "resting", vulture_screen, hx2 - 16, hy2 + 12,
+                                    SDL_MapRGB(vulture_screen->format, 255, 225, 160),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        }
+    }
     if (!Hallucination) { /* s137: you can see who is asleep at a glance */
         struct monst *zm;
 
@@ -3315,6 +3350,132 @@ vpath_draw(int cx, int cy, int vx, int vy)
     }
 }
 
+/* ---- s144: speed, made visible ----
+   NetHack gives everyone movement points each turn: 12 = one action.
+   Your actions per turn: your speed, +1 action on 1/3 of turns (Fast) or
+   2/3 (Very fast), cut by encumbrance (u_calc_moveamt).  A monster's:
+   mcalcmove(mon, FALSE) / 12, randomly rounded.  Its actions per one of
+   yours = the ratio; the threat zone is every square it can reach AND hit
+   you on before you act again (path length <= that many actions). */
+extern "C" int mcalcmove(struct monst *, boolean);
+
+static double
+vhero_speed(void)
+{
+    double s = Upolyd ? gy.youmonst.data->mmove : 12.0;
+
+    if (Very_fast)
+        s += 12.0 * 2 / 3;
+    else if (Fast)
+        s += 12.0 / 3;
+    switch (near_capacity()) {
+    case SLT_ENCUMBER: s *= 0.75; break;
+    case MOD_ENCUMBER: s *= 0.5; break;
+    case HVY_ENCUMBER: s *= 0.25; break;
+    case EXT_ENCUMBER: s *= 0.125; break;
+    }
+    return s < 1 ? 1 : s;
+}
+
+/* a monster's actions for each one of yours */
+static double
+vmon_ratio(struct monst *m)
+{
+    return mcalcmove(m, FALSE) / vhero_speed();
+}
+
+static std::string
+vspeed_words(struct monst *m)
+{
+    double r = vmon_ratio(m);
+    char b[96];
+
+    if (mcalcmove(m, FALSE) == 0)
+        return "Never moves";
+    if (r >= 1.0)
+        snprintf(b, sizeof b, "Moves %.1f square%s per move of yours%s", r, r == 1.0 ? "" : "s",
+                 r >= 1.9 ? "  -  you can't outrun it" : r > 1.05 ? "  -  faster than you"
+                                                       : "");
+    else
+        snprintf(b, sizeof b, "Moves once per %.1f of your moves  -  you can outrun it", 1.0 / r);
+    return b;
+}
+
+/* tint the squares where m can reach you before your next action */
+static void vtile_mark(int x, int y, Uint8 r, Uint8 g, Uint8 b, int alpha, int cx, int cy,
+                       int vx, int vy);
+static bool vmv_pass(int x, int y);
+
+static void
+vthreat_zone(struct monst *m, int cx, int cy, int vx, int vy, int alpha)
+{
+    static short dist[ROWNO][COLNO];
+    static short qx[COLNO * ROWNO], qy[COLNO * ROWNO];
+    double r = vmon_ratio(m);
+    int sure = (int) r, maybe = (int) ceil(r - 1e-9), h = 0, t = 0, x, y, k;
+
+    if (maybe < 1)
+        maybe = 1; /* slow ones still threaten their neighbours sometimes */
+    if (maybe > 6)
+        maybe = 6;
+    if (sure > maybe)
+        sure = maybe;
+    for (y = 0; y < ROWNO; y++)
+        for (x = 0; x < COLNO; x++)
+            dist[y][x] = 99;
+    dist[m->my][m->mx] = 0;
+    qx[t] = m->mx, qy[t++] = m->my;
+    while (h < t) {
+        x = qx[h], y = qy[h++];
+        if (dist[y][x] >= maybe)
+            continue;
+        for (k = 0; k < N_DIRS; k++) {
+            int nx = x + xdir[k], ny = y + ydir[k];
+
+            if (!isok(nx, ny) || dist[ny][nx] != 99)
+                continue;
+            dist[ny][nx] = dist[y][x] + 1;
+            /* it can hit a square it reaches, but only walk on through
+               known open ground */
+            if (vmv_pass(nx, ny) || u_at(nx, ny))
+                qx[t] = (short) nx, qy[t++] = (short) ny;
+        }
+    }
+    for (y = 0; y < ROWNO; y++)
+        for (x = 1; x < COLNO; x++) {
+            if (dist[y][x] == 0 || dist[y][x] > maybe || !levl[x][y].seenv
+                || (!vmv_pass(x, y) && !u_at(x, y)))
+                continue;
+            if (dist[y][x] <= sure)
+                vtile_mark(x, y, 255, 70, 55, alpha, cx, cy, vx, vy);
+            else
+                vtile_mark(x, y, 255, 170, 60, alpha / 2, cx, cy, vx, vy);
+        }
+}
+
+/* hovered monster's zone, or every awake hostile's while Alt is held */
+static void
+vthreat_draw(int cx, int cy, int vx, int vy)
+{
+    struct monst *m;
+    bool alt = (SDL_GetModState() & KMOD_ALT) != 0;
+
+    if (vaim_on || vulture_aim_mode || vulture_whatis_active || Hallucination || !u.ux)
+        return;
+    if (alt) {
+        for (m = fmon; m; m = m->nmon)
+            if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame && !m->mpeaceful
+                && !m->msleeping && m->mcanmove && distmin(u.ux, u.uy, m->mx, m->my) <= 14)
+                vthreat_zone(m, cx, cy, vx, vy, 120);
+        return;
+    }
+    if (!isok(vhv.x, vhv.y) || !vhv_over_map() || SDL_GetTicks() - vhv_since < 160)
+        return;
+    m = m_at(vhv.x, vhv.y);
+    if (m && canspotmon(m) && !m->mtame && !u_at(vhv.x, vhv.y))
+        vthreat_zone(m, cx, cy, vx, vy, (m->msleeping || !m->mcanmove) ? 70 : 150);
+}
+
 /* ---- s141: the codex (Pathos-style built-in knowledge, no wiki) ----
    Monster attacks, defences and what eating its corpse does, and what each
    trap does - straight from the game's own data. */
@@ -4334,6 +4495,9 @@ vcard_draw(const std::string &name)
                                    : dg == 1 ? SDL_MapRGB(vulture_screen->format, 240, 200, 100)
                                              : SDL_MapRGB(vulture_screen->format, 140, 220, 150));
         } else {
+            deep.push_back(vspeed_words(m)); /* s144 */
+            dcol.push_back(vmon_ratio(m) > 1.05 ? SDL_MapRGB(vulture_screen->format, 255, 170, 90)
+                                                : SDL_MapRGB(vulture_screen->format, 190, 200, 210));
             if (dg >= 2) /* the one thing you must not miss */
                 deep.push_back("Corpse: " + cl[0]),
                     dcol.push_back(SDL_MapRGB(vulture_screen->format, 255, 90, 70));
@@ -5395,6 +5559,8 @@ vulture_room_sleepers(int asleep, int woke, int stealthy)
 
 /* the stealth badge above the portrait: STEALTHY / NOISY / AGGRAVATING */
 static SDL_Rect vsb_rect = { 0, 0, 0, 0 };
+static SDL_Rect vspd_rect = { 0, 0, 0, 0 }; /* s144 */
+static double vhero_speed(void);
 
 static const char *
 vstealth_state(Uint8 *r, Uint8 *g, Uint8 *b, std::string *why)
@@ -5456,6 +5622,34 @@ vstealth_draw(void)
                             SDL_MapRGB(vulture_screen->format, r, g, b),
                             SDL_MapRGB(vulture_screen->format, 0, 0, 0));
     vsb_rect = rc;
+    { /* s144: your speed, beside it */
+        double s = vhero_speed();
+        const char *sl;
+        Uint8 sr, sg, sb;
+        int tw2;
+        SDL_Rect r2;
+
+        if (s >= 19)
+            sl = "VERY FAST", sr = 120, sg = 230, sb = 255;
+        else if (s >= 15)
+            sl = "FAST", sr = 140, sg = 220, sb = 255;
+        else if (s >= 11.5)
+            sl = "SPEED: NORMAL", sr = 190, sg = 190, sb = 200;
+        else
+            sl = "SLOW", sr = 255, sg = 150, sb = 80;
+        tw2 = vulture_text_length(V_FONT_SMALL, sl);
+        r2.x = rc.x + rc.w + 4, r2.y = rc.y, r2.w = tw2 + 14, r2.h = rc.h;
+        vbox(r2.x, r2.y, r2.w, r2.h, 200);
+        {
+            SDL_Rect bar = { (Sint16) r2.x, (Sint16) (r2.y + r2.h - 2), (Uint16) r2.w, 2 };
+
+            SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, sr, sg, sb));
+        }
+        vulture_put_text_shadow(V_FONT_SMALL, sl, vulture_screen, r2.x + 7, r2.y + 2,
+                                SDL_MapRGB(vulture_screen->format, sr, sg, sb),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        vspd_rect = r2;
+    }
 }
 
 static bool
@@ -5807,6 +6001,13 @@ vamb_tick(void)
                        45 + rand() % 30);
 }
 
+/* s144: a wait/rest turn ('.', counted rests) */
+extern "C" void
+vulture_rest_fx(void)
+{
+    vsr_t = SDL_GetTicks(), vsr_kind = 2;
+}
+
 /* s136: each search turn sends a pulse out from the hero (called from
    dosearch0) */
 extern "C" void
@@ -5814,6 +6015,7 @@ vulture_search_fx(void)
 {
     vfx_ent e;
 
+    vsr_t = SDL_GetTicks(), vsr_kind = vquiet_search ? 2 : 1; /* s144 */
     if (!levwin || !u.ux || vquiet_search)
         return;
     memset(&e, 0, sizeof e);
@@ -7306,6 +7508,7 @@ levelwin::draw()
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
     vpath_draw(map_centre_x, map_centre_y, view_x, view_y); /* s125 */
     vmp_mark(map_centre_x, map_centre_y, view_x, view_y);   /* s130 */
+    vthreat_draw(map_centre_x, map_centre_y, view_x, view_y); /* s144 */
     vaim_draw(map_centre_x, map_centre_y, view_x, view_y);  /* s125 */
     vblast_draw(map_centre_x, map_centre_y, view_x, view_y); /* s138 */
     vzoom_apply(this->abs_x, this->abs_y, this->w, this->h); /* s121 */
@@ -7470,6 +7673,21 @@ levelwin::handle_timer_event(window *target, void *result, int time)
                             + "\nClick or press Pause to change mode\nRight-click to change speed";
 
             vulture_mouse_set_tooltip(t);
+            return V_EVENT_HANDLED_NOREDRAW;
+        }
+        if (vspd_rect.w && mp.x >= vspd_rect.x && mp.x < vspd_rect.x + vspd_rect.w
+            && mp.y >= vspd_rect.y && mp.y < vspd_rect.y + vspd_rect.h) { /* s144 */
+            char sb2[200];
+            double s = vhero_speed();
+
+            snprintf(sb2, sizeof sb2,
+                     "Your speed %.0f: about %.2f actions per turn\n"
+                     "A speed-12 monster acts once per turn%s%s\n"
+                     "Hover a monster to see where it can reach you; hold Alt for all of them",
+                     s, s / 12.0, Very_fast ? "\nVery fast: an extra action on 2 turns in 3"
+                                  : Fast ? "\nFast: an extra action on 1 turn in 3" : "",
+                     near_capacity() > UNENCUMBERED ? "\nYour load is slowing you down" : "");
+            vulture_mouse_set_tooltip(sb2);
             return V_EVENT_HANDLED_NOREDRAW;
         }
         if (vstealth_hit(mp.x, mp.y)) { /* s137 */
@@ -7854,6 +8072,8 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
      * stays with the Ctrl+Shift+O menu). */
     case SDLK_LSHIFT: /* s141: the hover card shows / hides its codex */
     case SDLK_RSHIFT:
+    case SDLK_LALT: /* s144: the danger map */
+    case SDLK_RALT:
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
 
