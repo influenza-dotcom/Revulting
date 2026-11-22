@@ -408,7 +408,9 @@ vtw_prepare(int vx, int vy)
     }
 
     t = vtw_t;
-    te = vtw_linear ? t : t * t * (3.0 - 2.0 * t); /* smoothstep */
+    /* s147: ease-out - the move starts the instant you press, then settles
+       (smoothstep's slow start read as input lag) */
+    te = vtw_linear ? t : t * (2.0 - t);
     vtw_te = te;
     for (it = vtw_cur.begin(); it != vtw_cur.end(); ++it) {
         int x = it->second.x, y = it->second.y;
@@ -426,7 +428,7 @@ vtw_prepare(int vx, int vy)
             /* s78/s79: a hop on each step - airborne for the first 0.8,
                then a landing squash (drawn in levelwin::draw) */
             vtw_oy[y][x] = (short) ((1.0 - te) * sy
-                                    - (vtw_linear ? 5.0 : 12.0)
+                                    - (vtw_linear ? 2.5 : 6.0) /* s147: was 5 / 12 */
                                       * sin(3.14159265358979 * (te < 0.8 ? te / 0.8 : 1.0)));
             vtw_mv[y][x] = 1;
         }
@@ -720,25 +722,37 @@ vanim_input_waiting(void)
 static void
 vanim_frames(int kind, int frames, int delay_ms)
 {
-    Uint32 t0 = SDL_GetTicks();
-    int f;
+    /* s147: time-based (the old frame count + sleeps came out at 3-10
+       uneven frames), and a waiting key hurries the end instead of cutting
+       the animation off mid-motion */
+    Uint32 t0 = SDL_GetTicks(), last = t0, now;
+    double dur = frames * (delay_ms + 6.0), t = 0.0, rate;
 
+    if (dur > 170.0)
+        dur = 170.0;
+    rate = 1.0 / dur;
     vanim_kind = kind;
-    for (f = 1; f <= frames; f++) {
-        Uint32 tf = SDL_GetTicks();
-
-        vanim_t = (double) f / frames;
+    frames = 0;
+    for (;;) {
+        now = SDL_GetTicks();
+        t += (now - last) * rate;
+        last = now;
+        if (t > 1.0)
+            t = 1.0;
+        vanim_t = t;
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         vulture_refresh_window_region();
-        if (vanim_input_waiting())
+        frames++;
+        if (t >= 1.0)
             break;
-        /* slow machine/big window: keep the whole thing under ~150 ms */
-        if (f == 1 && SDL_GetTicks() - tf > 25 && frames > 3)
-            frames = 3;
-        if (SDL_GetTicks() - t0 > 150)
-            break;
-        SDL_Delay(delay_ms);
+        if (vanim_input_waiting()) {
+            double hurry = (1.0 - t) / 30.0;
+
+            if (hurry > rate)
+                rate = hurry;
+        }
+        SDL_Delay(1);
     }
     vanim_kind = 0;
     vanim_t = 0.0;
@@ -2591,13 +2605,13 @@ vbob_wanted(void)
 }
 
 /* wait timeout for the input loop: shorter while something is bobbing */
-static Uint32 vidle_interval = 80; /* s85: grows if frames are slow */
+static Uint32 vidle_interval = 33; /* s85: grows if frames are slow; s147: 30 fps */
 
 int
 vulture_idle_wait_ms(bool at_map)
 {
     nhUse(vbob_wanted);
-    return at_map ? (vfx_list.empty() ? 40 : 20) : 100; /* s108 */
+    return at_map ? (vfx_list.empty() ? 30 : 15) : 100; /* s108; s147 */
 }
 
 /* one idle frame for bobbing, breathing and combat effects (called from
@@ -2686,7 +2700,7 @@ vulture_idle_bob(bool at_map)
     vulture_mouse_restore_bg();
     /* keep idle drawing to about a third of the time at most */
     took = SDL_GetTicks() - now;
-    vidle_interval = took * 3 > 80 ? (took * 3 > 400 ? 400 : took * 3) : 80;
+    vidle_interval = took * 3 > 33 ? (took * 3 > 400 ? 400 : took * 3) : 33; /* s147 */
 }
 
 /* play the in-between frames of a pending tween, then any queued death
@@ -2726,7 +2740,7 @@ static bool vtw_fast = false; /* s112: this step is part of a run/travel */
 void
 vulture_tween_run(void)
 {
-    int f, frames;
+    int frames;
 
     if (vtw_animating || vanim_kind || !levwin)
         return;
@@ -2738,83 +2752,54 @@ vulture_tween_run(void)
        crawled).  s112: they slide again, just quickly - 4 short frames a
        step - so the hero visibly walks instead of teleporting.  A key or
        click still cuts any step short. */
-    {
-        bool fast = svc.context.run || svc.context.travel || gm.multi
-                    || autoexplore_active;
-
-        if (vtw_pending && fast && vanim_input_waiting()) {
-            vtw_pending = false;
-            vtw_t = 1.0;
-            vtw_commit(vtw_last_vx, vtw_last_vy);
-            levwin->force_redraw();
-        }
-        vtw_fast = fast;
-    }
-    if (vtw_pending && vtw_fast && flags.runmode != RUN_TPORT) {
-        /* s117: a walking run / travel step is one continuous, linear
-           glide that fills the step's display delay (vulture_delay_output
-           then skips the time the glide used) - not a quick hop followed
-           by a frozen pause, which read as stutter-teleporting */
-        Uint32 t0 = SDL_GetTicks(), el;
-        Uint32 dur = flags.runmode == RUN_CRAWL ? 240 : 90;
+    vtw_fast = svc.context.run || svc.context.travel || gm.multi || autoexplore_active;
+    /* s147: one time-based tween for every step.  It renders as many frames
+       as fit (about 7 ms each) instead of a fixed count with sleeps between,
+       and a key or click that is already waiting HURRIES the rest (~35 ms)
+       instead of snapping to the end - so a held direction key walks in one
+       continuous glide.  Runs / travel keep their 90 ms linear glide, which
+       vulture_delay_output then subtracts from the step's pause. */
+    if (vtw_pending && !(vtw_fast && flags.runmode == RUN_TPORT)) {
+        Uint32 t0 = SDL_GetTicks(), last = t0, now = t0;
+        double dur = vtw_fast ? (flags.runmode == RUN_CRAWL ? 240.0 : 90.0) : 120.0;
+        double t = 0.0, rate = 1.0 / dur;
 
         vtw_animating = true;
-        vtw_linear = true;
+        vtw_linear = vtw_fast || vanim_input_waiting();
+        frames = 0;
         for (;;) {
-            el = SDL_GetTicks() - t0;
-            vtw_t = el >= dur ? 1.0 : (double) el / dur;
+            now = SDL_GetTicks();
+            t += (now - last) * rate;
+            last = now;
+            if (t > 1.0)
+                t = 1.0;
+            vtw_t = t;
             levwin->force_redraw();
             ROOTWIN->draw_windows();
             vulture_refresh_window_region();
-            if (vtw_t >= 1.0)
+            frames++;
+            if (t >= 1.0)
                 break;
-            vulture_travel_pan(); /* s124 */
+            if (vtw_fast)
+                vulture_travel_pan(); /* s124 */
             if (vanim_input_waiting()) {
-                vtw_t = 1.0;
-                levwin->force_redraw();
-                ROOTWIN->draw_windows();
-                vulture_refresh_window_region();
-                break;
+                double hurry = (1.0 - t) / 35.0;
+
+                if (hurry > rate)
+                    rate = hurry;
+                vtw_linear = true; /* no settle mid-chain */
             }
-            SDL_Delay(2);
+            SDL_Delay(1);
         }
-        vulture_tween_ate_ms = (int) (SDL_GetTicks() - t0);
+        if (vtw_fast)
+            vulture_tween_ate_ms = (int) (now - t0);
         vtw_linear = false;
         vtw_t = 1.0;
         vtw_pending = false;
         vtw_animating = false;
         vtw_commit(vtw_last_vx, vtw_last_vy);
-    } else if (vtw_pending) {
-        Uint32 t0 = SDL_GetTicks();
-
-        vtw_animating = true;
-        frames = vtw_fast ? 4 : 9;
-        for (f = 1; f <= frames; f++) {
-            Uint32 tf = SDL_GetTicks();
-
-            vtw_t = (double) f / frames;
-            levwin->force_redraw();
-            ROOTWIN->draw_windows();
-            vulture_refresh_window_region();
-            if (f < frames && vanim_input_waiting()) {
-                /* next key already pressed: jump to the end */
-                vtw_t = 1.0;
-                levwin->force_redraw();
-                ROOTWIN->draw_windows();
-                vulture_refresh_window_region();
-                break;
-            }
-            if (f == 1 && SDL_GetTicks() - tf > 25)
-                frames = vtw_fast ? 2 : 4; /* slow frames: fewer of them */
-            SDL_Delay(vtw_fast ? 5 : 12);
-        }
-        vtw_t = 1.0;
-        vtw_pending = false;
-        vtw_animating = false;
-        vtw_commit(vtw_last_vx, vtw_last_vy);
-        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
-                          "tween: %d frames in %u ms\n", frames,
-                          (unsigned) (SDL_GetTicks() - t0));
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "tween: %d frames in %u ms\n",
+                          frames, (unsigned) (now - t0));
     }
     if (vanim_ndeaths)
         vanim_play_deaths();
@@ -5437,6 +5422,13 @@ vselftest(void)
             SDL_SaveBMP(vulture_screen, fp2);
             vl_relief_set(true);
         }
+        if (getenv("VULTURE_SELFTEST_WALK")) { /* probe: s147 a held key, then single steps */
+            static const SDL_Keycode ks[] = { SDLK_h, SDLK_l, SDLK_j, SDLK_k };
+            int q;
+
+            for (q = 0; q < 6; q++)
+                vprobe_push_key(ks[q & 3]);
+        }
         if (getenv("VULTURE_SELFTEST_CRIT")) { /* probe: s146 Tab at the sleeper */
             struct monst *cm;
 
@@ -7620,7 +7612,8 @@ static void
 vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
 {
     SDL_Surface *s = vulture_screen;
-    static std::vector<Uint8> lp, lc, ln;
+    static std::vector<Uint8> lbuf[3];
+    int lrow_y[3], lrow_a[3] = { 0, 0, 0 }, lrow_b[3] = { 0, 0, 0 };
     static std::vector<Uint32> ob[2];
     int ob_y[2] = { -1, -1 }, ob_a[2] = { 0, 0 }, ob_b[2] = { 0, 0 };
     Uint32 t0 = SDL_GetTicks(), mask;
@@ -7636,7 +7629,7 @@ vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
     W = s->w;
     rs = s->format->Rshift, gs = s->format->Gshift, bs = s->format->Bshift;
     mask = ~(((Uint32) 255 << rs) | ((Uint32) 255 << gs) | ((Uint32) 255 << bs));
-    lp.resize(W), lc.resize(W), ln.resize(W);
+    lbuf[0].resize(W), lbuf[1].resize(W), lbuf[2].resize(W);
     ob[0].resize(W), ob[1].resize(W);
     if (SDL_MUSTLOCK(s))
         SDL_LockSurface(s);
@@ -7651,9 +7644,40 @@ vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
     }
     /* each row is written back only after the row below it has read it, so
        heights always come from the untouched picture */
+    /* height rows: 3 slots, each remembering which row and columns it holds */
+    for (x = 0; x < 3; x++)
+        lrow_y[x] = -99;
+    auto lrow = [&](int r, int a, int bb) -> Uint8 * {
+        int k2, best = 0, xx;
+        Uint32 *px = VR_PX(r);
+        Uint8 *L;
+
+        for (k2 = 0; k2 < 3; k2++)
+            if (lrow_y[k2] == r)
+                break;
+        if (k2 == 3) { /* rows only go down: reuse the oldest slot */
+            for (k2 = 1; k2 < 3; k2++)
+                if (lrow_y[k2] < lrow_y[best])
+                    best = k2;
+            k2 = best;
+            lrow_y[k2] = r, lrow_a[k2] = a, lrow_b[k2] = a - 1;
+        }
+        L = &lbuf[k2][0];
+        if (a < lrow_a[k2]) {
+            for (xx = a; xx < lrow_a[k2]; xx++)
+                L[xx] = VR_LUM(px[xx]);
+            lrow_a[k2] = a;
+        }
+        if (bb > lrow_b[k2]) {
+            for (xx = lrow_b[k2] + 1 > a ? lrow_b[k2] + 1 : a; xx <= bb; xx++)
+                L[xx] = VR_LUM(px[xx]);
+            lrow_b[k2] = bb;
+        }
+        return L;
+    };
     for (y = y0; y < y1; y++) {
         int cj = (y - gy0) / FS, xa, xb, ci, ca, cb;
-        Uint32 *rp, *rc, *rn;
+        Uint32 *rc;
 
         sl = y & 1;
         VR_FLUSH(sl);
@@ -7667,12 +7691,11 @@ vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
             xb = x1;
         if (xb - xa < 2)
             continue;
-        rp = VR_PX(y - 1), rc = VR_PX(y), rn = VR_PX(y + 1);
-        for (x = xa - 1; x <= xb; x++) {
-            lp[x] = VR_LUM(rp[x]);
-            lc[x] = VR_LUM(rc[x]);
-            ln[x] = VR_LUM(rn[x]);
-        }
+        /* s147: each row's heights are worked out once and reused by the
+           two rows that need them next (was three rows per row) */
+        rc = VR_PX(y);
+        Uint8 *lp = lrow(y - 1, xa - 1, xb), *lc = lrow(y, xa - 1, xb),
+              *ln = lrow(y + 1, xa - 1, xb);
         memcpy(&ob[sl][xa], rc + xa, sizeof(Uint32) * (size_t) (xb - xa));
         ob_y[sl] = y, ob_a[sl] = xa, ob_b[sl] = xb;
         for (ci = ca; ci <= cb; ci++) { /* a cell's run of pixels at a time */
@@ -7741,7 +7764,7 @@ vl_relief_dirs(const std::vector<float> &Lg, int lw, int lh)
             gx = Lg[(size_t) j * lw + i + 1] - Lg[(size_t) j * lw + i - 1];
             gy = Lg[(size_t) (j + 1) * lw + i] - Lg[(size_t) (j - 1) * lw + i];
             mag = sqrtf(gx * gx + gy * gy);
-            st = mag * 14.0f; /* a few cells from a lamp: full strength */
+            st = mag * 7.0f; /* near a lamp: full strength (s147: 8 px cells) */
             if (st > 1.0f)
                 st = 1.0f;
             if (L < 1.0f)
@@ -7767,7 +7790,9 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     static int c_cx, c_cy, c_vx = -99, c_vy, c_ux, c_uy, c_rot, c_w, c_h;
     static long c_moves = -1;
     static Uint32 c_when = 0;
-    int FS = 4 * (vulture_render_scale > 0 ? vulture_render_scale : 1);
+    /* s147: 8 px cells (was 4) - pools are bilinear across 56 px squares, so
+       it looks the same at a quarter of the sampling */
+    int FS = 8 * (vulture_render_scale > 0 ? vulture_render_scale : 1);
     int M = 96; /* margin: a cached layer can slide with the camera */
     int lw, lh, i, j;
     Uint32 now = SDL_GetTicks();
@@ -7794,6 +7819,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     ax -= M, ay -= M, w += 2 * M, h += 2 * M;
     lw = w / FS + 2, lh = h / FS + 2;
     vl_compute(md);
+    Uint32 vt_c = SDL_GetTicks(); /* probe: s147 */
     if (!vl_low || vl_low->w != lw || vl_low->h != lh) {
         if (vl_low)
             SDL_FreeSurface(vl_low);
@@ -7850,6 +7876,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         }
     }
     SDL_UnlockSurface(vl_low);
+    Uint32 vt_g = SDL_GetTicks(); /* probe: s147 */
     src.x = 0, src.y = 0, src.w = lw - 1, src.h = lh - 1;
     dst.x = 0, dst.y = 0, dst.w = (lw - 1) * FS, dst.h = (lh - 1) * FS;
     if (dst.w > w)
@@ -7858,11 +7885,19 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         dst.h = h;
     if (SDL_SoftStretchLinear(vl_low, &src, vl_full, &dst) != 0)
         return;
+    Uint32 vt_s = SDL_GetTicks(); /* probe: s147 */
     vl_relief_dirs(Lg, lw, lh); /* s145 */
     c_gx0 = ax - FS / 2, c_gy0 = ay - FS / 2; /* cell i covers ax+i*FS +- FS/2 */
     vl_relief(max0, may0, mw0, mh0, c_gx0, c_gy0, FS);
+    Uint32 vt_r = SDL_GetTicks(); /* probe: s147 */
     dst.x = ax, dst.y = ay;
     SDL_BlitSurface(vl_full, NULL, vulture_screen, &dst);
+    if (getenv("VULTURE_SELFTEST")) /* probe: s147 cost of a fresh lighting layer */
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                          "light: fresh %u ms = compute %u grid %u stretch %u relief %u blit %u\n",
+                          (unsigned) (SDL_GetTicks() - now), (unsigned) (vt_c - now),
+                          (unsigned) (vt_g - vt_c), (unsigned) (vt_s - vt_g),
+                          (unsigned) (vt_r - vt_s), (unsigned) (SDL_GetTicks() - vt_r));
 }
 
 /*
@@ -8219,14 +8254,17 @@ levelwin::draw()
 
                     /* s79: squash & stretch + lean while stepping */
                     if (vtw_mv[i][j]) {
-                        double te = vtw_te;
+                        /* s147: a soft stretch while moving and a settle
+                           spread over the last third (the old 26% squash in
+                           the final 24 ms showed as a one-frame pop); runs
+                           and held keys get less, so they read as walking */
+                        double te = vtw_te, a = vtw_linear ? 0.45 : 1.0;
 
-                        if (te < 0.8)
-                            ys = 1.0 + 0.18 * sin(3.14159265358979 * te / 0.8);
-                        else
-                            ys = 1.0 - 0.26 * sin(3.14159265358979 * (te - 0.8) / 0.2);
+                        ys = 1.0 + a * 0.05 * sin(3.14159265358979 * (te < 0.7 ? te / 0.7 : 1.0));
+                        if (te > 0.62)
+                            ys -= a * 0.07 * sin(3.14159265358979 * (te - 0.62) / 0.38);
                         xs = 1.0 / pow(ys, 0.7);
-                        deg = vtw_face[i][j] * 10.0 * sin(3.14159265358979 * te);
+                        deg = vtw_face[i][j] * 5.0 * a * sin(3.14159265358979 * te);
                     } else {
                         vfx_breathe(j, i, &xs, &ys); /* s85 */
                     }

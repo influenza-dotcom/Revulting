@@ -343,7 +343,7 @@ ifeq "$(DEBUGINFO)" "Y"
 CFLAGS += -g -D_DEBUG
 LIBUCRT = -lucrtbased
 else
-CFLAGS += -DNDEBUG
+CFLAGS += -DNDEBUG -O2
 LDFLAGS += -s
 LIBUCRT=
 endif
@@ -1426,7 +1426,7 @@ vulture-force:
 # before makedefs has ever run.
 $(VULTUREOBJ): vulture-force $(INCL)/date.h
 	$(MAKE) -C $(VULTUREDIR) VARIANT_NAME=nethack VARIANT_VERSION=3.6.0 \
-		BASECFLAGS="-Wall -g -DVULTURE_GRAPHICS -DWIN32 -include vulture_nh5compat.h"
+		BASECFLAGS="-Wall -g -O2 -DVULTURE_GRAPHICS -DWIN32 -include vulture_nh5compat.h"
 
 $(THEORAPLAYOBJ): $(VULTUREDIR)/vendor/theoraplay/theoraplay.c | $(ONHV)
 	@mkdir -p $(VULTUREBUILD)

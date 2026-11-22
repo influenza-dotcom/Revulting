@@ -3130,6 +3130,37 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   track) an ambush logged once (kind 2); a run where both swings missed
   logged nothing, as it should.
 
+### 147. Fluid motion: time-based tweens, hurry-not-snap, -O2 build
+
+- **The build was unoptimised.**  Neither the core (sys/windows/GNUmakefile
+  `CFLAGS += -DNDEBUG`) nor the Vulture interface (`BASECFLAGS="-Wall -g"`)
+  had any -O flag.  Both now get `-O2` (still `-g`).  The exe went 6.3 ->
+  5.3 MB; a fresh lighting layer 17-40 ms -> 5-6 ms; surface relief 7 ->
+  1 ms per frame; a step now draws up to ~20 frames in its 120 ms.  The old
+  objects (src/o/nethackv, win/vulture/build_nethack_3_6_0) were moved to
+  deliverables/release/trash/objs-O0-* - make doesn't track flag changes,
+  so a flag change needs those moved for a full rebuild.  All 12 probe
+  configurations pass on the -O2 build; gear sets still go on in order.
+- **Time-based tweens** (`vulture_tween_run`, `vanim_frames`): every step,
+  travel glide, lunge, death and drop plays over a fixed time and renders as
+  many frames as fit, instead of a frame count with SDL_Delay(5-14) between
+  (the log showed steps at 4 frames/50 ms or 9 frames/172 ms).  Steps 120 ms
+  (was ~172), travel glide 90 ms, lunge/death/drop capped at 170 ms.
+- **Hurry, don't snap:** a key or click already waiting speeds the rest of
+  the animation to ~35 ms (lunges ~30 ms) instead of jumping to the end, so
+  a held direction key walks in one continuous glide.
+- **Ease-out** steps (`t*(2-t)`) instead of smoothstep: motion starts the
+  instant you press.  Hop 12 -> 6 px (runs 5 -> 2.5); squash & stretch 18% /
+  26% (the squash lived in the last 24 ms = a one-frame pop) -> 5% stretch
+  and a 7% settle over the last third; lean 10 -> 5 deg; runs and held keys
+  get 45% of that.
+- **Idle effects at ~30 fps** (was ~12): vidle_interval floor 80 -> 33 ms,
+  still at most a third of the time; input-wait timeout 40/20 -> 30/15 ms.
+- Light grid cells 4 -> 8 px (pools are bilinear across 56 px squares);
+  relief luminance rows cached and reused (3 rows -> 1 per row).
+- Probe VULTURE_SELFTEST_WALK queues six movement keys (held-key walking);
+  the lighting stage breakdown is logged under VULTURE_SELFTEST.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
