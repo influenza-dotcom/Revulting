@@ -3161,6 +3161,15 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Probe VULTURE_SELFTEST_WALK queues six movement keys (held-key walking);
   the lighting stage breakdown is logged under VULTURE_SELFTEST.
 
+### 148. Blue click marker on squares you can't move into
+
+- `vfx_click_at`: a click on a square you can't walk into - wall, boulder,
+  statue, iron bars, tree, water, lava (`!vmv_pass` or a statue glyph) -
+  now gets a blue VCK_BLOCKED marker instead of the green move one.
+  Monsters, items, doors, stairs and fountains keep their own markers.
+- Probe VULTURE_SELFTEST_MARK: wall and boulder sub=7 (blue), plain floor
+  sub=0 (green), seen in the shot.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -1321,12 +1321,13 @@ vfx_glowdot(int x, int y, Uint8 r, Uint8 g, Uint8 b, int alpha)
 /* s108: Dota-style click marker on map square (x, y).  s117: its shape
    and colour say what the click sends the hero to do */
 enum { VCK_MOVE, VCK_ATTACK, VCK_ALLY, VCK_ITEM, VCK_DOOR, VCK_STAIRS,
-       VCK_DRINK };
+       VCK_DRINK, VCK_BLOCKED /* s148 */ };
+static bool vmv_pass(int x, int y); /* s148 */
 
 static void
 vfx_click(int x, int y, int sub, bool up)
 {
-    static const Uint8 col[7][3] = {
+    static const Uint8 col[8][3] = {
         { 90, 255, 120 },  /* move: green */
         { 255, 70, 60 },   /* attack: red */
         { 110, 180, 255 }, /* pet / peaceful: blue */
@@ -1334,10 +1335,11 @@ vfx_click(int x, int y, int sub, bool up)
         { 255, 145, 50 },  /* door: amber */
         { 190, 120, 255 }, /* stairs: violet */
         { 80, 225, 255 },  /* fountain / sink: cyan */
+        { 70, 120, 255 },  /* s148: can't move in there: blue */
     };
     vfx_ent e;
 
-    if (!isok(x, y) || sub < 0 || sub > VCK_DRINK)
+    if (!isok(x, y) || sub < 0 || sub > VCK_BLOCKED)
         return;
     memset(&e, 0, sizeof e);
     e.kind = 3, e.x = x, e.y = y, e.t0 = SDL_GetTicks();
@@ -1346,8 +1348,8 @@ vfx_click(int x, int y, int sub, bool up)
     e.r = col[sub][0], e.g = col[sub][1], e.b = col[sub][2];
     vfx_list.push_back(e);
     { /* s131: each order has its own sound */
-        static const char *const mk[7] = { "mk_move", "mk_attack", "mk_ally", "mk_item",
-                                           "mk_door", "mk_stairs", "mk_drink" };
+        static const char *const mk[8] = { "mk_move", "mk_attack", "mk_ally", "mk_item",
+                                           "mk_door", "mk_stairs", "mk_drink", "mk_move" };
         vulture_sfx(mk[sub]);
     }
 }
@@ -1846,6 +1848,8 @@ vfx_click_at(int x, int y)
         sub = VCK_STAIRS, up = true;
     } else if (cm == S_fountain || cm == S_sink) {
         sub = VCK_DRINK;
+    } else if (!vmv_pass(x, y) || glyph_is_statue(g)) {
+        sub = VCK_BLOCKED; /* s148: a wall, boulder, statue, water... */
     }
     vfx_click(x, y, sub, up);
     if (sub == VCK_MOVE)
@@ -5421,6 +5425,52 @@ vselftest(void)
             snprintf(fp2, sizeof fp2, "%s\\selftest_flat.bmp", dir);
             SDL_SaveBMP(vulture_screen, fp2);
             vl_relief_set(true);
+        }
+        if (getenv("VULTURE_SELFTEST_MARK")) { /* probe: s148 markers on wall / boulder / floor */
+            char fp3[700];
+            FILE *f3;
+            int wx = -1, wy = -1, fx = -1, fy = -1, dx2, dy2;
+            coord bc;
+
+            for (dx2 = -3; dx2 <= 3; dx2++)
+                for (dy2 = -3; dy2 <= 3; dy2++) {
+                    int xx = u.ux + dx2, yy = u.uy + dy2;
+
+                    if (!isok(xx, yy) || u_at(xx, yy) || !levl[xx][yy].seenv)
+                        continue;
+                    if (wx < 0 && IS_WALL(levl[xx][yy].typ))
+                        wx = xx, wy = yy;
+                    if (fx < 0 && levl[xx][yy].typ == ROOM && !m_at(xx, yy)
+                        && !svl.level.objects[xx][yy] && distmin(u.ux, u.uy, xx, yy) == 2)
+                        fx = xx, fy = yy;
+                }
+            if (enexto(&bc, u.ux + 1, u.uy - 1, (struct permonst *) 0)) {
+                (void) mksobj_at(BOULDER, bc.x, bc.y, FALSE, FALSE);
+                newsym(bc.x, bc.y);
+            }
+            vfx_click_at(wx, wy);
+            vfx_click_at(bc.x, bc.y);
+            vfx_click_at(fx, fy);
+            snprintf(fp3, sizeof fp3, "%s\\mark.txt", dir);
+            if ((f3 = fopen(fp3, "w")) != 0) {
+                size_t q;
+
+                for (q = 0; q < vfx_list.size(); q++)
+                    if (vfx_list[q].kind == 3)
+                        fprintf(f3, "marker at %d,%d sub=%d rgb=%d,%d,%d\n", vfx_list[q].x,
+                                vfx_list[q].y, vfx_list[q].sub, vfx_list[q].r, vfx_list[q].g,
+                                vfx_list[q].b);
+                fprintf(f3, "wall=%d,%d boulder=%d,%d floor=%d,%d\n", wx, wy, bc.x, bc.y, fx, fy);
+                fclose(f3);
+            }
+            for (size_t q = 0; q < vfx_list.size(); q++)
+                if (vfx_list[q].kind == 3)
+                    vfx_list[q].t0 = SDL_GetTicks() - 120; /* mid-pop for the shot */
+            levwin->set_view(u.ux, u.uy);
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            snprintf(fp3, sizeof fp3, "%s\\selftest_mark.bmp", dir);
+            SDL_SaveBMP(vulture_screen, fp3);
         }
         if (getenv("VULTURE_SELFTEST_WALK")) { /* probe: s147 a held key, then single steps */
             static const SDL_Keycode ks[] = { SDLK_h, SDLK_l, SDLK_j, SDLK_k };
