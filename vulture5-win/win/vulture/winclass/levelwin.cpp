@@ -3426,6 +3426,94 @@ vcard_draw(const std::string &name)
     }
 }
 
+/* s135: Brogue-style card for things on the floor and dungeon features -
+   what it is, and what you can do with it */
+static const char *
+vsq_hint(int x, int y)
+{
+    int g, c;
+    struct monst *m;
+
+    if (!isok(x, y) || u_at(x, y) || Hallucination || !levl[x][y].seenv)
+        return NULL;
+    m = m_at(x, y);
+    if (m && canspotmon(m))
+        return NULL; /* the monster card covers it */
+    g = glyph_at(x, y);
+    if (glyph_is_object(g)) {
+        if (glyph_to_obj(g) == BOULDER)
+            return "Walk into it to push it";
+        if (glyph_to_obj(g) == CORPSE)
+            return "Click to walk there  -  eat it fresh or not at all";
+        return "Click to walk there and pick it up";
+    }
+    if (glyph_is_trap(g))
+        return "A known trap  -  click-to-walk steers around it";
+    if (!glyph_is_cmap(g))
+        return NULL;
+    c = glyph_to_cmap(g);
+    switch (c) {
+    case S_dnstair: case S_dnladder: case S_brdnstair: case S_brdnladder:
+        return "Press > from anywhere to walk here and go down";
+    case S_upstair: case S_upladder: case S_brupstair: case S_brupladder:
+        return "Press < from anywhere to walk here and go up";
+    case S_fountain:
+        return "Drink from it (q) or dip into it (#dip)  -  a gamble";
+    case S_altar:
+        return "Drop items on it to learn if they are cursed";
+    case S_sink:
+        return "Drop a ring in to learn what it does; kick it for surprises";
+    case S_throne:
+        return "Sit on it (#sit)  -  a gamble that can pay off";
+    case S_grave:
+        return "Dig it up for buried loot  -  and its owner";
+    case S_tree:
+        return "Kick it: fruit may fall  -  or bees";
+    case S_vcdoor: case S_hcdoor:
+        return "Click to open it  -  kick it if it is locked";
+    default:
+        return NULL;
+    }
+}
+
+static void
+vsq_card_draw(const std::string &name)
+{
+    point mp = vulture_get_mouse_pos();
+    Uint32 age = SDL_GetTicks() - vhv_since;
+    const char *hint;
+    std::string title = name;
+    int lh = vulture_get_lineheight(V_FONT_SMALL), bw, bh, bx, by, fade;
+    SDL_Rect rc;
+
+    if (vaim_on || vulture_whatis_active || !vhv_over_map() || name.empty()
+        || age < 160 || !(hint = vsq_hint(vhv.x, vhv.y)))
+        return;
+    fade = age < 280 ? (int) (255 * (age - 160) / 120.0) : 255;
+    title[0] = (char) toupper((unsigned char) title[0]);
+    bw = vulture_text_length(V_FONT_SMALL, title);
+    if (vulture_text_length(V_FONT_SMALL, hint) > bw)
+        bw = vulture_text_length(V_FONT_SMALL, hint);
+    bw += 26;
+    bh = 2 * lh + 14;
+    bx = mp.x + 20, by = mp.y + 24;
+    if (bx + bw > vulture_screen->w - 4)
+        bx = mp.x - 20 - bw;
+    if (by + bh > vulture_screen->h - 4)
+        by = mp.y - 12 - bh;
+    vbox(bx, by, bw, bh, fade * 215 / 255);
+    rc.x = bx, rc.y = by, rc.w = 3, rc.h = bh;
+    SDL_FillRect(vulture_screen, &rc, SDL_MapRGB(vulture_screen->format, 210, 180, 110));
+    if (fade < 120)
+        return;
+    vulture_put_text_shadow(V_FONT_SMALL, title, vulture_screen, bx + 12, by + 6,
+                            SDL_MapRGB(vulture_screen->format, 245, 240, 230),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    vulture_put_text_shadow(V_FONT_SMALL, hint, vulture_screen, bx + 12, by + 6 + lh,
+                            SDL_MapRGB(vulture_screen->format, 170, 190, 215),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+}
+
 /* ground card: what's lying here */
 static std::vector<std::string> vhere_lines;
 static std::string vhere_title;
@@ -3961,6 +4049,10 @@ vselftest(void)
             vulture_set_mouse_pos(mp.x, mp.y);
             vhv = sq;
             vhv_since = SDL_GetTicks() - 1000;
+            if (getenv("VULTURE_SELFTEST_ITEM")) { /* probe: s135 square card */
+                (void) mksobj_at(LONG_SWORD, bx, by, TRUE, FALSE);
+                newsym(bx, by);
+            }
         }
         if (getenv("VULTURE_SELFTEST_DARK")) { /* probe: unlit level + a flash */
             for (x = 1; x < COLNO; x++)
@@ -4116,9 +4208,24 @@ vstatus_scan(void)
         bool fresh = !on_level(&slev, &u.uz), any = false;
         struct monst *m;
 
+        static std::map<unsigned, bool> dozing; /* s135 */
+
         if (fresh) {
             seen.clear();
+            dozing.clear();
             slev = u.uz;
+        }
+        for (m = fmon; m; m = m->nmon) { /* s135: it woke up and saw you */
+            bool z;
+
+            if (DEADMONSTER(m) || !canspotmon(m) || m->mtame || m->mpeaceful)
+                continue;
+            z = m->msleeping || !m->mcanmove;
+            if (!fresh && dozing.count(m->m_id) && dozing[m->m_id] && !z) {
+                vulture_say_above(m->m_id, m->mx, m->my, "!");
+                vulture_sfx("spotted");
+            }
+            dozing[m->m_id] = z;
         }
         for (m = fmon; m; m = m->nmon)
             if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame && !m->mpeaceful
@@ -5199,6 +5306,8 @@ levelwin::draw()
     vhere_draw(this->abs_x, this->abs_y, this->w, this->h); /* s125 */
     if (isok(vhv.x, vhv.y) && !vaim_on) /* s125: monster hover card */
         vcard_draw(map_data->map_square_description(vhv, 0));
+    if (isok(vhv.x, vhv.y) && !vaim_on) /* s135: item / feature card */
+        vsq_card_draw(map_data->map_square_description(vhv, 0));
 
     /* Restore drawing region */
     vulture_set_draw_region(0, 0, vulture_screen->w - 1,
@@ -5349,6 +5458,8 @@ levelwin::handle_timer_event(window *target, void *result, int time)
 
         if (hm && canspotmon(hm) && !u_at(mappos.x, mappos.y) && !Hallucination)
             return V_EVENT_HANDLED_NOREDRAW; /* s125: hover card instead */
+        if (vsq_hint(mappos.x, mappos.y))
+            return V_EVENT_HANDLED_NOREDRAW; /* s135: square card instead */
     }
     if (target != this && !target->caption.empty())
         vulture_mouse_set_tooltip(target->caption);

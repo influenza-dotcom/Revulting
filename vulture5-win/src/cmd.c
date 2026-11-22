@@ -5704,6 +5704,35 @@ autoexplore_start_search(void)
     set_occupation(vq_search_occ, "searching", 0);
 }
 
+/* s135: plain 's' searches 5 turns (Brogue); a count still works as before */
+void
+vulture_search_more(void)
+{
+    if (!gc.command_count && !gm.multi && !go.occupation) {
+        vq_search_left = 4;
+        set_occupation(vq_search_occ, "searching", 0);
+    }
+}
+
+/* s135: explore reached an item - pick up what auto-pickup wants (Brogue
+   style), and if nothing is left lying there, keep exploring */
+static boolean aex_resume = FALSE;
+
+int
+autoexplore_collect(void)
+{
+    int n;
+
+    svc.context.nopick = 0;
+    n = pickup(1);
+    if (!OBJ_AT(u.ux, u.uy) && !autoexplore_hostile_in_view()
+        && !cmdq_peek(CQ_CANNED)) {
+        aex_resume = TRUE;
+        cmdq_add_ec(CQ_CANNED, doautoexplore);
+    }
+    return n > 0 ? ECMD_TIME : ECMD_OK;
+}
+
 int
 doautoexplore(void)
 {
@@ -5711,8 +5740,9 @@ doautoexplore(void)
     int mode = AEX_FRONTIER;
 
     /* a press by the player (not the chain) starts a fresh run */
-    if (!autoexplore_active)
+    if (!autoexplore_active && !aex_resume)
         autoexplore_legs = 0;
+    aex_resume = FALSE;
     autoexplore_active = FALSE;
 
     if (Blind) {

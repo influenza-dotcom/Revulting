@@ -407,6 +407,8 @@ extern boolean descend_is_up;
 extern coord descend_target;
 /* Vulture mod §49: auto-explore (state read by vulture_qol_pass) */
 extern int doautoexplore(void);
+extern int autoexplore_collect(void);   /* s135 */
+extern void vulture_search_more(void); /* s135 */
 /* Vulture mod s70-71 */
 extern boolean llm_rewrite_line(const char *, char *, size_t, boolean);
 extern void llm_note_speaker(struct monst *, int);

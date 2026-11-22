@@ -959,6 +959,8 @@ vulture_qol_pass(void)
         } else if (autoexplore_mode == AEX_ITEM) {
             /* §55: stop at things worth a look (look_here already ran) */
             autoexplore_active = FALSE;
+            if (flags.pickup && OBJ_AT(u.ux, u.uy)) /* s135 */
+                cmdq_add_ec(CQ_CANNED, autoexplore_collect);
         } else if (autoexplore_mode == AEX_DEADEND) {
             autoexplore_start_search(); /* sets AEX_SEARCHING */
         } else {

@@ -2965,6 +2965,14 @@ What was built:
 - **Probe:** VULTURE_SELFTEST also spawns a jackal next to the hero, so
   the odds can be checked.
 
+### 135. Brogue batch 2: square cards, wake-up "!", explore collects, 5-turn search
+
+- Hovering an item or a dungeon feature (stairs, fountain, altar, sink, throne, grave, tree, closed door, known trap) shows a card: its name plus what you can do with it (`vsq_hint`/`vsq_card_draw` in levelwin.cpp); the plain tooltip is skipped for those squares.
+- A visible hostile that goes from asleep/helpless to awake gets a "!" bubble and the new `spotted` sting (toolchain/make_sfx3.py), tracked per level in the s131 alert block.
+- Auto-explore reaching an item: if auto-pickup is on, the new canned `autoexplore_collect` picks up what the pickup rules want and, when nothing is left on the square, keeps exploring (`aex_resume` keeps the leg count). Items auto-pickup skips still stop it, as before.
+- Plain `s` searches 5 turns (`vulture_search_more`, the shared `vq_search_occ` occupation, Esc or a monster stops it); a typed count works as before.
+- Probe: `VULTURE_SELFTEST_ITEM=1` drops a long sword on the hover square.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
