@@ -3400,6 +3400,20 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   (losehp), best weapon and armour.  Probe VULTURE_SELFTEST_DIE shot the
   window.  (The insertion first split `staticfn` off really_done - fixed.)
 
+### 166. Soak mode; the unseen features confirmed
+
+- `vsoak_tick` (VULTURE_SELFTEST_SOAK, run by scratchpad soak.ps1): plays by
+  itself through real input - tops up HP and food, Tab when an enemy is
+  within 6, otherwise clicks the EXPLORE button, '>' twice when exploring
+  stops moving you, a random step when stuck, Esc on a menu or prompt left
+  up 2.5 s; logs "soak: turn / dlvl" every 30 s.
+- 12 minutes at the player's 1920x1080 settings: no crash, turn 3331,
+  353 lunges, 212 step tweens, 129 step puffs, 7 multi-square glides, 4
+  heavy impacts.  (The bot ended up fighting in one spot on dlvl 2 for the
+  last ten minutes - a limit of the bot.)
+- Probe VULTURE_SELFTEST_PORTAL: a seen magic trap beside the hero; three
+  frames show its sprite's colour and brightness changing - the pulse works.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -3150,6 +3150,79 @@ vprobe_push_key(SDL_Keycode k) /* probe: s145 */
     SDL_PushEvent(&e);
 }
 static void vgs_probe(int stage, const char *dir); /* s145 probe */
+static SDL_Rect vbtn_rect[4];
+
+/* probe: s166 - VULTURE_SELFTEST_SOAK: play by itself, through real input.
+   Tops up HP and food each tick; Tab when an enemy is close, otherwise the
+   EXPLORE button; when exploring stops moving you, '>' twice (walk to the
+   stairs, go down); a menu or prompt that stays up gets Esc.  Logs a status
+   line every 30 s. */
+static void
+vsoak_tick(bool at_map)
+{
+    static Uint32 last = 0, off_map_since = 0, last_log = 0;
+    static int still = 0, lastx = -1, lasty = -1, cycle = 0;
+    Uint32 now = SDL_GetTicks();
+    struct monst *m;
+    bool foe = false;
+
+    if (!getenv("VULTURE_SELFTEST_SOAK") || !u.ux)
+        return;
+    if (!at_map) { /* a menu or prompt: give it 2.5 s, then Esc */
+        if (!off_map_since)
+            off_map_since = now;
+        else if (now - off_map_since > 2500) {
+            vprobe_push_key(SDLK_ESCAPE);
+            off_map_since = now;
+        }
+        return;
+    }
+    off_map_since = 0;
+    if (now - last < 220 || vanim_input_waiting())
+        return;
+    last = now;
+    u.uhp = u.uhpmax;
+    if (Upolyd)
+        u.mh = u.mhmax;
+    u.uhunger = 900;
+    if (now - last_log > 30000) {
+        last_log = now;
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "soak: turn %ld dlvl %d at %d,%d\n",
+                          svm.moves, (int) depth(&u.uz), u.ux, u.uy);
+    }
+    for (m = fmon; m; m = m->nmon)
+        if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame && !m->mpeaceful
+            && distmin(u.ux, u.uy, m->mx, m->my) <= 6)
+            foe = true;
+    if (u.ux == lastx && u.uy == lasty)
+        still++;
+    else
+        still = 0;
+    lastx = u.ux, lasty = u.uy;
+    cycle++;
+    if (foe && still < 12) {
+        vprobe_push_key(SDLK_TAB);
+    } else if (still >= 8) { /* exploring has stopped: head down */
+        vprobe_push_key(SDLK_GREATER);
+        vprobe_push_key(SDLK_GREATER);
+        if (still > 30) { /* stuck somewhere: a random step */
+            static const SDL_Keycode ks[4] = { SDLK_h, SDLK_j, SDLK_k, SDLK_l };
+
+            vprobe_push_key(ks[cycle & 3]);
+        }
+    } else if (vbtn_rect[3].w) { /* the EXPLORE button, clicked for real */
+        SDL_Event e;
+
+        memset(&e, 0, sizeof e);
+        vulture_set_mouse_pos(vbtn_rect[3].x + 4, vbtn_rect[3].y + 4);
+        e.type = SDL_MOUSEBUTTONDOWN, e.button.button = SDL_BUTTON_LEFT;
+        e.button.state = SDL_PRESSED, e.button.x = vbtn_rect[3].x + 4, e.button.y = vbtn_rect[3].y + 4;
+        e.button.clicks = 1;
+        SDL_PushEvent(&e);
+        e.type = SDL_MOUSEBUTTONUP, e.button.state = SDL_RELEASED;
+        SDL_PushEvent(&e);
+    }
+}
 static void vaim_probe(int stage, const char *dir); /* s156 probe */
 static Uint32 vpause_probe_t = 0; /* s145 probe: shoot the pause menu */
 static void vl_relief_set(bool on); /* s145 */
@@ -3174,6 +3247,7 @@ vulture_idle_bob(bool at_map)
         snprintf(pp, sizeof pp, "%s\\selftest_pause.bmp", getenv("VULTURE_SELFTEST"));
         SDL_SaveBMP(vulture_screen, pp);
     }
+    vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
         return;
@@ -6027,6 +6101,31 @@ vselftest(void)
             vision_recalc(0);
             vl_flash(u.ux - 3, u.uy, 1.0f, 0.6f, 0.3f, 0.9f, 2.5f, 60000);
         }
+        if (getenv("VULTURE_SELFTEST_PORTAL")) { /* probe: s166 a magic trap you can see */
+            int dd;
+            static const int ddx[8] = { 1, -1, 0, 0, 1, 1, -1, -1 }, ddy[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
+
+            for (dd = 0; dd < 8; dd++) {
+                int tx2 = u.ux + ddx[dd], ty2 = u.uy + ddy[dd];
+                struct trap *tr;
+
+                if (isok(tx2, ty2) && levl[tx2][ty2].typ == ROOM && !t_at(tx2, ty2)
+                    && !svl.level.objects[tx2][ty2] && !m_at(tx2, ty2)
+                    && (tr = maketrap(tx2, ty2, MAGIC_TRAP)) != 0) {
+                    FILE *pf;
+                    char pp[700];
+
+                    tr->tseen = 1;
+                    newsym(tx2, ty2);
+                    snprintf(pp, sizeof pp, "%s\\portal.txt", dir);
+                    if ((pf = fopen(pp, "w")) != 0) {
+                        fprintf(pf, "trap at %d,%d hero %d,%d\n", tx2, ty2, u.ux, u.uy);
+                        fclose(pf);
+                    }
+                    break;
+                }
+            }
+        }
         if (getenv("VULTURE_SELFTEST_TELE")) { /* probe: s163 a dragon lined up with you */
             int dd;
             static const int ddx[8] = { 1, -1, 0, 0, 1, 1, -1, -1 }, ddy[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
@@ -8355,8 +8454,7 @@ vpause_menu(void *result)
     return true;
 }
 
-/* the three buttons beside the ability bar */
-static SDL_Rect vbtn_rect[4];
+/* the three buttons beside the ability bar (vbtn_rect is defined above, s166) */
 static const char *const vbtn_name[4] = { "FIGHT", "A-MOVE", "REST", "EXPLORE" };
 static const char *const vbtn_key[4] = { "Tab", "S-A", "F5", "" };
 
