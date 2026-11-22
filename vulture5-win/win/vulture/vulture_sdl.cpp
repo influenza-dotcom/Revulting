@@ -31,6 +31,8 @@ Uses SDL 2.
 
 #include "date.h"
 
+int vulture_has_focus = 1; /* s140: the game window has input focus */
+
 
 /* Definitions */
 
@@ -693,10 +695,12 @@ int vulture_handle_global_event(SDL_Event * event)
 					vulture_refresh();
 					break;
 				case SDL_WINDOWEVENT_FOCUS_GAINED:
+					vulture_has_focus = 1; /* s140: real-time pauses without it */
 					vulture_focus_mute(0); /* s64 */
 					vulture_refresh();
 					break;
 				case SDL_WINDOWEVENT_FOCUS_LOST:
+					vulture_has_focus = 0; /* s140 */
 					vulture_focus_mute(1); /* s64: alt-tabbed away */
 					break;
 				case SDL_WINDOWEVENT_ENTER:

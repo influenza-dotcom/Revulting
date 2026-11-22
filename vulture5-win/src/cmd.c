@@ -258,6 +258,30 @@ cmdq_add_ec(int q, int (*fn)(void))
 
     tmp->typ = CMDQ_EXTCMD;
     tmp->ec_entry = ext_func_tab_from_func(fn);
+    if (!tmp->ec_entry && fn) {
+        /* s140: the Vulture interface queues its own helpers (auto-explore
+           pickup, altar test, real-time turns...) which aren't in
+           extcmdlist; give each a table entry of its own instead of letting
+           rhack() drop the command with a beep */
+        static struct ext_func_tab vq_synth[24];
+        static int vq_nsynth = 0;
+        int i;
+
+        for (i = 0; i < vq_nsynth; i++)
+            if (vq_synth[i].ef_funct == fn)
+                break;
+        if (i == vq_nsynth && vq_nsynth < 24) {
+            vq_synth[i].key = 0;
+            vq_synth[i].ef_txt = "vulture-action";
+            vq_synth[i].ef_desc = "an action queued by the Vulture interface";
+            vq_synth[i].ef_funct = fn;
+            vq_synth[i].flags = 0;
+            vq_synth[i].f_text = (const char *) 0;
+            vq_nsynth++;
+        }
+        if (i < vq_nsynth)
+            tmp->ec_entry = &vq_synth[i];
+    }
     tmp->next = NULL;
 
     while (cq && cq->next)

@@ -212,6 +212,12 @@ void vulture_event_dispatcher(void * result, int resulttype, window * topwin)
 		/* s130: auto-fight / attack-move / rest take their next turn */
 		if (at_map && vulture_auto_step(result))
 			return;
+		{ /* s140: real-time modes pass a turn when you stand idle */
+			extern bool vulture_rt_step(void *result);
+
+			if (at_map && vulture_rt_step(result))
+				return;
+		}
 
 		/* Get next event OR wait 100ms (50 while something bobs) */
 		vulture_wait_event(&event, vulture_idle_wait_ms(at_map));

@@ -2557,6 +2557,9 @@ vulture_idle_wait_ms(bool at_map)
 /* one idle frame for bobbing, breathing and combat effects (called from
    the input loop while the map waits for a command) */
 static void vselftest(void); /* s126 probe */
+static long vrt_probe_moves0 = 0; /* s140 probe */
+static int vrt_get(void);
+static void vrt_probe_dump(FILE *f);
 extern "C" void vulture_search_fx(void); /* s136 */
 
 void
@@ -3055,6 +3058,7 @@ vui_hover_sfx(int id)
  *  - Ground card: "Things that are here" shows as a card beside the map
  *    instead of a window you have to dismiss.
  */
+static bool vquiet_search = false;  /* s140: resting - no search pulse/ping */
 static point vhv = { -1, -1 };     /* map square under the pointer */
 static Uint32 vhv_since = 0;       /* when the pointer settled there */
 static bool vaim_on = false;       /* a direction prompt is up */
@@ -4649,6 +4653,8 @@ vselftest(void)
         t0 = SDL_GetTicks();
     if (SDL_GetTicks() - t0 < 1500 + 700u * stage)
         return;
+    if (stage == 0)
+        vrt_probe_moves0 = svm.moves; /* probe: s140 */
     switch (stage) {
     case 0: {
         struct obj *o;
@@ -4695,7 +4701,7 @@ vselftest(void)
             vision_recalc(0);
             vl_flash(u.ux - 3, u.uy, 1.0f, 0.6f, 0.3f, 0.9f, 2.5f, 60000);
         }
-        if (getenv("VULTURE_SELFTEST")) { /* probe: a hostile to hover (odds) */
+        if (getenv("VULTURE_SELFTEST") && !getenv("VULTURE_SELFTEST_NOJACKAL")) { /* probe: a hostile to hover (odds) */
             coord cc;
 
             if (enexto(&cc, u.ux, u.uy, &mons[PM_JACKAL])) {
@@ -4824,6 +4830,18 @@ vselftest(void)
         }
         break;
     case 4:
+        if (getenv("VULTURE_SELFTEST_RT")) { /* probe: s140 turns passing */
+            char fp[700];
+            FILE *f;
+
+            snprintf(fp, sizeof fp, "%s\\rt.txt", dir);
+            if ((f = fopen(fp, "w")) != 0) {
+                fprintf(f, "mode=%d moves_start=%ld moves_now=%ld hp=%d\n", vrt_get(),
+                        vrt_probe_moves0, svm.moves, u.uhp);
+                vrt_probe_dump(f);
+                fclose(f);
+            }
+        }
         if (vulture_aim_mode == 3) {
             levwin->force_redraw();
             ROOTWIN->draw_windows();
@@ -5119,7 +5137,7 @@ vulture_search_fx(void)
 {
     vfx_ent e;
 
-    if (!levwin || !u.ux)
+    if (!levwin || !u.ux || vquiet_search)
         return;
     memset(&e, 0, sizeof e);
     e.kind = 8, e.x = u.ux, e.y = u.uy, e.t0 = SDL_GetTicks(), e.dur = 700;
@@ -5358,6 +5376,7 @@ vauto_stop(const char *why)
     if (vauto_mode != VAUTO_NONE && why)
         pline("%s", why);
     vauto_mode = VAUTO_NONE;
+    vquiet_search = false; /* s140 */
 }
 
 static void
@@ -5368,6 +5387,199 @@ vauto_start(int mode, int tx, int ty)
     vauto_moves = -1;
     vauto_idle = 0;
     vulture_sfx(mode == VAUTO_REST ? "rest_start" : "amove_go"); /* s131 */
+    vquiet_search = mode == VAUTO_REST; /* s140: rest quietly */
+}
+
+/* ---- s140: time modes ----
+   0 turn-based (classic), 1 real-time, 2 real-time until combat (default).
+   While the map waits for a command and you stand idle, real-time passes a
+   turn every VRT_MS (a plain wait: no search, no safe_wait prompt).  Mode 2
+   stops ticking while an awake hostile is in view or just after you were
+   hurt, and resumes a moment after the fight.  Nothing ticks inside menus,
+   prompts, farlook, multi-turn actions or with the window unfocused.
+   The choice is kept per Windows user in timemode.txt. */
+#define VRT_MS 650
+#define VRT_RESUME_MS 1200
+extern int vulture_has_focus;
+static int vrt_mode = -1;
+static Uint32 vrt_last_tick = 0, vrt_last_call = 0, vrt_combat_until = 0;
+static int vrt_calls = 0, vrt_ticks = 0; /* probe counters */
+static long vrt_last_moves = -1;
+static int vrt_last_hp = -1;
+static SDL_Rect vrt_rect = { 0, 0, 0, 0 };
+static const char *const vrt_names[3] = { "Turn-based", "Real-time",
+                                          "Real-time, turn-based in combat" };
+
+static std::string
+vrt_path(void)
+{
+    const char *la = getenv("LOCALAPPDATA");
+    char buf[700];
+
+    snprintf(buf, sizeof buf, "%s\\NetHack\\5.0\\timemode.txt", la ? la : ".");
+    return buf;
+}
+
+static int
+vrt_get(void)
+{
+    if (vrt_mode < 0) {
+        FILE *f = fopen(vrt_path().c_str(), "r");
+        int m = 2;
+
+        if (f) {
+            if (fscanf(f, "%d", &m) != 1 || m < 0 || m > 2)
+                m = 2;
+            fclose(f);
+        }
+        vrt_mode = m;
+    }
+    return vrt_mode;
+}
+
+static void
+vrt_cycle(void)
+{
+    FILE *f;
+
+    vrt_mode = (vrt_get() + 1) % 3;
+    if ((f = fopen(vrt_path().c_str(), "w")) != 0) {
+        fprintf(f, "%d\n", vrt_mode);
+        fclose(f);
+    }
+    vrt_last_tick = SDL_GetTicks();
+    pline("Time mode: %s.", vrt_names[vrt_mode]);
+    vulture_sfx("ui_lock");
+}
+
+/* is there a fight going on (for mode 2)? */
+static bool
+vrt_combat(void)
+{
+    struct monst *m;
+    Uint32 now = SDL_GetTicks();
+    int hp = Upolyd ? u.mh : u.uhp;
+    bool fight = false;
+
+    if (vrt_last_hp >= 0 && hp < vrt_last_hp)
+        fight = true; /* something hurt you */
+    vrt_last_hp = hp;
+    for (m = fmon; m && !fight; m = m->nmon)
+        if (!DEADMONSTER(m) && !m->mtame && !m->mpeaceful && canspotmon(m)
+            && !m->msleeping && m->mcanmove && couldsee(m->mx, m->my)
+            && distmin(u.ux, u.uy, m->mx, m->my) <= 12)
+            fight = true;
+    if (fight)
+        vrt_combat_until = now + VRT_RESUME_MS;
+    return fight || now < vrt_combat_until;
+}
+
+static int
+vrt_wait(void)
+{
+    return ECMD_TIME; /* one turn passes */
+}
+
+bool
+vulture_rt_step(void *result)
+{
+    Uint32 now = SDL_GetTicks();
+    bool gap = now - vrt_last_call > 300; /* we were in a menu or a prompt */
+
+    vrt_last_call = now;
+    vrt_calls++;
+    if (vrt_get() == 0 || !levwin || vulture_whatis_active || vauto_mode != VAUTO_NONE
+        || gm.multi || go.occupation || !u.ux || (Upolyd ? u.mh : u.uhp) <= 0
+        || vaim_on || vulture_aim_mode)
+        return false;
+    if (gap || svm.moves != vrt_last_moves || !vulture_has_focus
+        || vanim_input_waiting()) {
+        vrt_last_moves = svm.moves;
+        vrt_last_tick = now; /* you just acted (or came back): full wait */
+        return false;
+    }
+    if (vrt_mode == 2 && vrt_combat()) {
+        vrt_last_tick = now;
+        return false;
+    }
+    if (now - vrt_last_tick < VRT_MS)
+        return false;
+    vrt_last_tick = now;
+    cmdq_add_ec(CQ_CANNED, vrt_wait);
+    vrt_ticks++;
+    vulture_click_consumed = TRUE;
+    vauto_result(result);
+    return true;
+}
+
+/* probe only: why real-time is (not) ticking */
+static void
+vrt_probe_dump(FILE *f)
+{
+    fprintf(f, "focus=%d combat=%d multi=%d occ=%d aim=%d aimmode=%d whatis=%d auto=%d "
+               "last_call_age=%u input=%d\n",
+            vulture_has_focus, vrt_combat() ? 1 : 0, gm.multi, go.occupation ? 1 : 0,
+            vaim_on ? 1 : 0, vulture_aim_mode, vulture_whatis_active ? 1 : 0, vauto_mode,
+            (unsigned) (SDL_GetTicks() - vrt_last_call), vanim_input_waiting() ? 1 : 0);
+    fprintf(f, "calls=%d ticks=%d lastmoves=%ld\n", vrt_calls, vrt_ticks, vrt_last_moves);
+}
+
+/* the pill in the top-left corner: which mode, and the state */
+static void
+vrt_draw(void)
+{
+    const char *lab;
+    Uint8 r, g, b;
+    int lh = vulture_get_lineheight(V_FONT_SMALL), tw, m = vrt_get();
+    Uint32 now = SDL_GetTicks();
+    bool fight = false, run = false;
+    SDL_Rect rc, bar;
+
+    vrt_rect.w = 0;
+    if (!u.ux || !levwin)
+        return;
+    if (m == 2) {
+        fight = vrt_combat_until && now < vrt_combat_until;
+        if (!fight) {
+            struct monst *mm;
+
+            for (mm = fmon; mm; mm = mm->nmon)
+                if (!DEADMONSTER(mm) && !mm->mtame && !mm->mpeaceful && canspotmon(mm)
+                    && !mm->msleeping && mm->mcanmove && couldsee(mm->mx, mm->my)
+                    && distmin(u.ux, u.uy, mm->mx, mm->my) <= 12)
+                    fight = true;
+        }
+    }
+    if (m == 0)
+        lab = "TURN-BASED", r = 170, g = 170, b = 180;
+    else if (!vulture_has_focus)
+        lab = "PAUSED", r = 170, g = 170, b = 180;
+    else if (fight)
+        lab = "COMBAT  -  TURN-BASED", r = 255, g = 120, b = 80;
+    else
+        lab = "REAL-TIME", r = 120, g = 225, b = 150, run = true;
+    tw = vulture_text_length(V_FONT_SMALL, lab);
+    rc.x = 8, rc.y = 8, rc.w = tw + 18, rc.h = lh + 7;
+    vbox(rc.x, rc.y, rc.w, rc.h, 190);
+    vulture_put_text_shadow(V_FONT_SMALL, lab, vulture_screen, rc.x + 9, rc.y + 2,
+                            SDL_MapRGB(vulture_screen->format, r, g, b),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    bar.x = rc.x, bar.y = rc.y + rc.h - 2, bar.h = 2, bar.w = rc.w;
+    SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, r / 3, g / 3, b / 3));
+    if (run && vrt_last_tick) { /* time until the next turn passes */
+        Uint32 el = now - vrt_last_tick;
+
+        bar.w = (Uint16) (rc.w * (el > VRT_MS ? VRT_MS : el) / VRT_MS);
+        SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, r, g, b));
+    }
+    vrt_rect = rc;
+}
+
+static bool
+vrt_hit(int mx, int my)
+{
+    return vrt_rect.w && mx >= vrt_rect.x && mx < vrt_rect.x + vrt_rect.w
+           && my >= vrt_rect.y && my < vrt_rect.y + vrt_rect.h;
 }
 
 /* the input loop asks this while the map waits for a command: queue the
@@ -6327,6 +6539,7 @@ levelwin::draw()
     vhb_draw(this->abs_x, this->abs_y, this->w, this->h);   /* s126 */
     vbtn_draw();                                            /* s130 */
     vstealth_draw();                                        /* s137 */
+    vrt_draw();                                             /* s140 */
     vhere_draw(this->abs_x, this->abs_y, this->w, this->h); /* s125 */
     if (isok(vhv.x, vhv.y) && !vaim_on) /* s125: monster hover card */
         vcard_draw(map_data->map_square_description(vhv, 0));
@@ -6472,6 +6685,13 @@ levelwin::handle_timer_event(window *target, void *result, int time)
         }
         if (vmp_hit(mp.x, mp.y) >= 0)
             return V_EVENT_HANDLED_NOREDRAW;
+        if (vrt_hit(mp.x, mp.y)) { /* s140 */
+            std::string t = std::string("Time mode: ") + vrt_names[vrt_get()]
+                            + "\nClick or press Pause to change";
+
+            vulture_mouse_set_tooltip(t);
+            return V_EVENT_HANDLED_NOREDRAW;
+        }
         if (vstealth_hit(mp.x, mp.y)) { /* s137 */
             Uint8 r, g, b;
             std::string why;
@@ -6690,6 +6910,12 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
     }
+    if (vrt_hit(mouse.x, mouse.y)) { /* s140: click the pill to change mode */
+        if (button == SDL_BUTTON_LEFT)
+            vrt_cycle();
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+    }
     {
         int bh = vbtn_hit(mouse.x, mouse.y), ph = vmp_hit(mouse.x, mouse.y);
 
@@ -6832,6 +7058,11 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
      * clamp.  Same placement rationale as F7 (level window only, so it cannot
      * fire inside a menu or a text prompt; no userconfig rewrite - persistence
      * stays with the Ctrl+Shift+O menu). */
+    case SDLK_PAUSE: /* s140: cycle the time mode */
+        vrt_cycle();
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+
     case SDLK_F9: /* s133: dynamic lighting on/off */
         vl_on = !vl_on;
         pline("Dynamic lighting %s.", vl_on ? "on" : "off");
