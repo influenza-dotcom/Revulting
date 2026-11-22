@@ -2624,6 +2624,30 @@ zap_ok(struct obj *obj)
 }
 
 /* #zap command, 'z' (or 'y' if numbed_pad==-1) */
+/* s138: aim previews.  Only for a ray the hero knows is a ray. */
+int vulture_aim_mode = 0, vulture_aim_dmg = 0;
+
+int
+vulture_aim_end(int r)
+{
+    vulture_aim_mode = 0;
+    return r;
+}
+
+int
+vulture_getdir_ray(int otyp, boolean known)
+{
+    vulture_aim_mode = 0;
+    if (known && objects[otyp].oc_dir == RAY) {
+        if (otyp >= WAN_MAGIC_MISSILE && otyp <= WAN_LIGHTNING)
+            vulture_aim_mode = 1, vulture_aim_dmg = otyp - WAN_MAGIC_MISSILE;
+        else if (otyp >= SPE_MAGIC_MISSILE && otyp <= SPE_FINGER_OF_DEATH)
+            vulture_aim_mode = (otyp == SPE_FIREBALL) ? 2 : 1,
+            vulture_aim_dmg = otyp - SPE_MAGIC_MISSILE;
+    }
+    return vulture_aim_end(getdir((char *) 0));
+}
+
 int
 dozap(void)
 {
@@ -2651,7 +2675,9 @@ dozap(void)
         /* 'obj' is gone; skip update_inventory() because
            backfire() -> useupall() -> freeinv() did it */
         return ECMD_TIME;
-    } else if (need_dir && !getdir((char *) 0)) {
+    } else if (need_dir
+               && !vulture_getdir_ray(obj->otyp,
+                                      objects[obj->otyp].oc_name_known)) { /* s138 */
         if (!Blind)
             pline("%s glows and fades.", The(xname(obj)));
         /* make him pay for knowing !NODIR */

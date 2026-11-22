@@ -1431,7 +1431,9 @@ spelleffects(int spell_otyp, boolean atme, boolean force)
     case SPE_FIREBALL:
     case SPE_CONE_OF_COLD:
         if (role_skill >= P_SKILLED) {
-            if (throwspell()) {
+            vulture_aim_mode = 3; /* s138: preview the blast */
+            vulture_aim_dmg = otyp - SPE_MAGIC_MISSILE;
+            if (vulture_aim_end(throwspell())) {
                 cc.x = u.dx;
                 cc.y = u.dy;
                 n = rnd(8) + 1;
@@ -1497,7 +1499,7 @@ spelleffects(int spell_otyp, boolean atme, boolean force)
             }
             if (atme) {
                 u.dx = u.dy = u.dz = 0;
-            } else if (!getdir((char *) 0)) {
+            } else if (!vulture_getdir_ray(otyp, TRUE)) { /* s138 */
                 /* getdir cancelled, re-use previous direction */
                 /*
                  * FIXME:  reusing previous direction only makes sense

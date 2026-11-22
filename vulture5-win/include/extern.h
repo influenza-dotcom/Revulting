@@ -416,6 +416,12 @@ extern void vulture_backstab(int, int);
 extern void vulture_noise(int, int, int);
 extern void vulture_heard(unsigned);
 extern void vulture_room_sleepers(int, int, int);
+/* s138: what is being aimed, so the interface can preview it
+   0 none, 1 ray (bounces), 2 ray that explodes (unskilled fireball),
+   3 targeted 3x3 blast (skilled fireball / cone of cold) */
+extern int vulture_aim_mode, vulture_aim_dmg;
+extern int vulture_getdir_ray(int, boolean);
+extern int vulture_aim_end(int);
 extern void vulture_search_more(void); /* s135 */
 /* Vulture mod s70-71 */
 extern boolean llm_rewrite_line(const char *, char *, size_t, boolean);

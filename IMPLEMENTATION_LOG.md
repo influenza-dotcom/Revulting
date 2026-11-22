@@ -2996,6 +2996,15 @@ Audit (vanilla rules, unchanged): `disturb()` wakes a sleeper that can see you w
 - Sleepers are opportunities, not alarms: the new-hostile alert plays a soft `sleeper_spot` cue for them; auto-explore says "A sleeping X is in view - sneak past it or strike first."; FIGHT/Tab announces "Sneak attack on the sleeping X!".
 - toolchain/make_sfx5.py: silent_kill, backstab, sleeper_spot, wake_q. Probe: `VULTURE_SELFTEST_SLEEP=1`.
 
+### 138. Preview area effects before casting
+
+Only for effects the hero knows (an unidentified wand gets the plain aim line, so nothing leaks). `vulture_aim_mode`/`vulture_aim_dmg` (zap.c) are set around the prompt: `vulture_getdir_ray()` wraps getdir in `dozap` and in `spelleffects`; the skilled fireball / cone of cold branch sets mode 3 around `throwspell()` (cleared by `vulture_aim_end`).
+
+- Rays (mode 1: magic missile, fire, cold, sleep, death, lightning; wand or spell): `vray_path` follows the ray over KNOWN ground only (unexplored squares end the preview: "Beyond that: unexplored"), bouncing with a deterministic copy of zap.c's `bounce_dir` (the 1-in-75 bounce-back and the corner coin flip are luck). Squares are outlined in the damage colour, solid to 7, fading to 13 (range is rn1(7,7)). Rings on everything it reaches; card: what it is, "Hits: ...", "Careful: your kitten is in the way!", "It bounces back at you!".
+- Unskilled fireball (mode 2): flies without bouncing and bursts 3x3 at 7-13 or before the first obstacle; every square it can burst over is outlined (bright when the wall makes it certain).
+- Skilled fireball / cone of cold (mode 3, getpos): the 3x3 core at the pointer (bright) and the 5x5 spill-over ring (faint) - 2-9 bursts, later ones re-centred within 1. Warnings: over 10 away (dissipates), unseen / wall spot (mind won't lock on), you in the blast, a spill-over can reach you, a friend in the core or spill. Hover cards and the travel path stay hidden meanwhile.
+- Probe: `VULTURE_SELFTEST_AOE=1` (selftest_aim = fire ray at a hostile, selftest_blast = skilled fireball). Note: probe frames can show a panned camera - the probe parks the mouse near the screen edge and edge-scroll moves the view (that was log 136's "black frame").
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

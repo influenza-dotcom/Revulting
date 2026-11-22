@@ -3224,7 +3224,7 @@ vpath_draw(int cx, int cy, int vx, int vy)
     double ph;
     char num[16];
 
-    if (vaim_on || !isok(vhv.x, vhv.y) || u_at(vhv.x, vhv.y)
+    if (vaim_on || vulture_aim_mode == 3 || !isok(vhv.x, vhv.y) || u_at(vhv.x, vhv.y)
         || svc.context.travel || svc.context.run || gm.multi
         || vulture_whatis_active || u.uswallow || !vhv_over_map())
         return;
@@ -3276,6 +3276,375 @@ vpath_draw(int cx, int cy, int vx, int vy)
                             SDL_MapRGB(vulture_screen->format, 0, 0, 0));
 }
 
+/* ---- s138: preview area effects before you commit ---- */
+static void vbox(int x, int y, int w, int h, int alpha);
+
+static const Uint8 vzc[6][3] = { { 170, 200, 255 }, { 255, 140, 50 }, { 130, 220, 255 },
+                                 { 200, 150, 255 }, { 190, 90, 255 }, { 255, 250, 160 } };
+static const char *const vzn[6] = { "Magic missile", "Fire", "Frost", "Sleep",
+                                    "Death", "Lightning" };
+
+/* screen offsets of one map step in x and in y (follows view rotation) */
+static void
+vtile_axes(int cx, int cy, int vx, int vy, double *ax, double *ay, double *bx, double *by)
+{
+    int x0, y0, x1, y1, x2, y2, hx = u.ux, hy = u.uy;
+
+    vfx_square_screen(hx, hy, cx, cy, vx, vy, &x0, &y0);
+    vfx_square_screen(hx + 1, hy, cx, cy, vx, vy, &x1, &y1);
+    vfx_square_screen(hx, hy + 1, cx, cy, vx, vy, &x2, &y2);
+    *ax = x1 - x0, *ay = y1 - y0, *bx = x2 - x0, *by = y2 - y0;
+}
+
+/* a floor tile outlined (and faintly filled) in a colour */
+static void
+vtile_mark(int x, int y, Uint8 r, Uint8 g, Uint8 b, int alpha, int cx, int cy, int vx,
+           int vy)
+{
+    double ax, ay, bx, by, px[4], py[4];
+    int sx, sy, k;
+    vfx_ent e;
+
+    if (!isok(x, y))
+        return;
+    vtile_axes(cx, cy, vx, vy, &ax, &ay, &bx, &by);
+    vfx_square_screen(x, y, cx, cy, vx, vy, &sx, &sy);
+    memset(&e, 0, sizeof e);
+    e.r = r, e.g = g, e.b = b;
+    for (k = 0; k < 4; k++) {
+        double s = (k == 0 || k == 3) ? -0.46 : 0.46, t = (k < 2) ? -0.46 : 0.46;
+
+        px[k] = sx + s * ax + t * bx, py[k] = sy + s * ay + t * by;
+    }
+    vfx_dline(px[0], py[0], px[1], py[1], e, alpha);
+    vfx_dline(px[1], py[1], px[2], py[2], e, alpha);
+    vfx_dline(px[2], py[2], px[3], py[3], e, alpha);
+    vfx_dline(px[3], py[3], px[0], py[0], e, alpha);
+    for (k = 0; k < 4; k++) /* inner glow */
+        vfx_dline(sx, sy, (sx + px[k]) / 2, (sy + py[k]) / 2, e, alpha / 3);
+}
+
+/* the little card that says, in words, what the effect will do */
+static void
+vaoe_card(const std::vector<std::string> &ln, const std::vector<Uint32> &col)
+{
+    point mp = vulture_get_mouse_pos();
+    int lh = vulture_get_lineheight(V_FONT_SMALL), bw = 0, bh, bx, by;
+    size_t i;
+
+    for (i = 0; i < ln.size(); i++)
+        if (vulture_text_length(V_FONT_SMALL, ln[i]) > bw)
+            bw = vulture_text_length(V_FONT_SMALL, ln[i]);
+    bw += 24, bh = (int) ln.size() * lh + 12;
+    bx = mp.x + 22, by = mp.y + 26;
+    if (bx + bw > vulture_screen->w - 4)
+        bx = mp.x - 22 - bw;
+    if (by + bh > vulture_screen->h - 4)
+        by = mp.y - 14 - bh;
+    vbox(bx, by, bw, bh, 215);
+    for (i = 0; i < ln.size(); i++)
+        vulture_put_text_shadow(V_FONT_SMALL, ln[i], vulture_screen, bx + 12,
+                                by + 6 + (int) i * lh, col[i],
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+}
+
+/* who stands on these squares: hostiles, friends, you */
+static void
+vaoe_victims(const std::vector<point> &sq, std::string *hit, int *nh, std::string *pal,
+             bool *you)
+{
+    size_t i, j;
+    std::vector<struct monst *> done;
+
+    *nh = 0, *you = false;
+    for (i = 0; i < sq.size(); i++) {
+        struct monst *m;
+        bool dup = false;
+
+        if (u_at(sq[i].x, sq[i].y))
+            *you = true;
+        if (!(m = m_at(sq[i].x, sq[i].y)) || !canspotmon(m) || u_at(sq[i].x, sq[i].y))
+            continue;
+        for (j = 0; j < done.size(); j++)
+            if (done[j] == m)
+                dup = true;
+        if (dup)
+            continue; /* a bounce passing it twice is still one victim */
+        done.push_back(m);
+        if (m->mtame || m->mpeaceful) {
+            if (pal->empty())
+                *pal = (m->mtame ? "your " : "the peaceful ")
+                       + std::string(pmname(m->data, Mgender(m)));
+        } else {
+            if (*nh < 3)
+                *hit += (*nh ? ", " : "") + std::string(pmname(m->data, Mgender(m)));
+            ++*nh;
+        }
+    }
+}
+
+/* deterministic copy of zap.c's bounce_dir (the 1-in-75 bounce-back and
+   the coin flip on corners are luck, the preview takes the usual case) */
+static void
+vray_bounce(int sx, int sy, int *dx, int *dy)
+{
+    int lsx = sx - *dx, lsy = sy - *dy, bounce = 0;
+
+    if (!*dx || !*dy) {
+        *dx = -*dx, *dy = -*dy;
+        return;
+    }
+    if (isok(sx, lsy) && ZAP_POS(levl[sx][lsy].typ) && !closed_door(sx, lsy)
+        && (IS_ROOM(levl[sx][lsy].typ)
+            || (isok(sx + *dx, lsy) && ZAP_POS(levl[sx + *dx][lsy].typ))))
+        bounce = 1;
+    if (!bounce && isok(lsx, sy) && ZAP_POS(levl[lsx][sy].typ) && !closed_door(lsx, sy)
+        && (IS_ROOM(levl[lsx][sy].typ)
+            || (isok(lsx, sy + *dy) && ZAP_POS(levl[lsx][sy + *dy].typ))))
+        bounce = 2;
+    if (bounce == 0)
+        *dx = -*dx, *dy = -*dy;
+    else if (bounce == 1)
+        *dy = -*dy;
+    else
+        *dx = -*dx;
+}
+
+/* follow a ray from the hero up to 13 squares over ground the hero knows;
+   explode = an unskilled fireball (stops before the first obstacle) */
+static int
+vray_path(int dx, int dy, bool explode, point *pts, int *steps, int *stop)
+{
+    int x = u.ux, y = u.uy, step, n = 0;
+
+    *stop = 0;
+    for (step = 1; step <= 13; step++) {
+        x += dx, y += dy;
+        if (!isok(x, y) || !levl[x][y].seenv) {
+            *stop = -step; /* into the unknown */
+            break;
+        }
+        if (!ZAP_POS(levl[x][y].typ) || closed_door(x, y)) {
+            if (explode) {
+                *stop = step;
+                break;
+            }
+            vray_bounce(x, y, &dx, &dy);
+            continue;
+        }
+        pts[n].x = x, pts[n].y = y, steps[n++] = step;
+    }
+    return n;
+}
+
+static void
+vray_draw(int sdx, int sdy, int cx, int cy, int vx, int vy)
+{
+    static point pts[16];
+    static int steps[16];
+    int n, i, stop, hx, hy, px, py, sx, sy, d = vulture_aim_dmg % 6, nh;
+    bool fb = vulture_aim_mode == 2, you;
+    Uint8 r = vzc[d][0], g = vzc[d][1], b = vzc[d][2];
+    double ph = SDL_GetTicks() / 120.0;
+    std::vector<point> path, blast;
+    std::vector<std::string> ln;
+    std::vector<Uint32> col;
+    std::string hit, pal;
+    char buf[96];
+
+    n = vray_path(sdx, sdy, fb, pts, steps, &stop);
+    vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &hx, &hy);
+    px = hx, py = hy;
+    for (i = 0; i < n; i++) {
+        int k, a = steps[i] <= 7 ? 230 : 40 + 190 * (13 - steps[i]) / 6;
+        bool jump = i > 0 && distmin(pts[i].x, pts[i].y, pts[i - 1].x, pts[i - 1].y) > 1;
+
+        vfx_square_screen(pts[i].x, pts[i].y, cx, cy, vx, vy, &sx, &sy);
+        if (!jump)
+            for (k = 1; k <= 4; k++) {
+                int qx = px + (sx - px) * k / 4, qy = py + (sy - py) * k / 4;
+                int aa = a * (60 + (int) (40 * (0.5 + 0.5 * sin(ph - (i * 4 + k) * 0.5)))) / 100;
+
+                vfx_glowdot(qx, qy + 1, 0, 0, 0, aa / 2);
+                vfx_glowdot(qx, qy, r, g, b, aa);
+            }
+        px = sx, py = sy;
+        path.push_back(pts[i]);
+        vtile_mark(pts[i].x, pts[i].y, r, g, b, a * 2 / 3, cx, cy, vx, vy);
+    }
+    if (fb && n) { /* where the fireball can burst */
+        int first = -1, j, dx2, dy2;
+
+        if (stop > 0 && stop <= 8)
+            first = n - 1; /* hits a wall before range runs out: certain */
+        else
+            for (j = 0; j < n; j++)
+                if (steps[j] >= 7) {
+                    first = j;
+                    break;
+                }
+        if (first < 0)
+            first = n - 1;
+        for (j = first; j < n; j++)
+            for (dx2 = -1; dx2 <= 1; dx2++)
+                for (dy2 = -1; dy2 <= 1; dy2++) {
+                    point q;
+                    size_t t;
+                    bool dup = false;
+
+                    q.x = pts[j].x + dx2, q.y = pts[j].y + dy2;
+                    for (t = 0; t < blast.size(); t++)
+                        if (blast[t].x == q.x && blast[t].y == q.y)
+                            dup = true;
+                    if (!dup && isok(q.x, q.y))
+                        blast.push_back(q);
+                }
+        for (j = 0; j < (int) blast.size(); j++)
+            vtile_mark(blast[j].x, blast[j].y, r, g, b,
+                       first == n - 1 ? 200 : 120, cx, cy, vx, vy);
+    }
+    { /* rings on everyone it will reach */
+        std::vector<point> all = path;
+
+        all.insert(all.end(), blast.begin(), blast.end());
+        for (i = 0; i < (int) all.size(); i++) {
+            struct monst *m = m_at(all[i].x, all[i].y);
+
+            vfx_square_screen(all[i].x, all[i].y, cx, cy, vx, vy, &sx, &sy);
+            if (u_at(all[i].x, all[i].y))
+                vfx_ringc(sx, sy, 18 + 3 * sin(ph), 255, 60, 50, 240);
+            else if (m && canspotmon(m))
+                vfx_ringc(sx, sy, 15 - 2 * sin(ph),
+                          (m->mtame || m->mpeaceful) ? 255 : 255,
+                          (m->mtame || m->mpeaceful) ? 170 : 70,
+                          (m->mtame || m->mpeaceful) ? 40 : 60, 235);
+        }
+        vaoe_victims(all, &hit, &nh, &pal, &you);
+    }
+    snprintf(buf, sizeof buf, fb ? "Fireball  -  flies 7-13 squares, then bursts 3x3"
+                                 : "%s ray  -  reaches 7-13 squares, bounces off walls",
+             vzn[d]);
+    ln.push_back(buf), col.push_back(SDL_MapRGB(vulture_screen->format, r, g, b));
+    if (nh) {
+        snprintf(buf, sizeof buf, "Hits: %s%s", hit.c_str(), nh > 3 ? ", ..." : "");
+        ln.push_back(buf), col.push_back(SDL_MapRGB(vulture_screen->format, 140, 230, 150));
+    } else {
+        ln.push_back("Nothing hostile in its path");
+        col.push_back(SDL_MapRGB(vulture_screen->format, 170, 170, 170));
+    }
+    if (!pal.empty()) {
+        snprintf(buf, sizeof buf, "Careful: %s is in the way!", pal.c_str());
+        ln.push_back(buf), col.push_back(SDL_MapRGB(vulture_screen->format, 255, 180, 60));
+    }
+    if (you) {
+        ln.push_back(fb ? "You are inside the blast!" : "It bounces back at you!");
+        col.push_back(SDL_MapRGB(vulture_screen->format, 255, 80, 60));
+    }
+    if (stop < 0) {
+        ln.push_back("Beyond that: unexplored");
+        col.push_back(SDL_MapRGB(vulture_screen->format, 150, 150, 160));
+    }
+    vaoe_card(ln, col);
+}
+
+/* skilled fireball / cone of cold: the blast around the chosen square */
+static void
+vblast_draw(int cx, int cy, int vx, int vy)
+{
+    int x = vhv.x, y = vhv.y, dx, dy, d = vulture_aim_dmg % 6, nh, sx, sy;
+    Uint8 r = vzc[d][0], g = vzc[d][1], b = vzc[d][2];
+    double ph = SDL_GetTicks() / 120.0;
+    std::vector<point> core, spill;
+    std::vector<std::string> ln;
+    std::vector<Uint32> col;
+    std::string hit, pal;
+    bool you, far, blind;
+    char buf[96];
+    struct monst *tm;
+
+    if (vulture_aim_mode != 3 || !isok(x, y) || !vhv_over_map())
+        return;
+    far = distmin(u.ux, u.uy, x, y) > 10;
+    blind = (!u_at(x, y) && !cansee(x, y) && (!(tm = m_at(x, y)) || !canspotmon(tm)))
+            || IS_STWALL(levl[x][y].typ);
+    for (dx = -2; dx <= 2; dx++)
+        for (dy = -2; dy <= 2; dy++) {
+            point q;
+
+            q.x = x + dx, q.y = y + dy;
+            if (!isok(q.x, q.y))
+                continue;
+            if (abs(dx) <= 1 && abs(dy) <= 1)
+                core.push_back(q);
+            else
+                spill.push_back(q);
+        }
+    {
+        size_t i;
+        int a = (far || blind) ? 90 : 210;
+
+        for (i = 0; i < spill.size(); i++)
+            vtile_mark(spill[i].x, spill[i].y, r, g, b, a / 3, cx, cy, vx, vy);
+        for (i = 0; i < core.size(); i++)
+            vtile_mark(core[i].x, core[i].y, r, g, b, a, cx, cy, vx, vy);
+        for (i = 0; i < core.size() + spill.size(); i++) {
+            point q = i < core.size() ? core[i] : spill[i - core.size()];
+            struct monst *m = m_at(q.x, q.y);
+
+            vfx_square_screen(q.x, q.y, cx, cy, vx, vy, &sx, &sy);
+            if (u_at(q.x, q.y))
+                vfx_ringc(sx, sy, 18 + 3 * sin(ph), 255, 60, 50, i < core.size() ? 240 : 140);
+            else if (m && canspotmon(m))
+                vfx_ringc(sx, sy, 15 - 2 * sin(ph), 255,
+                          (m->mtame || m->mpeaceful) ? 170 : 70,
+                          (m->mtame || m->mpeaceful) ? 40 : 60, i < core.size() ? 235 : 130);
+        }
+    }
+    vaoe_victims(core, &hit, &nh, &pal, &you);
+    snprintf(buf, sizeof buf, "%s  -  2 to 9 bursts on this 3x3, some spill 1 further",
+             d == 2 ? "Cone of cold" : "Fireball");
+    ln.push_back(buf), col.push_back(SDL_MapRGB(vulture_screen->format, r, g, b));
+    if (far) {
+        ln.push_back("Too far (over 10)  -  the spell will dissipate");
+        col.push_back(SDL_MapRGB(vulture_screen->format, 255, 80, 60));
+    } else if (blind) {
+        ln.push_back("You can't see there  -  your mind won't lock on");
+        col.push_back(SDL_MapRGB(vulture_screen->format, 255, 80, 60));
+    } else if (nh) {
+        snprintf(buf, sizeof buf, "Caught: %s%s", hit.c_str(), nh > 3 ? ", ..." : "");
+        ln.push_back(buf), col.push_back(SDL_MapRGB(vulture_screen->format, 140, 230, 150));
+    } else {
+        ln.push_back("No hostiles in the blast");
+        col.push_back(SDL_MapRGB(vulture_screen->format, 170, 170, 170));
+    }
+    if (!pal.empty() && !far && !blind) {
+        snprintf(buf, sizeof buf, "Careful: %s is in the blast!", pal.c_str());
+        ln.push_back(buf), col.push_back(SDL_MapRGB(vulture_screen->format, 255, 180, 60));
+    }
+    if (!far && !blind && pal.empty()) { /* friends in the spill-over ring */
+        std::string h2, p2;
+        int n2;
+        bool y2;
+
+        vaoe_victims(spill, &h2, &n2, &p2, &y2);
+        if (!p2.empty()) {
+            snprintf(buf, sizeof buf, "A spill-over burst may hit %s", p2.c_str());
+            ln.push_back(buf), col.push_back(SDL_MapRGB(vulture_screen->format, 255, 180, 60));
+        }
+    }
+    if (u_at(x, y)) {
+        ln.push_back("Cast on yourself: you take it all!");
+        col.push_back(SDL_MapRGB(vulture_screen->format, 255, 80, 60));
+    } else if (you && !far && !blind) {
+        ln.push_back("You are inside the blast!");
+        col.push_back(SDL_MapRGB(vulture_screen->format, 255, 80, 60));
+    } else if (!far && !blind && distmin(u.ux, u.uy, x, y) == 2) {
+        ln.push_back("A spill-over burst can reach you");
+        col.push_back(SDL_MapRGB(vulture_screen->format, 255, 180, 60));
+    }
+    vaoe_card(ln, col);
+}
+
 /* the aim line, drawn with the map */
 static void
 vaim_draw(int cx, int cy, int vx, int vy)
@@ -3303,6 +3672,18 @@ vaim_draw(int cx, int cy, int vx, int vy)
     }
     if (!sdx && !sdy) { /* yourself */
         vfx_ringc(hx, hy, 16 + 3 * sin(ph), r, g, b, 220);
+        if (vulture_aim_mode == 1 || vulture_aim_mode == 2) { /* s138 */
+            std::vector<std::string> ln;
+            std::vector<Uint32> col;
+
+            ln.push_back(std::string(vzn[vulture_aim_dmg % 6]) + " - aimed at yourself!");
+            col.push_back(SDL_MapRGB(vulture_screen->format, 255, 80, 60));
+            vaoe_card(ln, col);
+        }
+        return;
+    }
+    if (vulture_aim_mode == 1 || vulture_aim_mode == 2) { /* s138: show the outcome */
+        vray_draw(sdx, sdy, cx, cy, vx, vy);
         return;
     }
     for (k = 1; k <= 13; k++) {
@@ -3406,7 +3787,7 @@ vcard_draw(const std::string &name)
     bool bar;
     SDL_Rect rc;
 
-    if (vaim_on || !isok(vhv.x, vhv.y) || u_at(vhv.x, vhv.y) || Hallucination
+    if (vaim_on || vulture_aim_mode == 3 || !isok(vhv.x, vhv.y) || u_at(vhv.x, vhv.y) || Hallucination
         || vulture_whatis_active || !vhv_over_map() || name.empty())
         return;
     m = m_at(vhv.x, vhv.y);
@@ -3611,7 +3992,7 @@ vsq_card_draw(const std::string &name)
     int lh = vulture_get_lineheight(V_FONT_SMALL), bw, bh, bx, by, fade;
     SDL_Rect rc;
 
-    if (vaim_on || vulture_whatis_active || !vhv_over_map() || name.empty()
+    if (vaim_on || vulture_aim_mode == 3 || vulture_whatis_active || !vhv_over_map() || name.empty()
         || age < 160 || !(hint = vsq_hint(vhv.x, vhv.y)))
         return;
     fade = age < 280 ? (int) (255 * (age - 160) / 120.0) : 255;
@@ -4135,7 +4516,7 @@ vselftest(void)
     struct monst *m;
     int x, y, bx = -1, by = -1, bd = 999;
 
-    if (!dir || !*dir || stage > 3 || !levwin || !u.ux)
+    if (!dir || !*dir || stage > 4 || !levwin || !u.ux)
         return;
     if (!t0)
         t0 = SDL_GetTicks();
@@ -4254,6 +4635,14 @@ vselftest(void)
         snprintf(path, sizeof path, "%s\\selftest_card.bmp", dir);
         SDL_SaveBMP(vulture_screen, path);
         vulture_aim_set(true, u.ux - 6, u.uy - 1);
+        if (getenv("VULTURE_SELFTEST_AOE")) { /* probe: s138 fire ray at a hostile */
+            for (m = fmon; m; m = m->nmon)
+                if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame)
+                    break;
+            vulture_aim_mode = 1, vulture_aim_dmg = 1;
+            if (m)
+                vulture_aim_set(true, u.ux + 6 * sgn(m->mx - u.ux), u.uy + 6 * sgn(m->my - u.uy));
+        }
         break;
     case 3:
         levwin->force_redraw();
@@ -4261,6 +4650,29 @@ vselftest(void)
         snprintf(path, sizeof path, "%s\\selftest_aim.bmp", dir);
         SDL_SaveBMP(vulture_screen, path);
         vulture_aim_set(false, -1, -1);
+        if (getenv("VULTURE_SELFTEST_AOE")) { /* probe: s138 skilled fireball spot */
+            point sq, mp;
+
+            vulture_aim_mode = 3, vulture_aim_dmg = 1;
+            for (m = fmon; m; m = m->nmon)
+                if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame)
+                    break;
+            sq.x = m ? m->mx : u.ux + 2, sq.y = m ? m->my : u.uy;
+            mp = levwin->map_to_mouse(sq);
+            vulture_set_mouse_pos(mp.x, mp.y);
+            vhv = sq;
+        } else {
+            vulture_aim_mode = 0;
+        }
+        break;
+    case 4:
+        if (vulture_aim_mode == 3) {
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            snprintf(path, sizeof path, "%s\\selftest_blast.bmp", dir);
+            SDL_SaveBMP(vulture_screen, path);
+        }
+        vulture_aim_mode = 0;
         break;
     }
     stage++;
@@ -5747,6 +6159,7 @@ levelwin::draw()
     vpath_draw(map_centre_x, map_centre_y, view_x, view_y); /* s125 */
     vmp_mark(map_centre_x, map_centre_y, view_x, view_y);   /* s130 */
     vaim_draw(map_centre_x, map_centre_y, view_x, view_y);  /* s125 */
+    vblast_draw(map_centre_x, map_centre_y, view_x, view_y); /* s138 */
     vzoom_apply(this->abs_x, this->abs_y, this->w, this->h); /* s121 */
     vulture_draw_vignette(this->abs_x, this->abs_y, this->w, this->h); /* s74 */
     vstatus_pulse_draw(this->abs_x, this->abs_y, this->w, this->h); /* s129 */
