@@ -5801,7 +5801,14 @@ doautoexplore(void)
         return ECMD_OK;
     }
     if (!autoexplore_find(&cc, &mode)) {
-        pline("There's nothing left here you can reach to explore.");
+        { /* s142: done - point the way on */
+            stairway *dn = stairway_find_dir(FALSE);
+
+            if (dn && isok(dn->sx, dn->sy) && levl[dn->sx][dn->sy].seenv)
+                pline("Level explored.  Press > to walk to the stairs down.");
+            else
+                pline("There's nothing left here you can reach to explore.");
+        }
         return ECMD_OK;
     }
 

@@ -3033,6 +3033,14 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Traps: the hover hint names the trap and what it does (all 23 types) instead of "A known trap".
 - Probe: `VULTURE_SELFTEST_CODEX=1` writes codex.txt and forces Shift for the card shot.
 
+### 142. Danger preview, explore reasons, first-time tips, real-time speed
+
+- Travel preview (hovering a square): "N can hit you there" (awake hostiles that would be adjacent) and red rings on known traps along the path ("a trap on the way").
+- Auto-explore says why it stopped ("You stop exploring: a jackal is in view." / "...badly hurt.") and, when the level is done and the down stairs are known, "Level explored. Press > to walk to the stairs down."
+- First-time tips: 12 short tips (welcome, sleepers, shops, altars, fountains, hunger, low health, traps, burdened, stairs, unidentified items, real-time), each shown once ever per Windows user (`tips-seen.txt`), one at a time under the time pill for 11 s. Click to close, right-click to turn tips off for good.
+- Real-time speed: right-click the time pill cycles normal 0.65 s / slow 1.0 s / fast 0.4 s per turn (kept as the second number in timemode.txt); the pill tooltip shows mode and speed.
+- Gear sets: not built - wearing armour is multi-turn with prompts and ordering rules (cloak over suit, etc.); needs its own design pass.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

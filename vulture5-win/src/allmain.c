@@ -956,6 +956,21 @@ vulture_qol_pass(void)
         } else if (!arrived || hp_warned || autoexplore_hostile_in_view()
             || cmdq_peek(CQ_CANNED)) {
             autoexplore_active = FALSE;
+            if (hp_warned) /* s142: say why */
+                pline("You stop exploring - you're badly hurt.");
+            else if (autoexplore_hostile_in_view()) {
+                struct monst *em;
+
+                for (em = fmon; em; em = em->nmon)
+                    if (!DEADMONSTER(em) && !em->mpeaceful && !em->mtame
+                        && canspotmon(em) && couldsee(em->mx, em->my))
+                        break;
+                if (em)
+                    pline("You stop exploring: %s is in view.",
+                          x_monnam(em, ARTICLE_A, (em->msleeping || !em->mcanmove)
+                                                      ? "sleeping" : (char *) 0,
+                                   0, FALSE));
+            }
         } else if (autoexplore_mode == AEX_ITEM) {
             /* §55: stop at things worth a look (look_here already ran) */
             autoexplore_active = FALSE;

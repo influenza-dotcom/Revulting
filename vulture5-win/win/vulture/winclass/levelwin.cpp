@@ -3278,6 +3278,41 @@ vpath_draw(int cx, int cy, int vx, int vy)
     vulture_put_text_shadow(V_FONT_SMALL, num, vulture_screen, sx + 16, sy - 20,
                             SDL_MapRGB(vulture_screen->format, 235, 240, 205),
                             SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    { /* s142: danger preview - who can hit you there, traps on the way */
+        struct monst *dm;
+        int threat = 0, traps = 0, ly = sy - 20 + vulture_get_lineheight(V_FONT_SMALL);
+        char wb[64];
+
+        for (dm = fmon; dm; dm = dm->nmon)
+            if (!DEADMONSTER(dm) && !dm->mtame && !dm->mpeaceful && canspotmon(dm)
+                && !dm->msleeping && dm->mcanmove
+                && distmin(dm->mx, dm->my, pts[0].x, pts[0].y) <= 1
+                && !(dm->mx == pts[0].x && dm->my == pts[0].y))
+                threat++;
+        for (i = 1; i < n; i++) {
+            int tg = glyph_at(pts[i].x, pts[i].y);
+
+            if (glyph_is_trap(tg)) {
+                int tx2, ty2;
+
+                vfx_square_screen(pts[i].x, pts[i].y, cx, cy, vx, vy, &tx2, &ty2);
+                vfx_ringc(tx2, ty2, 11, 255, 70, 60, 230);
+                traps++;
+            }
+        }
+        if (threat) {
+            snprintf(wb, sizeof wb, "%d can hit you there", threat);
+            vulture_put_text_shadow(V_FONT_SMALL, wb, vulture_screen, sx + 16, ly,
+                                    SDL_MapRGB(vulture_screen->format, 255, 100, 80),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+            ly += vulture_get_lineheight(V_FONT_SMALL);
+        }
+        if (traps)
+            vulture_put_text_shadow(V_FONT_SMALL, traps > 1 ? "traps on the way" : "a trap on the way",
+                                    vulture_screen, sx + 16, ly,
+                                    SDL_MapRGB(vulture_screen->format, 255, 160, 80),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    }
 }
 
 /* ---- s141: the codex (Pathos-style built-in knowledge, no wiki) ----
@@ -5401,6 +5436,262 @@ vstealth_hit(int mx, int my)
            && my < vsb_rect.y + vsb_rect.h;
 }
 
+/* ---- s142: first-time tips ----
+   One short tip the first time something comes up, once ever per Windows
+   user (tips-seen.txt).  Shown under the time pill; click to dismiss,
+   right-click to turn tips off for good. */
+struct vtip_def {
+    const char *id, *title, *body;
+};
+static const vtip_def vtip_defs[] = {
+    { "welcome", "Welcome",
+      "Click to move, click a monster to attack, right-click for actions.\n"
+      "Hover anything to learn about it - hold Shift on a monster\n"
+      "for its full codex: attacks, resistances, what its corpse does." },
+    { "sleeper", "Sleeping monsters",
+      "z z marks a sleeper. Sneak attacks hit more often - kill it\n"
+      "before it wakes for a SILENT KILL. Stealth keeps them asleep\n"
+      "(see the badge above your portrait)." },
+    { "shop", "Shops",
+      "Pick an item up to see its price. The price narrows down what an\n"
+      "unidentified item can be, and the game remembers it for you.\n"
+      "Pay with p, or right-click yourself." },
+    { "altar", "Altars",
+      "Drop items on an altar to see whether they're cursed.\n"
+      "Standing on one, right-click yourself to test everything at once." },
+    { "fountain", "Fountains",
+      "Drinking from or dipping into a fountain is a gamble: a rare wish,\n"
+      "more often water moccasins, nymphs or a soaking." },
+    { "hungry", "Hunger",
+      "You're hungry - eat soon (e). Hover a corpse to see if it's safe;\n"
+      "corpses go bad after about 30 turns." },
+    { "lowhp", "Low health",
+      "Back off, rest (REST / F5), drink a healing potion, or pray -\n"
+      "prayer usually works in real trouble if you haven't prayed lately." },
+    { "trap", "Traps",
+      "Hover a known trap to see what it does. Click-to-walk steers\n"
+      "around the traps you know about." },
+    { "burdened", "Burdened",
+      "You carry too much and move slower. Hover items to see their\n"
+      "weight and drop what you don't need." },
+    { "stairs", "Stairs",
+      "Press > (or <) from anywhere to walk to the stairs you've found.\n"
+      "EXPLORE maps the level for you first." },
+    { "unknown", "Unidentified items",
+      "Its true name is hidden until you identify it: try it carefully,\n"
+      "check its shop price, or read a scroll of identify." },
+    { "realtime", "Real-time",
+      "Turns pass while you stand still, and it switches to turn-based\n"
+      "when a fight starts. Click the top-left pill or press Pause to change." },
+};
+#define VTIP_N ((int) (sizeof vtip_defs / sizeof vtip_defs[0]))
+static int vtip_state = -1; /* -1 unloaded, 0 on, 1 off */
+static std::map<std::string, bool> vtip_seen;
+static int vtip_cur = -1, vtip_queue[VTIP_N], vtip_nq = 0;
+static Uint32 vtip_born = 0;
+static SDL_Rect vtip_rect = { 0, 0, 0, 0 };
+
+static std::string
+vtip_path(void)
+{
+    const char *la = getenv("LOCALAPPDATA");
+    char buf[700];
+
+    snprintf(buf, sizeof buf, "%s\\NetHack\\5.0\\tips-seen.txt", la ? la : ".");
+    return buf;
+}
+
+static void
+vtip_save(void)
+{
+    FILE *f = fopen(vtip_path().c_str(), "w");
+    std::map<std::string, bool>::iterator it;
+
+    if (!f)
+        return;
+    if (vtip_state == 1)
+        fprintf(f, "OFF\n");
+    for (it = vtip_seen.begin(); it != vtip_seen.end(); ++it)
+        fprintf(f, "%s\n", it->first.c_str());
+    fclose(f);
+}
+
+static void
+vtip_load(void)
+{
+    FILE *f;
+    char ln[64];
+
+    if (vtip_state >= 0)
+        return;
+    vtip_state = 0;
+    if ((f = fopen(vtip_path().c_str(), "r")) == 0)
+        return;
+    while (fgets(ln, sizeof ln, f)) {
+        ln[strcspn(ln, "\r\n")] = 0;
+        if (!strcmp(ln, "OFF"))
+            vtip_state = 1;
+        else if (*ln)
+            vtip_seen[ln] = true;
+    }
+    fclose(f);
+}
+
+static void
+vtip_want(const char *id)
+{
+    int i, k;
+
+    vtip_load();
+    if (vtip_state == 1 || vtip_seen.count(id))
+        return;
+    for (i = 0; i < VTIP_N; i++)
+        if (!strcmp(vtip_defs[i].id, id))
+            break;
+    if (i == VTIP_N || i == vtip_cur)
+        return;
+    for (k = 0; k < vtip_nq; k++)
+        if (vtip_queue[k] == i)
+            return;
+    vtip_seen[id] = true; /* counts as seen once queued */
+    vtip_save();
+    vtip_queue[vtip_nq++] = i;
+}
+
+/* what is going on right now that deserves a tip? (every frame) */
+static void
+vtip_tick(void)
+{
+    static Uint32 next = 0;
+    Uint32 now = SDL_GetTicks();
+    struct monst *m;
+    int x, y, hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax;
+
+    if (!u.ux || now < next || Hallucination)
+        return;
+    next = now + 400;
+    vtip_load();
+    if (vtip_state == 1)
+        return;
+    if (svm.moves < 50)
+        vtip_want("welcome");
+    for (m = fmon; m; m = m->nmon)
+        if (!DEADMONSTER(m) && canseemon(m) && !m->mtame && !m->mpeaceful && m->msleeping) {
+            vtip_want("sleeper");
+            break;
+        }
+    if (vrt_get() != 0) /* s142 */
+        vtip_want("realtime");
+    if (*u.ushops)
+        vtip_want("shop");
+    if (u.uhs >= HUNGRY)
+        vtip_want("hungry");
+    if (hp > 0 && hp * 3 < hpmax)
+        vtip_want("lowhp");
+    if (near_capacity() > UNENCUMBERED)
+        vtip_want("burdened");
+    for (x = u.ux - 6; x <= u.ux + 6; x++)
+        for (y = u.uy - 6; y <= u.uy + 6; y++) {
+            int g, c;
+
+            if (!isok(x, y) || !cansee(x, y))
+                continue;
+            g = glyph_at(x, y);
+            if (glyph_is_trap(g))
+                vtip_want("trap");
+            if (!glyph_is_cmap(g))
+                continue;
+            c = glyph_to_cmap(g);
+            if (c == S_altar)
+                vtip_want("altar");
+            else if (c == S_fountain)
+                vtip_want("fountain");
+            else if (c == S_dnstair || c == S_dnladder)
+                vtip_want("stairs");
+        }
+    {
+        struct obj *o;
+
+        for (o = gi.invent; o; o = o->nobj)
+            if ((o->oclass == POTION_CLASS || o->oclass == SCROLL_CLASS)
+                && !objects[o->otyp].oc_name_known && o->dknown) {
+                vtip_want("unknown");
+                break;
+            }
+    }
+}
+
+static void
+vtip_draw(void)
+{
+    const vtip_def *t;
+    Uint32 now = SDL_GetTicks(), age;
+    int lh = vulture_get_lineheight(V_FONT_SMALL), bw = 0, bh, nl = 1, a;
+    std::string body;
+    size_t p0 = 0, p1;
+
+    vtip_rect.w = 0;
+    if (vtip_cur < 0) {
+        if (!vtip_nq)
+            return;
+        vtip_cur = vtip_queue[0];
+        memmove(vtip_queue, vtip_queue + 1, (size_t) (--vtip_nq) * sizeof vtip_queue[0]);
+        vtip_born = now;
+        vulture_sfx("ui_open");
+    }
+    age = now - vtip_born;
+    if (age > 11000) {
+        vtip_cur = -1;
+        return;
+    }
+    t = &vtip_defs[vtip_cur];
+    body = t->body;
+    while ((p1 = body.find('\n', p0)) != std::string::npos) {
+        if (vulture_text_length(V_FONT_SMALL, body.substr(p0, p1 - p0)) > bw)
+            bw = vulture_text_length(V_FONT_SMALL, body.substr(p0, p1 - p0));
+        p0 = p1 + 1, nl++;
+    }
+    if (vulture_text_length(V_FONT_SMALL, body.substr(p0)) > bw)
+        bw = vulture_text_length(V_FONT_SMALL, body.substr(p0));
+    bw += 26, bh = (nl + 2) * lh + 10;
+    a = age < 250 ? (int) (age * 200 / 250) : age > 10500 ? (int) ((11000 - age) * 200 / 500) : 200;
+    vtip_rect.x = 8, vtip_rect.y = 54, vtip_rect.w = bw, vtip_rect.h = bh;
+    vbox(vtip_rect.x, vtip_rect.y, bw, bh, a);
+    {
+        SDL_Rect bar = { (Sint16) vtip_rect.x, (Sint16) vtip_rect.y, 3, (Uint16) bh };
+
+        SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, 120, 200, 255));
+    }
+    if (a < 100)
+        return;
+    vulture_put_text_shadow(V_FONT_SMALL, std::string("TIP  -  ") + t->title, vulture_screen,
+                            vtip_rect.x + 12, vtip_rect.y + 5,
+                            SDL_MapRGB(vulture_screen->format, 120, 200, 255),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    p0 = 0, nl = 1;
+    while (true) {
+        p1 = body.find('\n', p0);
+        vulture_put_text_shadow(V_FONT_SMALL, body.substr(p0, p1 == std::string::npos ? std::string::npos : p1 - p0),
+                                vulture_screen, vtip_rect.x + 12, vtip_rect.y + 5 + nl * lh,
+                                SDL_MapRGB(vulture_screen->format, 230, 228, 220),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        if (p1 == std::string::npos)
+            break;
+        p0 = p1 + 1, nl++;
+    }
+    vulture_put_text_shadow(V_FONT_SMALL, "click to close  -  right-click: no more tips",
+                            vulture_screen, vtip_rect.x + 12, vtip_rect.y + 5 + (nl + 1) * lh,
+                            SDL_MapRGB(vulture_screen->format, 120, 120, 130),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+}
+
+static bool
+vtip_hit(int mx, int my)
+{
+    return vtip_rect.w && mx >= vtip_rect.x && mx < vtip_rect.x + vtip_rect.w
+           && my >= vtip_rect.y && my < vtip_rect.y + vtip_rect.h;
+}
+
 /* s136: the screen edge flashes red when a blow really lands */
 static void
 vhurt_flash(int dmg, int maxhp)
@@ -5755,7 +6046,10 @@ vauto_start(int mode, int tx, int ty)
    hurt, and resumes a moment after the fight.  Nothing ticks inside menus,
    prompts, farlook, multi-turn actions or with the window unfocused.
    The choice is kept per Windows user in timemode.txt. */
-#define VRT_MS 650
+static int vrt_speed = -1; /* s142: 0 normal, 1 slow, 2 fast */
+static const int vrt_speed_ms[3] = { 650, 1000, 400 };
+static const char *const vrt_speed_nm[3] = { "normal", "slow", "fast" };
+#define VRT_MS (vrt_speed_ms[vrt_speed < 0 ? 0 : vrt_speed])
 #define VRT_RESUME_MS 1200
 extern int vulture_has_focus;
 static int vrt_mode = -1;
@@ -5784,12 +6078,17 @@ vrt_get(void)
         FILE *f = fopen(vrt_path().c_str(), "r");
         int m = 2;
 
+        int sp = 0;
+
         if (f) {
             if (fscanf(f, "%d", &m) != 1 || m < 0 || m > 2)
                 m = 2;
+            if (fscanf(f, "%d", &sp) != 1 || sp < 0 || sp > 2) /* s142 */
+                sp = 0;
             fclose(f);
         }
         vrt_mode = m;
+        vrt_speed = sp;
     }
     return vrt_mode;
 }
@@ -5801,12 +6100,29 @@ vrt_cycle(void)
 
     vrt_mode = (vrt_get() + 1) % 3;
     if ((f = fopen(vrt_path().c_str(), "w")) != 0) {
-        fprintf(f, "%d\n", vrt_mode);
+        fprintf(f, "%d %d\n", vrt_mode, vrt_speed < 0 ? 0 : vrt_speed);
         fclose(f);
     }
     vrt_last_tick = SDL_GetTicks();
     pline("Time mode: %s.", vrt_names[vrt_mode]);
     vulture_sfx("ui_lock");
+}
+
+/* s142: right-click the pill - how fast real-time turns pass */
+static void
+vrt_speed_cycle(void)
+{
+    FILE *f;
+
+    (void) vrt_get();
+    vrt_speed = (vrt_speed + 1) % 3;
+    if ((f = fopen(vrt_path().c_str(), "w")) != 0) {
+        fprintf(f, "%d %d\n", vrt_mode, vrt_speed);
+        fclose(f);
+    }
+    pline("Real-time speed: %s (a turn every %.2f s).", vrt_speed_nm[vrt_speed],
+          vrt_speed_ms[vrt_speed] / 1000.0);
+    vulture_sfx("ui_click");
 }
 
 /* is there a fight going on (for mode 2)? */
@@ -6600,6 +6916,7 @@ levelwin::draw()
     vtw_prepare(view_x, view_y);
     vfx_scan(); /* s85: damage numbers / blood from HP changes */
     vstatus_scan(); /* s129 */
+    vtip_tick();    /* s142 */
     vglint_tick();  /* s136 */
     vamb_tick();    /* s136 */
     map_centre_x += vtw_gx + (int) vpan_px; /* s79: + MMB drag residual */
@@ -6897,6 +7214,7 @@ levelwin::draw()
     vbtn_draw();                                            /* s130 */
     vstealth_draw();                                        /* s137 */
     vrt_draw();                                             /* s140 */
+    vtip_draw();                                            /* s142 */
     vhere_draw(this->abs_x, this->abs_y, this->w, this->h); /* s125 */
     if (isok(vhv.x, vhv.y) && !vaim_on) /* s125: monster hover card */
         vcard_draw(map_data->map_square_description(vhv, 0));
@@ -7044,7 +7362,8 @@ levelwin::handle_timer_event(window *target, void *result, int time)
             return V_EVENT_HANDLED_NOREDRAW;
         if (vrt_hit(mp.x, mp.y)) { /* s140 */
             std::string t = std::string("Time mode: ") + vrt_names[vrt_get()]
-                            + "\nClick or press Pause to change";
+                            + " (" + vrt_speed_nm[vrt_speed < 0 ? 0 : vrt_speed] + " speed)"
+                            + "\nClick or press Pause to change mode\nRight-click to change speed";
 
             vulture_mouse_set_tooltip(t);
             return V_EVENT_HANDLED_NOREDRAW;
@@ -7267,9 +7586,23 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
     }
+    if (vtip_hit(mouse.x, mouse.y)) { /* s142: close the tip / no more tips */
+        if (button == SDL_BUTTON_RIGHT) {
+            vtip_state = 1;
+            vtip_save();
+            vtip_nq = 0;
+            pline("Tips turned off.");
+        }
+        vtip_cur = -1;
+        vulture_sfx("ui_cancel");
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+    }
     if (vrt_hit(mouse.x, mouse.y)) { /* s140: click the pill to change mode */
         if (button == SDL_BUTTON_LEFT)
             vrt_cycle();
+        else if (button == SDL_BUTTON_RIGHT) /* s142 */
+            vrt_speed_cycle();
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
     }
