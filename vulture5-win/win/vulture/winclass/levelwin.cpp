@@ -8328,6 +8328,111 @@ vl_blit_visible(SDL_Surface *layer, int dx, int dy, int mx, int my, int mw, int 
     SDL_BlitSurface(layer, &src, vulture_screen, &dst);
 }
 
+/*
+ * IMPLEMENTATION_LOG s153: the light layer applied straight from its grid.
+ * The coarse grid (vl_low: A = darkness, RGB = tint, one sample every FS px
+ * from (ox, oy)) used to be stretched to a full-screen surface (~7 ms per
+ * rebuild at 1080p) and alpha-blended by SDL over every pixel (~6 ms per
+ * frame).  Now each map row interpolates the grid vertically once, then
+ * walks each cell with running increments: out = d + (tint - d) * A.
+ * Pure black pixels (the void, unlit walls' backs) are skipped - often half
+ * the screen.  Same result as the old stretch + blend.
+ */
+static void
+vl_apply(SDL_Surface *low, int mx, int my, int mw, int mh, int ox, int oy, int FS)
+{
+    SDL_Surface *s = vulture_screen;
+    static std::vector<int> rA, rR, rG, rB;
+    int lw = low->w, lh = low->h, x, y, x0, y0, x1, y1, rs, gs, bs;
+    Uint32 mask;
+
+    if (!s || s->format->BytesPerPixel != 4)
+        return;
+    x0 = mx < 0 ? 0 : mx, y0 = my < 0 ? 0 : my;
+    x1 = mx + mw > s->w ? s->w : mx + mw;
+    y1 = my + mh > s->h ? s->h : my + mh;
+    if (x1 <= x0 || y1 <= y0)
+        return;
+    rs = s->format->Rshift, gs = s->format->Gshift, bs = s->format->Bshift;
+    mask = ~(((Uint32) 255 << rs) | ((Uint32) 255 << gs) | ((Uint32) 255 << bs));
+    rA.resize(lw), rR.resize(lw), rG.resize(lw), rB.resize(lw);
+    if (SDL_MUSTLOCK(s))
+        SDL_LockSurface(s);
+    SDL_LockSurface(low);
+    for (y = y0; y < y1; y++) {
+        int fy = y - oy, j = fy >= 0 ? fy / FS : -1, t = fy >= 0 ? ((fy % FS) << 8) / FS : 0, i;
+        Uint32 *row = (Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch);
+        const Uint32 *g0, *g1;
+
+        if (j < 0)
+            j = 0, t = 0;
+        if (j >= lh - 1)
+            j = lh - 2, t = 256;
+        g0 = (const Uint32 *) ((Uint8 *) low->pixels + (size_t) j * low->pitch);
+        g1 = (const Uint32 *) ((Uint8 *) low->pixels + (size_t) (j + 1) * low->pitch);
+        for (i = 0; i < lw; i++) { /* this row's samples, 8.8 fixed point */
+            Uint32 a = g0[i], b = g1[i];
+            int aa = (int) (a >> 24), ba = (int) (b >> 24);
+
+            rA[i] = (aa << 8) + (ba - aa) * t;
+            rR[i] = ((int) ((a >> 16) & 255) << 8) + ((int) ((b >> 16) & 255) - (int) ((a >> 16) & 255)) * t;
+            rG[i] = ((int) ((a >> 8) & 255) << 8) + ((int) ((b >> 8) & 255) - (int) ((a >> 8) & 255)) * t;
+            rB[i] = ((int) (a & 255) << 8) + ((int) (b & 255) - (int) (a & 255)) * t;
+        }
+        x = x0;
+        while (x < x1) {
+            int fx = x - ox, ci = fx >= 0 ? fx / FS : 0, off = fx >= 0 ? fx % FS : 0, xe, n;
+            int A, R, G, B, dA, dR, dG, dB;
+
+            if (ci >= lw - 1)
+                ci = lw - 2, off = FS;
+            A = rA[ci], R = rR[ci], G = rG[ci], B = rB[ci];
+            dA = (rA[ci + 1] - A) / FS, dR = (rR[ci + 1] - R) / FS;
+            dG = (rG[ci + 1] - G) / FS, dB = (rB[ci + 1] - B) / FS;
+            A += dA * off, R += dR * off, G += dG * off, B += dB * off;
+            n = FS - off;
+            if (n <= 0)
+                n = 1;
+            xe = x + n > x1 ? x1 : x + n;
+            if (rs == 16 && gs == 8 && bs == 0) {
+                /* s153: the usual XRGB layout - blend red+blue in one
+                   multiply and green in another; the tint is held for the
+                   cell (it changes slowly), only the darkness slides */
+                Uint32 trb = ((Uint32) ((R + dR * (n / 2)) >> 8) << 16) | (Uint32) ((B + dB * (n / 2)) >> 8);
+                Uint32 tg = (Uint32) ((G + dG * (n / 2)) >> 8) << 8;
+
+                trb &= 0x00FF00FFu, tg &= 0x0000FF00u;
+                for (; x < xe; x++, A += dA) {
+                    Uint32 p = row[x], a8 = (Uint32) (A > 0 ? A >> 8 : 0), ia;
+
+                    if (!(p & 0x00FFFFFFu) || !a8)
+                        continue; /* black stays black; nothing to shade */
+                    ia = 256 - a8;
+                    row[x] = (p & 0xFF000000u)
+                             | ((((p & 0x00FF00FFu) * ia + trb * a8) >> 8) & 0x00FF00FFu)
+                             | ((((p & 0x0000FF00u) * ia + tg * a8) >> 8) & 0x0000FF00u);
+                }
+                continue;
+            }
+            for (; x < xe; x++, A += dA, R += dR, G += dG, B += dB) {
+                Uint32 p = row[x];
+                int a8 = A >> 8, dr, dg, db;
+
+                if (!(p & ~mask) || a8 <= 0) /* black stays black; no shade here */
+                    continue;
+                dr = (int) ((p >> rs) & 255), dg = (int) ((p >> gs) & 255), db = (int) ((p >> bs) & 255);
+                dr += (((R >> 8) - dr) * a8) >> 8;
+                dg += (((G >> 8) - dg) * a8) >> 8;
+                db += (((B >> 8) - db) * a8) >> 8;
+                row[x] = (p & mask) | ((Uint32) dr << rs) | ((Uint32) dg << gs) | ((Uint32) db << bs);
+            }
+        }
+    }
+    SDL_UnlockSurface(low);
+    if (SDL_MUSTLOCK(s))
+        SDL_UnlockSurface(s);
+}
+
 static void
 vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, int h)
 {
@@ -8350,13 +8455,13 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         return;
     /* reuse the last layer (shifted with the camera) unless the scene
        changed or ~90 ms passed (flicker); during a slide, always reuse */
-    if (vl_full && c_vx == vx && c_vy == vy && c_ux == u.ux && c_uy == u.uy
+    if (vl_low && c_vx == vx && c_vy == vy && c_ux == u.ux && c_uy == u.uy
         && c_moves == svm.moves && c_rot == vulture_view_rot && c_w == w && c_h == h
         && abs(cx - c_cx) < M && abs(cy - c_cy) < M
         && (vtw_animating || now - c_when < (vl_magic ? 50u : 120u)) && vl_flashes.empty()) {
         dst.x = ax - M + (cx - c_cx), dst.y = ay - M + (cy - c_cy);
         vl_relief(max0, may0, mw0, mh0, c_gx0 + (cx - c_cx), c_gy0 + (cy - c_cy), FS);
-        vl_blit_visible(vl_full, dst.x, dst.y, max0, may0, mw0, mh0); /* s152 */
+        vl_apply(vl_low, max0, may0, mw0, mh0, dst.x, dst.y, FS); /* s153 */
         return;
     }
     c_cx = cx, c_cy = cy, c_vx = vx, c_vy = vy, c_ux = u.ux, c_uy = u.uy;
@@ -8370,14 +8475,11 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
             SDL_FreeSurface(vl_low);
         vl_low = SDL_CreateRGBSurfaceWithFormat(0, lw, lh, 32, SDL_PIXELFORMAT_ARGB8888);
     }
-    if (!vl_full || vl_full->w != w || vl_full->h != h) {
-        if (vl_full)
-            SDL_FreeSurface(vl_full);
-        vl_full = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
-        if (vl_full)
-            SDL_SetSurfaceBlendMode(vl_full, SDL_BLENDMODE_BLEND);
+    if (vl_full) { /* s153: no full-size layer any more */
+        SDL_FreeSurface(vl_full);
+        vl_full = NULL;
     }
-    if (!vl_low || !vl_full)
+    if (!vl_low)
         return;
     Lg.assign((size_t) lw * lh, 0.0f);
     SDL_LockSurface(vl_low);
@@ -8422,20 +8524,13 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     }
     SDL_UnlockSurface(vl_low);
     Uint32 vt_g = SDL_GetTicks(); /* probe: s147 */
-    src.x = 0, src.y = 0, src.w = lw - 1, src.h = lh - 1;
-    dst.x = 0, dst.y = 0, dst.w = (lw - 1) * FS, dst.h = (lh - 1) * FS;
-    if (dst.w > w)
-        dst.w = w;
-    if (dst.h > h)
-        dst.h = h;
-    if (SDL_SoftStretchLinear(vl_low, &src, vl_full, &dst) != 0)
-        return;
-    Uint32 vt_s = SDL_GetTicks(); /* probe: s147 */
+    nhUse(src);
+    Uint32 vt_s = SDL_GetTicks(); /* probe: s147 (no stretch since s153) */
     vl_relief_dirs(Lg, lw, lh); /* s145 */
     c_gx0 = ax - FS / 2, c_gy0 = ay - FS / 2; /* cell i covers ax+i*FS +- FS/2 */
     vl_relief(max0, may0, mw0, mh0, c_gx0, c_gy0, FS);
     Uint32 vt_r = SDL_GetTicks(); /* probe: s147 */
-    vl_blit_visible(vl_full, ax, ay, max0, may0, mw0, mh0); /* s152 */
+    vl_apply(vl_low, max0, may0, mw0, mh0, ax, ay, FS); /* s153 */
     if (getenv("VULTURE_SELFTEST")) /* probe: s147 cost of a fresh lighting layer */
         vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
                           "light: fresh %u ms = compute %u grid %u stretch %u relief %u blit %u\n",
@@ -8678,6 +8773,10 @@ levelwin::draw()
 
             map_back = map_data->get_glyph(MAP_BACK, j, i);
             map_darkness = map_data->get_glyph(MAP_DARKNESS, j, i);
+            /* s153: only squares the light layer will shade with normals
+               lay theirs (seen and lit, or close to you) */
+            if (vnm_ok)
+                vulture_normal_capture = vl_L[i][j] >= 0.55f || distmin(u.ux, u.uy, j, i) <= 4;
 
             /*
             Draw Vulture's tiles, in order:
@@ -8760,6 +8859,8 @@ levelwin::draw()
             map_back = map_data->get_glyph(MAP_BACK, j, i);
             map_obj = map_data->get_glyph(MAP_OBJ, j, i);
             map_mon = map_data->get_glyph(MAP_MON, j, i);
+            if (vnm_ok) /* s153: as in the floor pass */
+                vulture_normal_capture = vl_L[i][j] >= 0.55f || distmin(u.ux, u.uy, j, i) <= 4;
 
             /* s62: the squares on this square's screen-west/north/east/
              * south sides, in map coordinates */

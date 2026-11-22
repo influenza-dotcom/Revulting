@@ -3284,6 +3284,23 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   VULTURE_SELFTEST.  The probe profile now uses the player's vulture.conf
   (1920x1080, wall_opacity 0.3).
 
+### 153. Light layer applied from its grid; normals only where lit
+
+- `vl_apply` replaces SDL_SoftStretchLinear (to a full-screen layer) +
+  SDL alpha blend: per map row the coarse grid is interpolated vertically
+  once, then each FS-px cell is walked with a running darkness value; the
+  tint is held per cell (it changes slowly); on the XRGB layout red+blue
+  blend in one multiply, green in another; pure black pixels are skipped.
+  A generic per-channel loop covers other layouts.  The full-size vl_full
+  surface is gone.
+- The map draw sets `vulture_normal_capture` per square: only squares with
+  light >= 0.55 or within 4 of you lay normal maps (others are never
+  relief-lit anyway).
+- Measured at 1920x1080 (probe, player's vulture.conf): light rebuild 17 ->
+  11 ms, idle frame median 26 -> 18 ms, tiles 9 -> 6 ms; per-frame light
+  application ~8 ms vs SDL's ~6, so a whole frame stays ~17 ms.  Beyond
+  this needs GPU rendering.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
