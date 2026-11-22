@@ -3041,6 +3041,14 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Real-time speed: right-click the time pill cycles normal 0.65 s / slow 1.0 s / fast 0.4 s per turn (kept as the second number in timemode.txt); the pill tooltip shows mode and speed.
 - Gear sets: not built - wearing armour is multi-turn with prompts and ordering rules (cloak over suit, etc.); needs its own design pass.
 
+### 143. Richer dynamic lighting: glowing features, elemental monsters, contact shadows
+
+- Features light their surroundings: fountains (shimmering blue), pools/water (faint moving blue), altars by alignment (lawful gold, neutral silver, chaotic red, unaligned violet), thrones (gold), sinks, graves (faint green); traps: magic portal (strong violet pulse), teleport/level-teleport/magic/polymorph/anti-magic (violet pulse), fire trap (orange).
+- Monsters with fire/shock/cold auras (passive, engulf, explode, or elementals) cast flickering orange / crackling blue-white / icy light.
+- Contact shadows: floor squares next to walls are a little darker (5.5% per wall side), for depth.
+- Probe: `VULTURE_SELFTEST_LIGHT=1`; probe screenshots now re-centre on the hero first (`VULTURE_SELFTEST_NOCENTER=1` to skip) - this fixes the panned/black probe frames.
+- NOT verified visually: the random probe levels never placed the test altar/fountain where the frame could show them; only contact shadows and fire light were seen.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

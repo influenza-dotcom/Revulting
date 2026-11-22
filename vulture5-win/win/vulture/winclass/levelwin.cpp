@@ -5059,6 +5059,27 @@ vselftest(void)
                 newsym(bx, by);
             }
         }
+        if (getenv("VULTURE_SELFTEST_LIGHT")) { /* probe: s143 feature/monster glows */
+            coord cc;
+
+            for (x = 1; x < COLNO; x++)
+                for (y = 0; y < ROWNO; y++)
+                    levl[x][y].lit = 0;
+            if (isok(u.ux - 2, u.uy) && ACCESSIBLE(levl[u.ux - 2][u.uy].typ)) {
+                levl[u.ux - 2][u.uy].typ = ALTAR;
+                levl[u.ux - 2][u.uy].altarmask = AM_CHAOTIC;
+            }
+            if (isok(u.ux + 2, u.uy) && ACCESSIBLE(levl[u.ux + 2][u.uy].typ))
+                levl[u.ux + 2][u.uy].typ = FOUNTAIN;
+            if (enexto(&cc, u.ux, u.uy + 2, &mons[PM_FIRE_VORTEX]))
+                (void) makemon(&mons[PM_FIRE_VORTEX], cc.x, cc.y, NO_MM_FLAGS);
+            gv.vision_full_recalc = 1;
+            vision_recalc(0);
+            for (x = u.ux - 3; x <= u.ux + 3; x++)
+                for (y = u.uy - 3; y <= u.uy + 3; y++)
+                    if (isok(x, y))
+                        newsym(x, y);
+        }
         if (getenv("VULTURE_SELFTEST_DARK")) { /* probe: unlit level + a flash */
             for (x = 1; x < COLNO; x++)
                 for (y = 0; y < ROWNO; y++)
@@ -5155,6 +5176,8 @@ vselftest(void)
                 vfx_list.push_back(e);
             }
         }
+        if (!getenv("VULTURE_SELFTEST_NOCENTER")) /* probe: undo any edge-scroll */
+            levwin->set_view(u.ux, u.uy);
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_hover.bmp", dir);
@@ -5186,6 +5209,8 @@ vselftest(void)
                     vfx_list[q].t0 -= 200;
             vhitstop_ms = 0;
         }
+        if (!getenv("VULTURE_SELFTEST_NOCENTER")) /* probe: undo any edge-scroll */
+            levwin->set_view(u.ux, u.uy);
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_card.bmp", dir);
@@ -5201,6 +5226,8 @@ vselftest(void)
         }
         break;
     case 3:
+        if (!getenv("VULTURE_SELFTEST_NOCENTER")) /* probe: undo any edge-scroll */
+            levwin->set_view(u.ux, u.uy);
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_aim.bmp", dir);
@@ -5235,6 +5262,8 @@ vselftest(void)
             }
         }
         if (vulture_aim_mode == 3) {
+            if (!getenv("VULTURE_SELFTEST_NOCENTER"))
+                levwin->set_view(u.ux, u.uy);
             levwin->force_redraw();
             ROOTWIN->draw_windows();
             snprintf(path, sizeof path, "%s\\selftest_blast.bmp", dir);
@@ -6620,6 +6649,15 @@ vl_compute(mapdata *md)
                 base = levl[x][y].lit ? 0.93f : 0.38f;
             else
                 base = 0.50f; /* remembered, out of sight */
+            if (base > 0.0f && !IS_STWALL(levl[x][y].typ)) { /* s143: contact shadows */
+                int nw = 0;
+
+                nw += (isok(x - 1, y) && IS_STWALL(levl[x - 1][y].typ));
+                nw += (isok(x + 1, y) && IS_STWALL(levl[x + 1][y].typ));
+                nw += (isok(x, y - 1) && IS_STWALL(levl[x][y - 1].typ));
+                nw += (isok(x, y + 1) && IS_STWALL(levl[x][y + 1].typ));
+                base *= 1.0f - 0.055f * (float) nw;
+            }
             vl_L[y][x] = base;
             vl_R[y][x] = vl_G[y][x] = vl_B[y][x] = base;
         }
@@ -6649,7 +6687,73 @@ vl_compute(mapdata *md)
                 vl_add(x, y, 2.2, 0.45 + 0.08 * sin(t * 2.5 + x * 0.9 + y * 1.3), 1.0, 0.42, 0.12);
             if (md && md->get_glyph(MAP_SPECIAL, x, y) != V_TILE_NONE) /* zap / explosion */
                 vl_add(x, y, 2.5, 0.9, 0.85, 0.9, 1.0);
+            if (glyph_is_cmap(g)) { /* s143: features give off light */
+                int c = glyph_to_cmap(g);
+                double sh = sin(t * 1.7 + x * 1.3 + y * 0.7);
+
+                if (c == S_fountain)
+                    vl_add(x, y, 2.4, 0.30 + 0.05 * sh, 0.45, 0.75, 1.0);
+                else if (c == S_pool || c == S_water)
+                    vl_add(x, y, 1.2, 0.10 + 0.04 * sin(t * 2.3 + x * 2.1 + y * 1.7), 0.4, 0.65, 1.0);
+                else if (c == S_altar) {
+                    int al = levl[x][y].altarmask & AM_MASK;
+
+                    if (al == AM_LAWFUL)
+                        vl_add(x, y, 2.6, 0.32 + 0.04 * sh, 1.0, 0.92, 0.62);
+                    else if (al == AM_NEUTRAL)
+                        vl_add(x, y, 2.6, 0.28 + 0.04 * sh, 0.82, 0.88, 1.0);
+                    else if (al == AM_CHAOTIC)
+                        vl_add(x, y, 2.6, 0.30 + 0.05 * sh, 1.0, 0.35, 0.3);
+                    else
+                        vl_add(x, y, 2.6, 0.26, 0.6, 0.3, 0.9);
+                } else if (c == S_throne)
+                    vl_add(x, y, 2.4, 0.30 + 0.03 * sh, 1.0, 0.8, 0.35);
+                else if (c == S_sink)
+                    vl_add(x, y, 1.4, 0.12, 0.7, 0.8, 0.9);
+                else if (c == S_grave)
+                    vl_add(x, y, 1.3, 0.08 + 0.03 * sh, 0.55, 0.9, 0.6);
+            } else if (glyph_is_trap(g)) {
+                int tt = glyph_to_trap(g);
+                double pu = 0.5 + 0.5 * sin(t * 3.0 + x + y);
+
+                if (tt == MAGIC_PORTAL)
+                    vl_add(x, y, 3.0, 0.45 + 0.15 * pu, 0.75, 0.45, 1.0);
+                else if (tt == TELEP_TRAP || tt == LEVEL_TELEP || tt == MAGIC_TRAP
+                         || tt == POLY_TRAP || tt == ANTI_MAGIC)
+                    vl_add(x, y, 1.8, 0.18 + 0.12 * pu, 0.7, 0.45, 1.0);
+                else if (tt == FIRE_TRAP)
+                    vl_add(x, y, 1.6, 0.16 + 0.06 * pu, 1.0, 0.5, 0.2);
+            }
         }
+    { /* s143: fiery, electric and icy creatures light their surroundings */
+        struct monst *gm2;
+
+        for (gm2 = fmon; gm2; gm2 = gm2->nmon) {
+            int k, fire = 0, elec = 0, cold = 0;
+
+            if (DEADMONSTER(gm2) || !canseemon(gm2))
+                continue;
+            for (k = 0; k < NATTK; k++) {
+                const struct attack *a = &gm2->data->mattk[k];
+                bool aura = a->aatyp == AT_NONE || a->aatyp == AT_ENGL || a->aatyp == AT_EXPL
+                            || a->aatyp == AT_BOOM || gm2->data->mlet == S_ELEMENTAL;
+
+                if (!aura)
+                    continue;
+                fire |= a->adtyp == AD_FIRE;
+                elec |= a->adtyp == AD_ELEC;
+                cold |= a->adtyp == AD_COLD;
+            }
+            if (fire)
+                vl_add(gm2->mx, gm2->my, 2.6,
+                       0.45 + 0.1 * sin(t * 11.0 + gm2->m_id) + 0.04 * ((rand() % 100) / 100.0),
+                       1.0, 0.55, 0.2);
+            else if (elec)
+                vl_add(gm2->mx, gm2->my, 2.4, (rand() % 6) ? 0.35 : 0.75, 0.7, 0.8, 1.0);
+            else if (cold)
+                vl_add(gm2->mx, gm2->my, 2.0, 0.28, 0.6, 0.85, 1.0);
+        }
+    }
     if (u.ux)
         vl_add(u.ux, u.uy, 1.6, 0.30, 1.0, 0.95, 0.85); /* you can always see yourself */
     for (i = 0; i < vl_flashes.size(); i++) {
