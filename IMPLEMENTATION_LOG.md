@@ -3100,6 +3100,36 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - s144 checks done: hourglass icon, Alt danger map (ant: red ring + orange
   outer ring), lichen orange-only ring all seen in probe shots.
 
+### 146. Critical strikes (Brogue): sneak attacks, ambushes, lucky crits
+
+- `vulture_crit_apply` (uhitm.c), right after `hmon_hitmon_dmg_recalc`, for
+  every hero weapon/hand hit except kicked objects:
+  - **sneak attack** - target asleep or unable to move: x3, and a melee
+    blow on it always hits (hitum: `mhit = TRUE`);
+  - **ambush** - awake but `vulture_unaware()`: it can't see you
+    (`!m_canseeu`) and its idea of where you are is wrong (mux/muy): x2;
+  - **critical hit** - otherwise `vulture_crit_chance()` = 3% + 2% per Luck
+    (0 at Luck <= -2, cap 35%): x2.
+  The biggest applies, no stacking.  Melee reads the target's state saved
+  in `do_attack` (vulture_sneak_mid / new vulture_ambush_mid) before the
+  blow wakes it; thrown and fired weapons read it at impact.
+- Feedback: "Sneak attack!  (triple damage)" / "You ambush the X!  (double
+  damage)" / "Critical hit!  (double damage)", a rising word (SNEAK ATTACK
+  x3 / AMBUSH x2 / CRITICAL x2), sound and hit-stop (`vulture_crit_fx`).
+  Rising words and damage numbers on one square now stack (`sub` slot)
+  instead of overprinting - a sneak-attack kill shows both SNEAK ATTACK and
+  SILENT KILL.
+- The monster card spells it out: sleepers "Sneak attack: always hits,
+  triple damage"; awake hostiles "You hit it N%  -  critical hits M%", or
+  "it hasn't noticed you: AMBUSH x2".  The crit chance shows your Luck's
+  effect - deliberate, per the no-wiki goal.  Sleeper tip text updated; the
+  auto-fight's own "Sneak attack on..." line removed (the core says it).
+- Probe VULTURE_SELFTEST_CRIT (+SLEEP: target paralysed so the kitten can't
+  wake it) presses Tab for real: two sneak attacks logged on consecutive
+  turns (crit.txt kind 1); without SLEEP (hero invisible, target lost
+  track) an ambush logged once (kind 2); a run where both swings missed
+  logged nothing, as it should.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

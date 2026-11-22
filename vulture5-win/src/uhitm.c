@@ -30,6 +30,7 @@ staticfn void hmon_hitmon_weapon_ranged(struct _hitmon_data *, struct monst *,
 staticfn boolean backstabbable(struct monst *) NONNULLARG1;
 unsigned vulture_sneak_mid = 0; /* s137 */
 long vulture_sneak_move = -1;
+unsigned vulture_ambush_mid = 0; /* s146 */
 staticfn void hmon_hitmon_weapon_melee(struct _hitmon_data *, struct monst *,
                              struct obj *) NONNULLARG123;
 staticfn void hmon_hitmon_weapon(struct _hitmon_data *, struct monst *,
@@ -41,6 +42,7 @@ staticfn void hmon_hitmon_misc_obj(struct _hitmon_data *, struct monst *,
 staticfn void hmon_hitmon_do_hit(struct _hitmon_data *, struct monst *,
                              struct obj *) NONNULLARG12;
 staticfn void hmon_hitmon_dmg_recalc(struct _hitmon_data *, struct obj *);
+staticfn void vulture_crit_apply(int *, struct monst *, int); /* s146 */
 staticfn void hmon_hitmon_poison(struct _hitmon_data *, struct monst *,
                              struct obj *) NONNULLARG123;
 staticfn void hmon_hitmon_jousting(struct _hitmon_data *, struct monst *,
@@ -445,6 +447,57 @@ force_attack(struct monst *mtmp, boolean pets_too)
     return attacked;
 }
 
+/*
+ * Vulture s146: Brogue-style critical strikes.
+ *  - sneak attack: the target is asleep or can't move - always hits (melee)
+ *    and does triple damage;
+ *  - ambush: it's awake but can't see you and has lost track of where you
+ *    are - double damage (usually just the opening blow);
+ *  - critical hit: otherwise, 3% plus 2% per point of Luck (none below
+ *    Luck -1, at most 35%) - double damage.
+ * The biggest one applies; they don't stack.  Melee uses the target's
+ * state from the start of the attack (do_attack), before the blow wakes it.
+ */
+boolean
+vulture_unaware(struct monst *m)
+{
+    return (boolean) (!m->mpeaceful && !m->mtame && !m->msleeping && m->mcanmove
+                      && !m_canseeu(m) && (m->mux != u.ux || m->muy != u.uy));
+}
+
+int
+vulture_crit_chance(void)
+{
+    int c = 3 + 2 * Luck;
+
+    return c < 0 ? 0 : c > 35 ? 35 : c;
+}
+
+staticfn void
+vulture_crit_apply(int *dmg, struct monst *mon, int thrown)
+{
+    boolean melee = (thrown == HMON_MELEE || thrown == HMON_APPLIED);
+    boolean now = (vulture_sneak_move == svm.moves);
+    boolean sneak = melee ? (now && vulture_sneak_mid == mon->m_id)
+                          : (mon->msleeping || !mon->mcanmove);
+    boolean ambush = !sneak && (melee ? (now && vulture_ambush_mid == mon->m_id)
+                                      : vulture_unaware(mon));
+
+    if (sneak) {
+        *dmg *= 3;
+        pline("Sneak attack!  (triple damage)");
+        vulture_crit_fx(mon->mx, mon->my, 1);
+    } else if (ambush) {
+        *dmg *= 2;
+        You("ambush %s!  (double damage)", mon_nam(mon));
+        vulture_crit_fx(mon->mx, mon->my, 2);
+    } else if (rn2(100) < vulture_crit_chance()) {
+        *dmg *= 2;
+        pline("Critical hit!  (double damage)");
+        vulture_crit_fx(mon->mx, mon->my, 0);
+    }
+}
+
 /* try to attack; return False if monster evaded;
    u.dx and u.dy must be set */
 boolean
@@ -456,6 +509,8 @@ do_attack(struct monst *mtmp)
        this turn can be celebrated */
     vulture_sneak_mid = (mtmp->msleeping || !mtmp->mcanmove) ? mtmp->m_id : 0;
     vulture_sneak_move = svm.moves;
+    /* s146: awake, but it can't see you and has lost track of you */
+    vulture_ambush_mid = (!vulture_sneak_mid && vulture_unaware(mtmp)) ? mtmp->m_id : 0;
 
     /* This section of code provides protection against accidentally
      * hitting peaceful (like '@') and tame (like 'd') monsters.
@@ -793,6 +848,8 @@ hitum(struct monst *mon, struct attack *uattk)
     mon_maybe_unparalyze(mon);
     dieroll = rnd(20);
     mhit = (tmp > dieroll || u.uswallow);
+    if (vulture_sneak_mid == mon->m_id && vulture_sneak_move == svm.moves)
+        mhit = TRUE; /* s146: a sleeper can't dodge (Brogue) */
     if (tmp > dieroll)
         exercise(A_DEX, TRUE);
 
@@ -1820,6 +1877,8 @@ hmon_hitmon(
 
     if (hmd.dmg > 0)
         hmon_hitmon_dmg_recalc(&hmd, obj);
+    if (hmd.dmg > 0 && thrown != HMON_KICKED)
+        vulture_crit_apply(&hmd.dmg, mon, thrown); /* s146 */
 
     if (hmd.ispoisoned)
         hmon_hitmon_poison(&hmd, mon, obj);

@@ -428,6 +428,9 @@ extern int vulture_gear_pending(void);
 extern int vulture_gear_act(void);
 extern int vulture_gear_missed(void);
 extern int vulture_ready_weapon(struct obj *);
+extern boolean vulture_unaware(struct monst *); /* s146 */
+extern int vulture_crit_chance(void);
+extern void vulture_crit_fx(int, int, int);
 extern void vulture_search_more(void); /* s135 */
 /* Vulture mod s70-71 */
 extern boolean llm_rewrite_line(const char *, char *, size_t, boolean);

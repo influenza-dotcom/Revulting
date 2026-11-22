@@ -1129,6 +1129,16 @@ vfx_hit(int x, int y, int amount, Uint8 r, Uint8 g, Uint8 b, bool blood)
     snprintf(e.txt, sizeof e.txt, amount < 0 ? "+%d" : "-%d",
              amount < 0 ? -amount : amount);
     e.r = r, e.g = g, e.b = b;
+    { /* s146: stack above a crit word or another number on this square */
+        size_t q;
+
+        for (q = 0; q < vfx_list.size(); q++)
+            if (vfx_list[q].kind == 1 && vfx_list[q].x == x && vfx_list[q].y == y
+                && e.t0 - vfx_list[q].t0 < 700 && vfx_list[q].sub >= e.sub)
+                e.sub = vfx_list[q].sub + 1;
+        if (e.sub > 3)
+            e.sub = 3;
+    }
     vfx_list.push_back(e);
     if (!blood)
         return;
@@ -2012,7 +2022,8 @@ vfx_draw(int cx, int cy, int vx, int vy)
             continue;
         vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
         if (e.kind == 1) {
-            int ty = sy - 62 - (int) (34 * (1.0 - (1.0 - age) * (1.0 - age)));
+            int ty = sy - 62 - (int) (34 * (1.0 - (1.0 - age) * (1.0 - age)))
+                     - e.sub * (vulture_get_lineheight(V_FONT_LARGE) + 2); /* s146 */
             int w = vulture_text_length(V_FONT_LARGE, e.txt);
             double dim = age < 0.6 ? 1.0 : 1.0 - (age - 0.6) / 0.4;
 
@@ -4455,9 +4466,8 @@ vcard_draw(const std::string &name)
 
         vodds(m, &yh, &ih, &ip);
         if (zz) { /* s137: what a sneak attack gets you, and will it wake */
-            snprintf(ob, sizeof ob, "You hit it %d%%  -  sneak attack, +%d%s", yh,
-                     (m->msleeping ? 2 : 0) + (!m->mcanmove ? 4 : 0),
-                     Role_if(PM_ROGUE) ? ", backstab" : "");
+            snprintf(ob, sizeof ob, "Sneak attack: always hits, triple damage%s",
+                     Role_if(PM_ROGUE) ? ", backstab" : ""); /* s146 */
             odds1 = ob;
             if (m->msleeping)
                 odds2 = "Asleep  -  it won't fight back until it wakes";
@@ -4483,7 +4493,11 @@ vcard_draw(const std::string &name)
                     odds3 = "Each turn it sees you nearby: 1 in 7 it wakes", wcol = 1;
             }
         } else {
-            snprintf(ob, sizeof ob, "You hit it %d%% of the time", yh);
+            if (vulture_unaware(m)) /* s146 */
+                snprintf(ob, sizeof ob, "You hit it %d%%  -  it hasn't noticed you: AMBUSH x2", yh);
+            else
+                snprintf(ob, sizeof ob, "You hit it %d%%  -  critical hits %d%%", yh,
+                         vulture_crit_chance());
             odds1 = ob;
             snprintf(ob, sizeof ob, "It hits you %d%%, ~%d%% of your health", ih, ip);
             odds2 = ob;
@@ -5423,6 +5437,24 @@ vselftest(void)
             SDL_SaveBMP(vulture_screen, fp2);
             vl_relief_set(true);
         }
+        if (getenv("VULTURE_SELFTEST_CRIT")) { /* probe: s146 Tab at the sleeper */
+            struct monst *cm;
+
+            for (cm = fmon; cm; cm = cm->nmon)
+                if (!DEADMONSTER(cm) && !cm->mtame) {
+                    cm->mhpmax = cm->mhp = 60; /* survive the blow, to see it */
+                    if (getenv("VULTURE_SELFTEST_SLEEP")) /* the kitten wakes sleepers */
+                        cm->mcanmove = 0, cm->mfrozen = 40;
+                    if (!getenv("VULTURE_SELFTEST_SLEEP")) {
+                        cm->msleeping = 0;
+                        cm->mux = 0, cm->muy = 0; /* lost track of you */
+                        HInvis |= FROMOUTSIDE;    /* and can't see you */
+                    }
+                }
+            vprobe_push_key(SDLK_TAB);
+            vprobe_push_key(SDLK_TAB);
+            vprobe_push_key(SDLK_TAB);
+        }
         if (getenv("VULTURE_SELFTEST_CLICK") && isok(vhv.x, vhv.y)) { /* probe: s145 travel */
             vck_from.x = u.ux, vck_from.y = u.uy;
             vck_to = vhv;
@@ -5601,6 +5633,16 @@ vfx_word(int x, int y, const char *txt, Uint8 r, Uint8 g, Uint8 b, Uint32 dur)
     e.kind = 1, e.x = x, e.y = y, e.t0 = SDL_GetTicks(), e.dur = dur;
     snprintf(e.txt, sizeof e.txt, "%s", txt);
     e.r = r, e.g = g, e.b = b;
+    { /* s146: stack above words still rising from the same square */
+        size_t q;
+
+        for (q = 0; q < vfx_list.size(); q++)
+            if (vfx_list[q].kind == 1 && vfx_list[q].x == x && vfx_list[q].y == y
+                && e.t0 - vfx_list[q].t0 < 700 && vfx_list[q].sub >= e.sub)
+                e.sub = vfx_list[q].sub + 1;
+        if (e.sub > 3)
+            e.sub = 3;
+    }
     vfx_list.push_back(e);
 }
 
@@ -5623,6 +5665,32 @@ vulture_backstab(int x, int y)
         return;
     vfx_word(x, y, "BACKSTAB", 255, 170, 70, 1100);
     vulture_sfx("backstab");
+}
+
+/* s146: a sneak attack (1), ambush (2) or critical hit (0) landed */
+extern "C" void
+vulture_crit_fx(int x, int y, int kind)
+{
+    if (getenv("VULTURE_SELFTEST")) { /* probe: s146 */
+        char fp[700];
+        FILE *f;
+
+        snprintf(fp, sizeof fp, "%s\\crit.txt", getenv("VULTURE_SELFTEST"));
+        if ((f = fopen(fp, "a")) != 0) {
+            fprintf(f, "turn %ld kind %d luck-crit %d%%\n", svm.moves, kind, vulture_crit_chance());
+            fclose(f);
+        }
+    }
+    if (!levwin || !isok(x, y))
+        return;
+    if (kind == 1)
+        vfx_word(x, y, "SNEAK ATTACK x3", 255, 215, 90, 1200);
+    else if (kind == 2)
+        vfx_word(x, y, "AMBUSH x2", 255, 150, 60, 1100);
+    else
+        vfx_word(x, y, "CRITICAL x2", 255, 245, 230, 1000);
+    vulture_sfx(kind == 0 ? "skill_up" : "backstab");
+    vhitstop_ms = kind == 1 ? 110 : 85;
 }
 
 /* a noise woke monsters within sqrt(dist2) squares of (x, y) */
@@ -5784,9 +5852,9 @@ static const vtip_def vtip_defs[] = {
       "Hover anything to learn about it - hold Shift on a monster\n"
       "for its full codex: attacks, resistances, what its corpse does." },
     { "sleeper", "Sleeping monsters",
-      "z z marks a sleeper. Sneak attacks hit more often - kill it\n"
-      "before it wakes for a SILENT KILL. Stealth keeps them asleep\n"
-      "(see the badge above your portrait)." },
+      "z z marks a sleeper. A sneak attack on it always hits for triple\n"
+      "damage - kill it before it wakes for a SILENT KILL. Stealth keeps\n"
+      "them asleep (see the badge above your portrait)." },
     { "shop", "Shops",
       "Pick an item up to see its price. The price narrows down what an\n"
       "unidentified item can be, and the game remembers it for you.\n"
@@ -6357,9 +6425,6 @@ vauto_fight(void *result)
 
     if (!m || !vauto_step_toward(m->mx, m->my))
         return false;
-    if ((m->msleeping || !m->mcanmove) && distmin(u.ux, u.uy, m->mx, m->my) <= 1)
-        pline("Sneak attack on the %s %s!", m->msleeping ? "sleeping" : "helpless",
-              pmname(m->data, Mgender(m))); /* s137 */
     vauto_result(result);
     return true;
 }
