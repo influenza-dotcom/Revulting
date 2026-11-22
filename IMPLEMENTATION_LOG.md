@@ -3024,6 +3024,15 @@ Already present and on in the new-player rc (no change): `autoid` shop price ide
 - Probe: `VULTURE_SELFTEST_RT=1` (+ `VULTURE_SELFTEST_NOJACKAL=1`) writes rt.txt: real-time advanced turns 3->6 in ~3 s; hybrid with an awake jackal adjacent held at 0 ticks.
 - Groundwork only for multiplayer (no pause/time-scale in MP per the co-op decisions) - nothing networked yet.
 
+### 141. The codex: monster, corpse and trap knowledge in-game (Pathos-style, no wiki)
+
+Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, entities, traps". All from the game's own data (mons[], trap types).
+
+- Monster hover card, hold Shift: level, AC, MR, speed vs yours (Fast/Very fast counted), every attack with dice and effect (claw 1d6 (paralyzes), passive: PETRIFIES...), resistances, traits (flies, swims, regenerates, follows you between levels, sees invisible), and what eating its corpse does. Without Shift it shows "Hold Shift for full details" and, if eating it would be deadly, that one line. Shift press redraws the card.
+- Corpses (`vcorpse_info`): fatal (Riders), petrifies, slimes, lycanthropy, cannibalism (cave dwellers and orcs exempt), pet species aggravate, polymorph, poisonous (says if you resist), acidic (cures stoning), lizard/lichen never rot, hallucination, stun, speed toggle, disenchanter, newt energy, mind flayer Int, and "May grant:" from mconveys (only the six resistances eating can give) plus telepathy / teleportitis / teleport control / strength. Shown on the monster card, on the inventory card of a corpse (+ "eat it fresh"), and on the floor-corpse hover hint ("If eaten: ...").
+- Traps: the hover hint names the trap and what it does (all 23 types) instead of "A known trap".
+- Probe: `VULTURE_SELFTEST_CODEX=1` writes codex.txt and forces Shift for the card shot.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

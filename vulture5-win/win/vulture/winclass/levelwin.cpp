@@ -3280,6 +3280,242 @@ vpath_draw(int cx, int cy, int vx, int vy)
                             SDL_MapRGB(vulture_screen->format, 0, 0, 0));
 }
 
+/* ---- s141: the codex (Pathos-style built-in knowledge, no wiki) ----
+   Monster attacks, defences and what eating its corpse does, and what each
+   trap does - straight from the game's own data. */
+static const char *
+vat_name(int at)
+{
+    switch (at) {
+    case AT_CLAW: return "claw";
+    case AT_BITE: return "bite";
+    case AT_KICK: return "kick";
+    case AT_BUTT: return "butt";
+    case AT_TUCH: return "touch";
+    case AT_STNG: return "sting";
+    case AT_HUGS: return "crushing hug";
+    case AT_SPIT: return "spit";
+    case AT_ENGL: return "engulf";
+    case AT_BREA: return "breath";
+    case AT_EXPL: return "explodes";
+    case AT_BOOM: return "explodes when killed";
+    case AT_GAZE: return "gaze";
+    case AT_TENT: return "tentacles";
+    case AT_WEAP: return "weapon";
+    case AT_MAGC: return "casts spells";
+    }
+    return 0;
+}
+
+static const char *
+vad_name(int ad)
+{
+    switch (ad) {
+    case AD_MAGM: return "magic missiles";
+    case AD_FIRE: return "fire";
+    case AD_COLD: return "cold";
+    case AD_SLEE: return "puts you to sleep";
+    case AD_DISN: return "disintegrates";
+    case AD_ELEC: return "shock";
+    case AD_DRST: return "poison, saps Str";
+    case AD_ACID: return "acid";
+    case AD_BLND: return "blinds";
+    case AD_STUN: return "stuns";
+    case AD_SLOW: return "slows you";
+    case AD_PLYS: return "paralyzes";
+    case AD_DRLI: return "drains levels";
+    case AD_DREN: return "drains magic power";
+    case AD_LEGS: return "wounds legs";
+    case AD_STON: return "PETRIFIES";
+    case AD_STCK: return "sticks to you";
+    case AD_SGLD: return "steals gold";
+    case AD_SITM: return "steals items";
+    case AD_SEDU: return "seduces, steals items";
+    case AD_TLPT: return "teleports you";
+    case AD_RUST: return "rusts armour";
+    case AD_CONF: return "confuses";
+    case AD_DGST: return "DIGESTS you";
+    case AD_HEAL: return "heals you";
+    case AD_WRAP: return "drowns you";
+    case AD_WERE: return "lycanthropy";
+    case AD_DRDX: return "poison, saps Dex";
+    case AD_DRCO: return "poison, saps Con";
+    case AD_DRIN: return "eats your brain, saps Int";
+    case AD_DISE: return "disease";
+    case AD_DCAY: return "rots armour";
+    case AD_SSEX: return "seduces";
+    case AD_HALU: return "hallucination";
+    case AD_DETH: return "death touch";
+    case AD_PEST: return "pestilence";
+    case AD_FAMN: return "hunger";
+    case AD_SLIM: return "SLIMES you";
+    case AD_ENCH: return "disenchants";
+    case AD_CORR: return "corrodes armour";
+    case AD_POLY: return "polymorphs you";
+    case AD_CLRC: return "clerical spells";
+    case AD_SPEL: return "mage spells";
+    case AD_RBRE: return "random breath";
+    case AD_SAMU: return "steals the Amulet";
+    case AD_CURS: return "curses, steals intrinsics";
+    }
+    return 0;
+}
+
+static std::string
+vmon_attacks(struct permonst *p)
+{
+    std::string s;
+    int i;
+    char b[96];
+
+    for (i = 0; i < NATTK; i++) {
+        const struct attack *a = &p->mattk[i];
+        const char *an = vat_name(a->aatyp), *dn = vad_name(a->adtyp);
+
+        if (!an || (a->aatyp == AT_NONE && !a->damn))
+            continue;
+        if (a->damn && a->damd)
+            snprintf(b, sizeof b, "%s %dd%d", an, a->damn, a->damd);
+        else
+            snprintf(b, sizeof b, "%s", an);
+        if (dn && !(a->aatyp == AT_MAGC && (a->adtyp == AD_SPEL || a->adtyp == AD_CLRC)))
+            snprintf(b + strlen(b), sizeof b - strlen(b), " (%s)", dn);
+        else if (a->aatyp == AT_MAGC && dn)
+            snprintf(b + strlen(b), sizeof b - strlen(b), " (%s)", dn);
+        if (!s.empty())
+            s += ", ";
+        s += b;
+    }
+    for (i = 0; i < NATTK; i++) /* passive defence: hurts you when you hit it */
+        if (p->mattk[i].aatyp == AT_NONE && vad_name(p->mattk[i].adtyp)) {
+            s += s.empty() ? "" : ", ";
+            s += std::string("passive: ") + vad_name(p->mattk[i].adtyp);
+        }
+    return s.empty() ? "none" : s;
+}
+
+static std::string
+vmon_resists(unsigned mr)
+{
+    static const char *const nm[8] = { "fire", "cold", "sleep", "disintegration", "shock",
+                                       "poison", "acid", "petrification" };
+    std::string s;
+    int i;
+
+    for (i = 0; i < 8; i++)
+        if (mr & (1u << i)) {
+            if (!s.empty())
+                s += ", ";
+            s += nm[i];
+        }
+    return s;
+}
+
+/* what eating this corpse does; danger 0 fine, 1 careful, 2 deadly/terrible */
+static void
+vcorpse_info(struct permonst *p, std::vector<std::string> &out, int *danger)
+{
+    int pm = monsndx(p), grant;
+    bool cannibal_ok = Role_if(PM_CAVE_DWELLER) || Race_if(PM_ORC);
+    std::string g;
+
+    *danger = 0;
+    if (is_rider(p)) {
+        out.push_back("Eating it is fatal");
+        *danger = 2;
+        return;
+    }
+    if (touch_petrifies(p)) {
+        out.push_back("Turns you to STONE if eaten (or touched barehanded)");
+        *danger = 2;
+    }
+    if (pm == PM_GREEN_SLIME)
+        out.push_back("Turns you into green slime"), *danger = 2;
+    if (is_were(p))
+        out.push_back("Gives you lycanthropy"), *danger = 2;
+    if (your_race(p) && !cannibal_ok)
+        out.push_back("Cannibalism: your god will be angry"), *danger = 2;
+    if (is_domestic(p) && (p->mlet == S_DOG || p->mlet == S_FELINE) && !cannibal_ok) {
+        out.push_back("A pet species: you'll aggravate monsters");
+        if (*danger < 1)
+            *danger = 1;
+    }
+    if (pm == PM_CHAMELEON || pm == PM_DOPPELGANGER || pm == PM_GENETIC_ENGINEER)
+        out.push_back("Polymorphs you"), *danger = 2;
+    if (poisonous(p)) {
+        out.push_back(Poison_resistance ? "Poisonous - you resist it"
+                                        : "Poisonous: may sap Str or hurt badly");
+        if (!Poison_resistance && *danger < 1)
+            *danger = 1;
+    }
+    if (acidic(p)) {
+        out.push_back("Acidic: stings a bit, but cures stoning");
+        if (*danger < 1 && !Acid_resistance)
+            *danger = 1;
+    }
+    if (pm == PM_LIZARD)
+        out.push_back("Cures stoning; never rots");
+    if (pm == PM_LICHEN)
+        out.push_back("Never rots");
+    if (pm == PM_VIOLET_FUNGUS)
+        out.push_back("Makes you hallucinate");
+    if (pm == PM_BAT || pm == PM_GIANT_BAT || pm == PM_VAMPIRE_BAT)
+        out.push_back("Stuns you for a while");
+    if (pm == PM_QUANTUM_MECHANIC)
+        out.push_back("Toggles your intrinsic speed");
+    if (pm == PM_DISENCHANTER)
+        out.push_back("Strips one of your intrinsics"), *danger = *danger < 1 ? 1 : *danger;
+    if (pm == PM_NEWT)
+        out.push_back("Restores a little magic power");
+    if (pm == PM_MIND_FLAYER || pm == PM_MASTER_MIND_FLAYER)
+        out.push_back("May raise Int");
+    grant = p->mconveys & 0x3F; /* eating only ever gives fire..poison */
+    g = vmon_resists((unsigned) grant);
+    if (pm == PM_FLOATING_EYE || pm == PM_MIND_FLAYER || pm == PM_MASTER_MIND_FLAYER)
+        g += g.empty() ? "telepathy" : ", telepathy";
+    if (p->mlet == S_NYMPH || p->mlet == S_LEPRECHAUN || pm == PM_TENGU)
+        g += g.empty() ? "teleportitis" : ", teleportitis";
+    if (pm == PM_TENGU)
+        g += ", teleport control";
+    if (is_giant(p))
+        g += g.empty() ? "strength" : ", strength";
+    if (!g.empty())
+        out.push_back("May grant: " + g);
+    if (out.empty())
+        out.push_back("Safe to eat");
+}
+
+static const char *
+vtrap_desc(int t)
+{
+    switch (t) {
+    case ARROW_TRAP: return "Arrow trap  -  shoots an arrow at you";
+    case DART_TRAP: return "Dart trap  -  shoots darts, sometimes poisoned";
+    case ROCKTRAP: return "Falling rock trap  -  a helmet softens it";
+    case SQKY_BOARD: return "Squeaky board  -  harmless, but wakes monsters";
+    case BEAR_TRAP: return "Bear trap  -  holds you for several turns";
+    case LANDMINE: return "Land mine  -  heavy damage, wounds your legs";
+    case ROLLING_BOULDER_TRAP: return "Rolling boulder trap  -  a boulder comes crashing";
+    case SLP_GAS_TRAP: return "Sleeping gas  -  knocks you out unless you resist sleep";
+    case RUST_TRAP: return "Rust trap  -  rusts iron armour and weapons";
+    case FIRE_TRAP: return "Fire trap  -  burns you and your scrolls/potions";
+    case PIT: return "Pit  -  you fall in and climb out for a few turns";
+    case SPIKED_PIT: return "Spiked pit  -  a pit with spikes, maybe poisoned";
+    case HOLE: return "Hole  -  drops you to the level below";
+    case TRAPDOOR: return "Trap door  -  drops you one or more levels";
+    case TELEP_TRAP: return "Teleport trap  -  sends you elsewhere on this level";
+    case LEVEL_TELEP: return "Level teleporter  -  sends you to another level";
+    case MAGIC_PORTAL: return "Magic portal  -  a gateway to another place";
+    case WEB: return "Web  -  entangles you; strong heroes tear free";
+    case STATUE_TRAP: return "Statue trap  -  the statue may come to life";
+    case MAGIC_TRAP: return "Magic trap  -  unpredictable, sometimes helpful";
+    case ANTI_MAGIC: return "Anti-magic field  -  drains your magic power";
+    case POLY_TRAP: return "Polymorph trap  -  turns you into something else";
+    case VIBRATING_SQUARE: return "The vibrating square  -  the end of your quest";
+    }
+    return "A known trap";
+}
+
 /* ---- s139: item stat cards (inventory hover) ----
    Only what the hero knows: dice and armour values only for a type whose
    identity is known (or that has no random appearance); enchantment only
@@ -3386,6 +3622,19 @@ vulture_item_info(struct obj *o)
         } else if (!w) {
             s += "\nNothing worn in that slot";
         }
+    } else if (o->otyp == CORPSE && ismnum(o->corpsenm)) { /* s141 */
+        std::vector<std::string> ln;
+        int dg;
+        size_t i;
+
+        vcorpse_info(&mons[o->corpsenm], ln, &dg);
+        for (i = 0; i < ln.size(); i++) {
+            if (i)
+                s += "\n";
+            s += ln[i];
+        }
+        if (o->corpsenm != PM_LIZARD && o->corpsenm != PM_LICHEN)
+            s += "\nEat it fresh: corpses go bad after about 30 turns";
     } else if (o->oclass == FOOD_CLASS && o->otyp != CORPSE && tk) {
         snprintf(b, sizeof b, "Nutrition: %d, takes %d turn%s to eat",
                  objects[o->otyp].oc_nutrition, objects[o->otyp].oc_delay,
@@ -4000,9 +4249,69 @@ vcard_draw(const std::string &name)
             risk = ip * ih / 100;
         }
     }
+    /* s141: the codex - hold Shift for everything about it */
+    std::vector<std::string> deep;
+    std::vector<Uint32> dcol;
+    {
+        bool shift = (SDL_GetModState() & KMOD_SHIFT) != 0;
+        struct permonst *p = m->data;
+        std::vector<std::string> cl;
+        int dg;
+
+        vcorpse_info(p, cl, &dg);
+        if (shift) {
+            char b[160];
+            int ys = 12 * (Very_fast ? 5 : Fast ? 4 : 3) / 3;
+            std::string at = vmon_attacks(p), rs = vmon_resists(p->mresists), fl;
+            size_t i, cut;
+
+            snprintf(b, sizeof b, "Level %d   AC %d   MR %d   Speed %d %s", p->mlevel, p->ac,
+                     p->mr, p->mmove,
+                     p->mmove > ys ? "(faster than you)" : p->mmove < ys ? "(slower than you)"
+                                                         : "(as fast as you)");
+            deep.push_back(b), dcol.push_back(SDL_MapRGB(vulture_screen->format, 220, 215, 200));
+            at = "Attacks: " + at;
+            while (at.size() > 52 && (cut = at.rfind(", ", 52)) != std::string::npos) {
+                deep.push_back(at.substr(0, cut + 1));
+                dcol.push_back(SDL_MapRGB(vulture_screen->format, 255, 190, 150));
+                at = "   " + at.substr(cut + 2);
+            }
+            deep.push_back(at), dcol.push_back(SDL_MapRGB(vulture_screen->format, 255, 190, 150));
+            if (!rs.empty())
+                deep.push_back("Resists: " + rs),
+                    dcol.push_back(SDL_MapRGB(vulture_screen->format, 150, 200, 255));
+            if (is_flyer(p))
+                fl += "flies, ";
+            if (is_swimmer(p))
+                fl += "swims, ";
+            if (regenerates(p))
+                fl += "regenerates, ";
+            if (p->mflags2 & M2_STALK)
+                fl += "follows you between levels, ";
+            if (perceives(p))
+                fl += "sees invisible, ";
+            if (!fl.empty())
+                deep.push_back("Traits: " + fl.substr(0, fl.size() - 2)),
+                    dcol.push_back(SDL_MapRGB(vulture_screen->format, 200, 200, 210));
+            for (i = 0; i < cl.size(); i++)
+                deep.push_back((i ? "   " : "Corpse: ") + cl[i]),
+                    dcol.push_back(dg >= 2 ? SDL_MapRGB(vulture_screen->format, 255, 90, 70)
+                                   : dg == 1 ? SDL_MapRGB(vulture_screen->format, 240, 200, 100)
+                                             : SDL_MapRGB(vulture_screen->format, 140, 220, 150));
+        } else {
+            if (dg >= 2) /* the one thing you must not miss */
+                deep.push_back("Corpse: " + cl[0]),
+                    dcol.push_back(SDL_MapRGB(vulture_screen->format, 255, 90, 70));
+            deep.push_back("Hold Shift for full details");
+            dcol.push_back(SDL_MapRGB(vulture_screen->format, 130, 130, 140));
+        }
+    }
     bw = vulture_text_length(V_FONT_SMALL, title);
     if (vulture_text_length(V_FONT_SMALL, tags) > bw)
         bw = vulture_text_length(V_FONT_SMALL, tags);
+    for (size_t di = 0; di < deep.size(); di++) /* s141 */
+        if (vulture_text_length(V_FONT_SMALL, deep[di]) > bw)
+            bw = vulture_text_length(V_FONT_SMALL, deep[di]);
     if (!odds2.empty() && vulture_text_length(V_FONT_SMALL, odds2) > bw)
         bw = vulture_text_length(V_FONT_SMALL, odds2);
     if (!odds1.empty() && vulture_text_length(V_FONT_SMALL, odds1) > bw)
@@ -4013,7 +4322,8 @@ vcard_draw(const std::string &name)
     if (bw < 150)
         bw = 150;
     bh = 2 * lh + 14 + (bar ? 10 : 0) + (odds1.empty() ? 0 : 2 * lh + 4)
-         + (odds3.empty() ? 0 : lh); /* s137 */
+         + (odds3.empty() ? 0 : lh) /* s137 */
+         + (int) deep.size() * lh + (deep.empty() ? 0 : 4); /* s141 */
     bx = mp.x + 20, by = mp.y + 24;
     if (bx + bw > vulture_screen->w - 4)
         bx = mp.x - 20 - bw;
@@ -4049,6 +4359,15 @@ vcard_draw(const std::string &name)
                                 : SDL_MapRGB(vulture_screen->format, 200, 210, 230),
                                 SDL_MapRGB(vulture_screen->format, 0, 0, 0));
     }
+    { /* s141: the codex lines at the bottom */
+        int dy = by + bh - 6 - (int) deep.size() * lh;
+        size_t di;
+
+        for (di = 0; di < deep.size(); di++)
+            vulture_put_text_shadow(V_FONT_SMALL, deep[di], vulture_screen, bx + 12,
+                                    dy + (int) di * lh, dcol[di],
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+    }
     if (bar) {
         int full = bw - 24, fill = m->mhpmax > 0 ? full * m->mhp / m->mhpmax : 0;
         int pct = m->mhpmax > 0 ? 100 * m->mhp / m->mhpmax : 0;
@@ -4080,12 +4399,24 @@ vsq_hint(int x, int y)
     if (glyph_is_object(g)) {
         if (glyph_to_obj(g) == BOULDER)
             return "Walk into it to push it";
-        if (glyph_to_obj(g) == CORPSE)
+        if (glyph_to_obj(g) == CORPSE) { /* s141: what eating it would do */
+            static std::string cs;
+            struct obj *co = vobj_at(x, y);
+
+            if (co && co->otyp == CORPSE && ismnum(co->corpsenm)) {
+                std::vector<std::string> ln;
+                int dg;
+
+                vcorpse_info(&mons[co->corpsenm], ln, &dg);
+                cs = "If eaten: " + ln[0];
+                return cs.c_str();
+            }
             return "Click to walk there  -  eat it fresh or not at all";
+        }
         return "Click to walk there and pick it up";
     }
-    if (glyph_is_trap(g))
-        return "A known trap  -  click-to-walk steers around it";
+    if (glyph_is_trap(g)) /* s141: say what it does */
+        return vtrap_desc(glyph_to_trap(g));
     if (!glyph_is_cmap(g))
         return NULL;
     c = glyph_to_cmap(g);
@@ -4710,6 +5041,32 @@ vselftest(void)
                 if (jm && getenv("VULTURE_SELFTEST_SLEEP")) /* probe: s137 sleeper */
                     jm->msleeping = 1;
             }
+        }
+        if (getenv("VULTURE_SELFTEST_CODEX")) { /* probe: s141 corpse + attack text */
+            char fp[700];
+            FILE *f;
+            static const int pms[] = { PM_COCKATRICE, PM_FLOATING_EYE, PM_JACKAL, PM_KITTEN,
+                                       PM_NEWT, PM_LIZARD, PM_SOLDIER_ANT, PM_WATER_NYMPH,
+                                       PM_GREEN_SLIME, PM_MIND_FLAYER };
+            size_t q;
+
+            snprintf(fp, sizeof fp, "%s\\codex.txt", dir);
+            if ((f = fopen(fp, "w")) != 0) {
+                for (q = 0; q < sizeof pms / sizeof pms[0]; q++) {
+                    std::vector<std::string> ln;
+                    int dg, k2;
+
+                    vcorpse_info(&mons[pms[q]], ln, &dg);
+                    fprintf(f, "== %s (danger %d)\n  attacks: %s\n  resists: %s\n",
+                            mons[pms[q]].pmnames[NEUTRAL] ? mons[pms[q]].pmnames[NEUTRAL] : "?",
+                            dg, vmon_attacks(&mons[pms[q]]).c_str(),
+                            vmon_resists(mons[pms[q]].mresists).c_str());
+                    for (k2 = 0; k2 < (int) ln.size(); k2++)
+                        fprintf(f, "  corpse: %s\n", ln[k2].c_str());
+                }
+                fclose(f);
+            }
+            SDL_SetModState(KMOD_LSHIFT);
         }
         if (getenv("VULTURE_SELFTEST_ITEMS")) { /* probe: s139 cards + altar test */
             char fp[700];
@@ -7058,6 +7415,11 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
      * clamp.  Same placement rationale as F7 (level window only, so it cannot
      * fire inside a menu or a text prompt; no userconfig rewrite - persistence
      * stays with the Ctrl+Shift+O menu). */
+    case SDLK_LSHIFT: /* s141: the hover card shows / hides its codex */
+    case SDLK_RSHIFT:
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+
     case SDLK_PAUSE: /* s140: cycle the time mode */
         vrt_cycle();
         force_redraw();
