@@ -423,6 +423,11 @@ extern int vulture_aim_mode, vulture_aim_dmg;
 extern int vulture_getdir_ray(int, boolean);
 extern int vulture_aim_end(int);
 extern int vulture_altar_test(void); /* s139 */
+extern void vulture_gear_begin(const unsigned *, const long *, int); /* s145 */
+extern int vulture_gear_pending(void);
+extern int vulture_gear_act(void);
+extern int vulture_gear_missed(void);
+extern int vulture_ready_weapon(struct obj *);
 extern void vulture_search_more(void); /* s135 */
 /* Vulture mod s70-71 */
 extern boolean llm_rewrite_line(const char *, char *, size_t, boolean);

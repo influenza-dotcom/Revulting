@@ -2592,6 +2592,43 @@ vulture_idle_wait_ms(bool at_map)
 /* one idle frame for bobbing, breathing and combat effects (called from
    the input loop while the map waits for a command) */
 static void vselftest(void); /* s126 probe */
+static point vck_from = { -1, -1 }, vck_to = { -1, -1 }; /* s145 probe */
+
+static void
+vprobe_push_click(point sq) /* probe: s145 a real left click on a square */
+{
+    point mp = levwin->map_to_mouse(sq);
+    SDL_Event e;
+
+    vulture_set_mouse_pos(mp.x, mp.y);
+    memset(&e, 0, sizeof e);
+    e.type = SDL_MOUSEBUTTONDOWN;
+    e.button.button = SDL_BUTTON_LEFT, e.button.state = SDL_PRESSED;
+    e.button.x = mp.x, e.button.y = mp.y, e.button.clicks = 1;
+    SDL_PushEvent(&e);
+    e.type = SDL_MOUSEBUTTONUP, e.button.state = SDL_RELEASED;
+    SDL_PushEvent(&e);
+}
+
+static void
+vprobe_push_key(SDL_Keycode k) /* probe: s145 */
+{
+    SDL_Event e;
+
+    memset(&e, 0, sizeof e);
+    e.type = SDL_KEYDOWN;
+    e.key.state = SDL_PRESSED;
+    e.key.keysym.sym = k;
+    e.key.keysym.scancode = SDL_GetScancodeFromKey(k);
+    SDL_PushEvent(&e);
+    e.type = SDL_KEYUP, e.key.state = SDL_RELEASED;
+    SDL_PushEvent(&e);
+}
+static void vgs_probe(int stage, const char *dir); /* s145 probe */
+static Uint32 vpause_probe_t = 0; /* s145 probe: shoot the pause menu */
+static void vl_relief_set(bool on); /* s145 */
+static void vl_relief_report(FILE *f);
+
 static long vrt_probe_moves0 = 0; /* s140 probe */
 static int vrt_get(void);
 static void vrt_probe_dump(FILE *f);
@@ -2603,6 +2640,14 @@ vulture_idle_bob(bool at_map)
     static Uint32 last = 0;
     Uint32 now = SDL_GetTicks(), took;
 
+    if (vpause_probe_t && now - vpause_probe_t > 700 && getenv("VULTURE_SELFTEST")) {
+        char pp[700];
+
+        vpause_probe_t = 0;
+        ROOTWIN->draw_windows();
+        snprintf(pp, sizeof pp, "%s\\selftest_pause.bmp", getenv("VULTURE_SELFTEST"));
+        SDL_SaveBMP(vulture_screen, pp);
+    }
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
         return;
@@ -3264,7 +3309,7 @@ vpath_draw(int cx, int cy, int vx, int vy)
     char num[16];
 
     if (vaim_on || vulture_aim_mode == 3 || !isok(vhv.x, vhv.y) || u_at(vhv.x, vhv.y)
-        || svc.context.travel || svc.context.run || gm.multi
+        || gm.multi || go.occupation /* s145: travel/run flags outlive the walk */
         || vulture_whatis_active || u.uswallow || !vhv_over_map())
         return;
     if (distmin(u.ux, u.uy, vhv.x, vhv.y) < 2)
@@ -5226,6 +5271,9 @@ vselftest(void)
         if (getenv("VULTURE_SELFTEST_LIGHT")) { /* probe: s143 feature/monster glows */
             coord cc;
 
+            if (getenv("VULTURE_SELFTEST_FLAT")) /* probe: s145 relief off */
+                vl_relief_set(false);
+
             for (x = 1; x < COLNO; x++)
                 for (y = 0; y < ROWNO; y++)
                     levl[x][y].lit = 0;
@@ -5255,8 +5303,17 @@ vselftest(void)
         if (getenv("VULTURE_SELFTEST") && !getenv("VULTURE_SELFTEST_NOJACKAL")) { /* probe: a hostile to hover (odds) */
             coord cc;
 
-            if (enexto(&cc, u.ux, u.uy, &mons[PM_JACKAL])) {
-                struct monst *jm = makemon(&mons[PM_JACKAL], cc.x, cc.y, NO_MM_FLAGS);
+            int pmj = getenv("VULTURE_SELFTEST_SPEED") ? PM_SOLDIER_ANT : PM_JACKAL; /* probe: s144 fast */
+
+            if (enexto(&cc, u.ux, u.uy, &mons[pmj])) {
+                struct monst *jm = makemon(&mons[pmj], cc.x, cc.y, NO_MM_FLAGS);
+
+                if (jm && getenv("VULTURE_SELFTEST_SPEED")) { /* a second, slow one for Alt */
+                    coord c2;
+
+                    if (enexto(&c2, u.ux - 3, u.uy, &mons[PM_LICHEN]))
+                        (void) makemon(&mons[PM_LICHEN], c2.x, c2.y, NO_MM_FLAGS);
+                }
 
                 if (jm && getenv("VULTURE_SELFTEST_SLEEP")) /* probe: s137 sleeper */
                     jm->msleeping = 1;
@@ -5319,6 +5376,8 @@ vselftest(void)
                 fclose(f);
             }
         }
+        if (getenv("VULTURE_SELFTEST_GEAR"))
+            vgs_probe(0, dir);
         lines.push_back("a +0 dagger");
         lines.push_back("2 uncursed food rations");
         lines.push_back("a scroll labeled ELBIB YLOH");
@@ -5340,12 +5399,36 @@ vselftest(void)
                 vfx_list.push_back(e);
             }
         }
+        if (getenv("VULTURE_SELFTEST_SPEED")) /* probe: s144 hourglass */
+            vsr_t = SDL_GetTicks() - 300, vsr_kind = 2;
         if (!getenv("VULTURE_SELFTEST_NOCENTER")) /* probe: undo any edge-scroll */
             levwin->set_view(u.ux, u.uy);
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_hover.bmp", dir);
         SDL_SaveBMP(vulture_screen, path);
+        if (getenv("VULTURE_SELFTEST_LIGHT")) { /* probe: s145 relief cost */
+            char fp2[700];
+            FILE *f2;
+
+            snprintf(fp2, sizeof fp2, "%s/relief.txt", dir);
+            if ((f2 = fopen(fp2, "w")) != 0) {
+                vl_relief_report(f2);
+                fclose(f2);
+            }
+            vl_relief_set(false); /* the same frame, flat, to compare */
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            snprintf(fp2, sizeof fp2, "%s\\selftest_flat.bmp", dir);
+            SDL_SaveBMP(vulture_screen, fp2);
+            vl_relief_set(true);
+        }
+        if (getenv("VULTURE_SELFTEST_CLICK") && isok(vhv.x, vhv.y)) { /* probe: s145 travel */
+            vck_from.x = u.ux, vck_from.y = u.uy;
+            vck_to = vhv;
+            vprobe_push_click(vck_to);
+            break;
+        }
         for (m = fmon; m; m = m->nmon) /* a hostile if there is one (odds) */
             if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame)
                 break;
@@ -5364,6 +5447,22 @@ vselftest(void)
             }
         break;
     case 2:
+        if (getenv("VULTURE_SELFTEST_CLICK") && isok(vck_from.x, vck_from.y)) { /* probe: s145 */
+            char fp[700];
+            FILE *f;
+            point mp = levwin->map_to_mouse(vck_from);
+
+            vulture_set_mouse_pos(mp.x, mp.y);
+            vhv = vck_from;
+            vhv_since = SDL_GetTicks() - 1000;
+            snprintf(fp, sizeof fp, "%s\\click.txt", dir);
+            if ((f = fopen(fp, "w")) != 0) {
+                fprintf(f, "from=%d,%d to=%d,%d now=%d,%d travel=%d run=%d multi=%d\n",
+                        vck_from.x, vck_from.y, vck_to.x, vck_to.y, u.ux, u.uy,
+                        svc.context.travel, svc.context.run, gm.multi);
+                fclose(f);
+            }
+        }
         if (getenv("VULTURE_SELFTEST_SLEEP")) { /* probe: s137 ripple + payoff */
             vulture_noise(u.ux, u.uy, 25);
             vfx_list.back().t0 -= 260;
@@ -5397,6 +5496,17 @@ vselftest(void)
         snprintf(path, sizeof path, "%s\\selftest_aim.bmp", dir);
         SDL_SaveBMP(vulture_screen, path);
         vulture_aim_set(false, -1, -1);
+        if (getenv("VULTURE_SELFTEST_CLICK")) /* probe: s145 pause menu */
+            vprobe_push_key(SDLK_ESCAPE);
+        if (getenv("VULTURE_SELFTEST_SPEED")) { /* probe: s144 Alt danger map */
+            SDL_SetModState(KMOD_LALT);
+            vhv.x = -1;
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            snprintf(path, sizeof path, "%s\\selftest_alt.bmp", dir);
+            SDL_SaveBMP(vulture_screen, path);
+            SDL_SetModState(KMOD_NONE);
+        }
         if (getenv("VULTURE_SELFTEST_AOE")) { /* probe: s138 skilled fireball spot */
             point sq, mp;
 
@@ -5413,6 +5523,8 @@ vselftest(void)
         }
         break;
     case 4:
+        if (getenv("VULTURE_SELFTEST_GEAR"))
+            vgs_probe(4, dir);
         if (getenv("VULTURE_SELFTEST_RT")) { /* probe: s140 turns passing */
             char fp[700];
             FILE *f;
@@ -5425,7 +5537,7 @@ vselftest(void)
                 fclose(f);
             }
         }
-        if (vulture_aim_mode == 3) {
+        if (vulture_aim_mode == 3 || getenv("VULTURE_SELFTEST_CLICK")) {
             if (!getenv("VULTURE_SELFTEST_NOCENTER"))
                 levwin->set_view(u.ux, u.uy);
             levwin->force_redraw();
@@ -5703,6 +5815,10 @@ static const vtip_def vtip_defs[] = {
     { "unknown", "Unidentified items",
       "Its true name is hidden until you identify it: try it carefully,\n"
       "check its shop price, or read a scroll of identify." },
+    { "gearsets", "Gear sets",
+      "Click SET 1 (beside your speed badge) to save what you wear and wield.\n"
+      "One click (or Ctrl+1) changes you back into it later - each piece\n"
+      "is swapped for you, in the right order, at the normal speed." },
     { "realtime", "Real-time",
       "Turns pass while you stand still, and it switches to turn-based\n"
       "when a fight starts. Click the top-left pill or press Pause to change." },
@@ -5839,6 +5955,11 @@ vtip_tick(void)
             if ((o->oclass == POTION_CLASS || o->oclass == SCROLL_CLASS)
                 && !objects[o->otyp].oc_name_known && o->dknown) {
                 vtip_want("unknown");
+                break;
+            }
+        for (o = gi.invent; o; o = o->nobj)
+            if (o->oclass == ARMOR_CLASS && !o->owornmask && svm.moves > 30) { /* s145 */
+                vtip_want("gearsets");
                 break;
             }
     }
@@ -6170,7 +6291,7 @@ vthreat(struct monst *m, Uint8 *r, Uint8 *g, Uint8 *b)
 }
 
 /* ---- auto actions ---- */
-enum { VAUTO_NONE, VAUTO_AMOVE, VAUTO_REST };
+enum { VAUTO_NONE, VAUTO_AMOVE, VAUTO_REST, VAUTO_GEAR /* s145 */ };
 static int vauto_mode = VAUTO_NONE;
 static point vauto_to = { -1, -1 };
 static bool vamove_pending = false;
@@ -6265,8 +6386,318 @@ vauto_start(int mode, int tx, int ty)
     vauto_to.x = tx, vauto_to.y = ty;
     vauto_moves = -1;
     vauto_idle = 0;
-    vulture_sfx(mode == VAUTO_REST ? "rest_start" : "amove_go"); /* s131 */
+    if (mode != VAUTO_GEAR) /* s145: the gear makes its own sounds */
+        vulture_sfx(mode == VAUTO_REST ? "rest_start" : "amove_go"); /* s131 */
     vquiet_search = mode == VAUTO_REST; /* s140: rest quietly */
+}
+
+/* ---- s145: gear sets ----
+   Three outfits per character, beside the speed badge.  Click an empty one
+   (or right-click any) to save what you wear and wield now; click a saved
+   one to change into it.  The change runs one stock action per turn through
+   the auto-step driver (VAUTO_GEAR -> vulture_gear_act in do_wear.c), so
+   delays, curses and interruptions are the game's own, and any key or
+   click stops it.  Ctrl+1..3 from the keyboard.  Kept per character in
+   gearsets-<name>.txt by object id (ids survive save and restore), tagged
+   with the character's birthday so a new hero of the same name starts
+   empty. */
+#define VGS_N 3
+#define VGS_MAX 16
+struct vgs_set {
+    int n;
+    unsigned id[VGS_MAX];
+    long slot[VGS_MAX];
+};
+static vgs_set vgs[VGS_N];
+static char vgs_owner[PL_NSIZ + 32] = "";
+static SDL_Rect vgs_rect[VGS_N];
+static int vgs_going = -1;
+static const long vgs_slots[] = { W_WEP, W_ARMU, W_ARM,  W_ARMC, W_ARMH,  W_ARMG, W_ARMF,
+                                  W_ARMS, W_AMUL, W_TOOL, W_RINGL, W_RINGR, 0L };
+
+static std::string
+vgs_path(void)
+{
+    const char *la = getenv("LOCALAPPDATA");
+    char name[PL_NSIZ + 4], buf[700];
+    int i;
+
+    for (i = 0; svp.plname[i] && i < PL_NSIZ; i++)
+        name[i] = isalnum((unsigned char) svp.plname[i]) ? svp.plname[i] : '_';
+    name[i] = 0;
+    snprintf(buf, sizeof buf, "%s\\NetHack\\5.0\\gearsets-%s.txt", la ? la : ".", name);
+    return buf;
+}
+
+static void
+vgs_save(void)
+{
+    FILE *f = fopen(vgs_path().c_str(), "w");
+    int s, i;
+
+    if (!f)
+        return;
+    fprintf(f, "%ld\n", (long) ubirthday);
+    for (s = 0; s < VGS_N; s++) {
+        fprintf(f, "%d", vgs[s].n);
+        for (i = 0; i < vgs[s].n; i++)
+            fprintf(f, " %u %ld", vgs[s].id[i], vgs[s].slot[i]);
+        fprintf(f, "\n");
+    }
+    fclose(f);
+}
+
+static void
+vgs_load(void)
+{
+    char key[PL_NSIZ + 32];
+    FILE *f;
+    long bd = 0;
+    int s, i, n;
+
+    if (!svp.plname[0])
+        return;
+    snprintf(key, sizeof key, "%s/%ld", svp.plname, (long) ubirthday);
+    if (!strcmp(key, vgs_owner))
+        return;
+    snprintf(vgs_owner, sizeof vgs_owner, "%s", key);
+    memset(vgs, 0, sizeof vgs);
+    if ((f = fopen(vgs_path().c_str(), "r")) == 0)
+        return;
+    if (fscanf(f, "%ld", &bd) == 1 && bd == (long) ubirthday)
+        for (s = 0; s < VGS_N; s++) {
+            if (fscanf(f, "%d", &n) != 1 || n < 0 || n > VGS_MAX)
+                break;
+            for (i = 0; i < n; i++)
+                if (fscanf(f, "%u %ld", &vgs[s].id[i], &vgs[s].slot[i]) != 2) {
+                    n = i;
+                    break;
+                }
+            vgs[s].n = n;
+        }
+    fclose(f);
+}
+
+static struct obj *
+vgs_obj(unsigned id)
+{
+    struct obj *o;
+
+    for (o = gi.invent; id && o; o = o->nobj)
+        if (o->o_id == id)
+            return o;
+    return NULL;
+}
+
+static struct obj *
+vgs_in(long s)
+{
+    switch (s) {
+    case W_WEP: return uwep;
+    case W_ARMU: return uarmu;
+    case W_ARM: return uarm;
+    case W_ARMC: return uarmc;
+    case W_ARMH: return uarmh;
+    case W_ARMG: return uarmg;
+    case W_ARMF: return uarmf;
+    case W_ARMS: return uarms;
+    case W_AMUL: return uamul;
+    case W_TOOL: return ublindf;
+    case W_RINGL: return uleft;
+    case W_RINGR: return uright;
+    }
+    return NULL;
+}
+
+static void
+vgs_store(int k)
+{
+    vgs_set &g = vgs[k];
+    int i;
+
+    vgs_load();
+    g.n = 0;
+    for (i = 0; vgs_slots[i] && g.n < VGS_MAX; i++) {
+        struct obj *o = vgs_in(vgs_slots[i]);
+
+        if (vgs_slots[i] == W_WEP || o) {
+            g.id[g.n] = o ? o->o_id : 0;
+            g.slot[g.n++] = vgs_slots[i];
+        }
+    }
+    vgs_save();
+    vulture_sfx("ui_click");
+    pline("Gear set %d saved: %s and %d piece%s worn.  Click it to change back into it.",
+          k + 1, uwep ? "your weapon" : "bare hands", g.n - 1, g.n - 1 == 1 ? "" : "s");
+}
+
+/* 2 wearing it now, 1 saved, 0 empty */
+static int
+vgs_state(int k)
+{
+    int i;
+
+    if (!vgs[k].n)
+        return 0;
+    for (i = 0; i < vgs[k].n; i++) {
+        struct obj *o = vgs_obj(vgs[k].id[i]);
+
+        if (vgs[k].slot[i] == W_WEP) {
+            if (vgs[k].id[i] ? (!o || uwep != o) : uwep != NULL)
+                return 1;
+        } else if (!o || !(o->owornmask & (W_ARMOR | W_ACCESSORY))) {
+            return 1;
+        }
+    }
+    return 2;
+}
+
+static void
+vgs_equip(int k)
+{
+    vgs_load();
+    if (!vgs[k].n) {
+        vgs_store(k);
+        return;
+    }
+    if (vgs_state(k) == 2) {
+        pline("You're already wearing gear set %d.", k + 1);
+        return;
+    }
+    if (vauto_mode != VAUTO_NONE)
+        vauto_stop(NULL);
+    vulture_gear_begin(vgs[k].id, vgs[k].slot, vgs[k].n);
+    vgs_going = k;
+    vulture_sfx("ui_click");
+    pline("You start changing into gear set %d.", k + 1);
+    vauto_start(VAUTO_GEAR, -1, -1);
+}
+
+static int
+vgs_hit(int mx, int my)
+{
+    int i;
+
+    for (i = 0; i < VGS_N; i++)
+        if (vgs_rect[i].w && mx >= vgs_rect[i].x && mx < vgs_rect[i].x + vgs_rect[i].w
+            && my >= vgs_rect[i].y && my < vgs_rect[i].y + vgs_rect[i].h)
+            return i;
+    return -1;
+}
+
+static void
+vgs_draw(void)
+{
+    int i, x;
+
+    memset(vgs_rect, 0, sizeof vgs_rect);
+    if (!vspd_rect.w || !u.ux)
+        return;
+    vgs_load();
+    x = vspd_rect.x + vspd_rect.w + 4;
+    for (i = 0; i < VGS_N; i++) {
+        char lab[16];
+        int st = vgs_state(i), tw;
+        bool going = vauto_mode == VAUTO_GEAR && vgs_going == i;
+        Uint8 r = 120, g = 120, b = 130;
+        SDL_Rect rc;
+
+        snprintf(lab, sizeof lab, "SET %d", i + 1);
+        tw = vulture_text_length(V_FONT_SMALL, lab);
+        rc.x = x, rc.y = vspd_rect.y, rc.w = tw + 14, rc.h = vspd_rect.h;
+        if (going) {
+            int p = 170 + (int) (85 * (0.5 + 0.5 * sin(SDL_GetTicks() / 120.0)));
+
+            r = 255, g = (Uint8) p, b = 90;
+        } else if (st == 2) {
+            r = 120, g = 220, b = 140;
+        } else if (st == 1) {
+            r = 210, g = 195, b = 160;
+        }
+        vbox(rc.x, rc.y, rc.w, rc.h, st || going ? 200 : 120);
+        if (st || going) {
+            SDL_Rect bar = { (Sint16) rc.x, (Sint16) (rc.y + rc.h - 2), (Uint16) rc.w, 2 };
+
+            SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, r, g, b));
+        }
+        vulture_put_text_shadow(V_FONT_SMALL, lab, vulture_screen, rc.x + 7, rc.y + 2,
+                                SDL_MapRGB(vulture_screen->format, r, g, b),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        vgs_rect[i] = rc;
+        x += rc.w + 3;
+    }
+}
+
+/* probe: s145 - save set 1 as worn, build set 2 (coat under the cloak,
+   helmet, dagger) and change into it; stage 4 writes what's worn */
+
+static void
+vgs_probe(int stage, const char *dir)
+{
+    char fp[700];
+    FILE *f;
+
+    if (stage == 0) {
+        struct obj *a = mksobj(ELVEN_MITHRIL_COAT, FALSE, FALSE),
+                   *h = mksobj(DWARVISH_IRON_HELM, FALSE, FALSE),
+                   *d = mksobj(DAGGER, FALSE, FALSE);
+        vgs_set &g = vgs[1];
+
+        a->cursed = h->cursed = d->cursed = 0;
+        a = addinv(a), h = addinv(h), d = addinv(d);
+        vgs_store(0);
+        g.n = 0;
+        g.id[g.n] = d->o_id, g.slot[g.n++] = W_WEP;
+        g.id[g.n] = a->o_id, g.slot[g.n++] = W_ARM;
+        g.id[g.n] = h->o_id, g.slot[g.n++] = W_ARMH;
+        if (uarmc)
+            g.id[g.n] = uarmc->o_id, g.slot[g.n++] = W_ARMC;
+        vgs_save();
+        vgs_equip(1);
+        return;
+    }
+    snprintf(fp, sizeof fp, "%s\\gear.txt", dir);
+    if ((f = fopen(fp, "w")) != 0) {
+        fprintf(f, "turn=%ld set1=%d set2=%d going=%d mode=%d\n", svm.moves, vgs_state(0),
+                vgs_state(1), vgs_going, vauto_mode);
+        fprintf(f, "wep=%s\n", uwep ? doname(uwep) : "-");
+        fprintf(f, "suit=%s\n", uarm ? doname(uarm) : "-");
+        fprintf(f, "cloak=%s\n", uarmc ? doname(uarmc) : "-");
+        fprintf(f, "helm=%s\n", uarmh ? doname(uarmh) : "-");
+        fclose(f);
+    }
+}
+
+static std::string
+vgs_tip(int k)
+{
+    char hb[160];
+    std::string t;
+    int i;
+
+    vgs_load();
+    if (!vgs[k].n) {
+        snprintf(hb, sizeof hb,
+                 "Gear set %d (empty)\nClick to save what you wear and wield right now,\n"
+                 "then click it again any time to change back into it  [Ctrl+%d]",
+                 k + 1, k + 1);
+        return hb;
+    }
+    snprintf(hb, sizeof hb,
+             "Gear set %d - click to change into it, one piece per turn  [Ctrl+%d]\n"
+             "Right-click to save what you wear now instead",
+             k + 1, k + 1);
+    t = hb;
+    for (i = 0; i < vgs[k].n; i++) {
+        struct obj *o = vgs_obj(vgs[k].id[i]);
+
+        t += "\n  ";
+        if (vgs[k].slot[i] == W_WEP && !vgs[k].id[i])
+            t += "bare hands";
+        else
+            t += o ? doname(o) : "(no longer carried)";
+    }
+    return t;
 }
 
 /* ---- s140: time modes ----
@@ -6517,6 +6948,28 @@ vulture_auto_step(void *result)
     }
     if (gm.multi || go.occupation || u.uswallow)
         return false;
+    if (vauto_mode == VAUTO_GEAR) { /* s145: one stock action per turn */
+        int p = vulture_gear_pending();
+
+        if (p <= 0) {
+            if (p == 0) {
+                int miss = vulture_gear_missed();
+
+                if (miss)
+                    pline("Gear set %d is on - %d piece%s couldn't be put on or %s gone.",
+                          vgs_going + 1, miss, miss == 1 ? "" : "s", miss == 1 ? "is" : "are");
+                else
+                    pline("Gear set %d is on.", vgs_going + 1);
+            }
+            vauto_stop(NULL);
+            vgs_going = -1;
+            return false;
+        }
+        cmdq_add_ec(CQ_CANNED, vulture_gear_act);
+        vulture_click_consumed = TRUE;
+        vauto_result(result);
+        return true;
+    }
     if (svm.moves == vauto_moves) {
         if (++vauto_idle > 3) {
             vauto_stop("You stop - you're not getting anywhere.");
@@ -6562,6 +7015,78 @@ vulture_auto_step(void *result)
         return false;
     }
     vauto_result(result);
+    return true;
+}
+
+/* ---- s145: the pause menu (Esc during play) ----
+   Nothing moves while it is open: turns only pass on commands, and the
+   real-time clock never ticks inside a menu.  Game commands are queued so
+   they run exactly as typed; interface settings apply at once. */
+static bool
+vpause_menu(void *result)
+{
+    int winid, n, pick;
+    anything any;
+    menu_item *sel = NULL;
+    char tm[96], title[64];
+    static const struct {
+        int id;
+        char key;
+        const char *txt;
+    } items[] = { { 1, 'r', "Resume" },
+                  { 2, 'o', "Game options" },
+                  { 3, 'i', "Interface options" },
+                  { 4, 't', NULL },
+                  { 5, 'h', "Help and keys" },
+                  { 6, 's', "Save and quit" },
+                  { 7, 'q', "Quit without saving" } };
+    size_t i;
+
+    vulture_sfx("ui_click");
+    winid = vulture_create_nhwindow(NHW_MENU);
+    vulture_start_menu(winid, MENU_BEHAVE_STANDARD);
+    snprintf(tm, sizeof tm, "Time mode: %s (%s speed)", vrt_names[vrt_get()],
+             vrt_speed_nm[vrt_speed < 0 ? 0 : vrt_speed]);
+    for (i = 0; i < sizeof items / sizeof items[0]; i++) {
+        any = cg.zeroany;
+        any.a_int = items[i].id;
+        vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, items[i].key, 0,
+                         items[i].id == 1 ? ATR_BOLD : ATR_NONE, NO_COLOR,
+                         items[i].txt ? items[i].txt : tm, MENU_ITEMFLAGS_NONE);
+    }
+    snprintf(title, sizeof title, "Paused  -  turn %ld", svm.moves);
+    vulture_end_menu(winid, title);
+    if (getenv("VULTURE_SELFTEST_CLICK")) /* probe: s145 */
+        vpause_probe_t = SDL_GetTicks();
+    n = vulture_select_menu(winid, PICK_ONE, &sel);
+    vulture_destroy_nhwindow(winid);
+    pick = (n > 0 && sel) ? sel[0].item.a_int : 1;
+    if (sel)
+        free((genericptr_t) sel);
+    switch (pick) {
+    case 2:
+        cmdq_add_ec(CQ_CANNED, doset);
+        break;
+    case 3:
+        vulture_iface_opts();
+        return false;
+    case 4:
+        vrt_cycle();
+        return false;
+    case 5:
+        cmdq_add_ec(CQ_CANNED, dohelp);
+        break;
+    case 6:
+        cmdq_add_ec(CQ_CANNED, dosave);
+        break;
+    case 7:
+        cmdq_add_ec(CQ_CANNED, done2);
+        break;
+    default:
+        vulture_sfx("ui_cancel");
+        return false;
+    }
+    vauto_result(result); /* a dummy command; the queued one runs next */
     return true;
 }
 
@@ -6992,6 +7517,184 @@ vl_sample(double mx, double my, float *L, float *r, float *g, float *b)
     *L = acc[0], *r = acc[1], *g = acc[2], *b = acc[3];
 }
 
+/*
+ * IMPLEMENTATION_LOG s145: surface relief (normal-mapped lighting).
+ * Each frame the textures under the light get a normal map made from
+ * themselves: brightness is read as height (mortar and cracks low, stone
+ * faces high), its slope gives a surface normal per pixel, and that normal
+ * is lit from the direction the light actually comes from - the slope of
+ * the light field vl_render already samples on its coarse grid, which points
+ * at the lamps, fires and glows nearby.  So stonework catches the light on
+ * the side facing your torch and falls into shadow on the far side, and a
+ * fire elemental rakes the floor around it.  Where the light is even (a lit
+ * room, away from any source) a faint top-left key keeps a little depth.
+ * Full-resolution, integer-only, on the map pixels before the darkness
+ * layer; F9 cycles full / flat / off.
+ */
+static bool vl_relief_on = true;
+static std::vector<short> vr_dx, vr_dy; /* light direction x strength, per cell */
+static int vr_lw = 0, vr_lh = 0;
+static Uint32 vr_last_ms = 0; /* probe: cost of the last pass */
+
+static void
+vl_relief_set(bool on)
+{
+    vl_relief_on = on;
+}
+
+static void
+vl_relief_report(FILE *f) /* probe */
+{
+    fprintf(f, "relief_ms=%u on=%d grid=%dx%d\n", (unsigned) vr_last_ms, (int) vl_relief_on,
+            vr_lw, vr_lh);
+}
+
+static std::vector<int> vr_cmin, vr_cmax; /* lit cells per grid row (-1: none) */
+
+static void
+vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
+{
+    SDL_Surface *s = vulture_screen;
+    static std::vector<Uint8> lp, lc, ln;
+    static std::vector<Uint32> ob[2];
+    int ob_y[2] = { -1, -1 }, ob_a[2] = { 0, 0 }, ob_b[2] = { 0, 0 };
+    Uint32 t0 = SDL_GetTicks(), mask;
+    int x, y, x0, y0, x1, y1, W, rs, gs, bs, sl;
+
+    if (!vl_relief_on || !s || s->format->BytesPerPixel != 4 || !vr_lw || !vr_lh)
+        return;
+    x0 = ax < 1 ? 1 : ax, y0 = ay < 1 ? 1 : ay;
+    x1 = ax + w > s->w - 1 ? s->w - 1 : ax + w;
+    y1 = ay + h > s->h - 1 ? s->h - 1 : ay + h;
+    if (x1 - x0 < 8 || y1 - y0 < 8)
+        return;
+    W = s->w;
+    rs = s->format->Rshift, gs = s->format->Gshift, bs = s->format->Bshift;
+    mask = ~(((Uint32) 255 << rs) | ((Uint32) 255 << gs) | ((Uint32) 255 << bs));
+    lp.resize(W), lc.resize(W), ln.resize(W);
+    ob[0].resize(W), ob[1].resize(W);
+    if (SDL_MUSTLOCK(s))
+        SDL_LockSurface(s);
+#define VR_PX(yy) ((Uint32 *) ((Uint8 *) s->pixels + (size_t) (yy) * s->pitch))
+#define VR_LUM(p) ((Uint8) (((((p) >> rs) & 255) * 2 + (((p) >> gs) & 255) * 5 \
+                             + (((p) >> bs) & 255)) >> 3))
+#define VR_FLUSH(k)                                                                     \
+    if (ob_y[k] >= 0) {                                                                 \
+        memcpy(VR_PX(ob_y[k]) + ob_a[k], &ob[k][ob_a[k]],                               \
+               sizeof(Uint32) * (size_t) (ob_b[k] - ob_a[k]));                          \
+        ob_y[k] = -1;                                                                   \
+    }
+    /* each row is written back only after the row below it has read it, so
+       heights always come from the untouched picture */
+    for (y = y0; y < y1; y++) {
+        int cj = (y - gy0) / FS, xa, xb, ci, ca, cb;
+        Uint32 *rp, *rc, *rn;
+
+        sl = y & 1;
+        VR_FLUSH(sl);
+        if (y < gy0 || cj >= vr_lh || vr_cmin[cj] < 0)
+            continue;
+        ca = vr_cmin[cj], cb = vr_cmax[cj];
+        xa = gx0 + ca * FS, xb = gx0 + (cb + 1) * FS;
+        if (xa < x0)
+            xa = x0;
+        if (xb > x1)
+            xb = x1;
+        if (xb - xa < 2)
+            continue;
+        rp = VR_PX(y - 1), rc = VR_PX(y), rn = VR_PX(y + 1);
+        for (x = xa - 1; x <= xb; x++) {
+            lp[x] = VR_LUM(rp[x]);
+            lc[x] = VR_LUM(rc[x]);
+            ln[x] = VR_LUM(rn[x]);
+        }
+        memcpy(&ob[sl][xa], rc + xa, sizeof(Uint32) * (size_t) (xb - xa));
+        ob_y[sl] = y, ob_a[sl] = xa, ob_b[sl] = xb;
+        for (ci = ca; ci <= cb; ci++) { /* a cell's run of pixels at a time */
+            int k = cj * vr_lw + ci, dx = vr_dx[k], dy = vr_dy[k], xs, xe;
+
+            if (!dx && !dy)
+                continue;
+            xs = gx0 + ci * FS, xe = xs + FS;
+            if (xs < xa)
+                xs = xa;
+            if (xe > xb)
+                xe = xb;
+            for (x = xs; x < xe; x++) {
+                int hx = lc[x + 1] - lc[x - 1], hy = ln[x] - lp[x], d, r, g, bb, m;
+                Uint32 p;
+
+                /* lit side: the slope faces the light when -grad(h) . light > 0 */
+                d = -(hx * dx + hy * dy) >> 8;
+                if (!d)
+                    continue;
+                if (d > 70)
+                    d = 70;
+                else if (d < -80)
+                    d = -80;
+                p = ob[sl][x], m = 256 + d;
+                r = (int) (((p >> rs) & 255) * m) >> 8;
+                g = (int) (((p >> gs) & 255) * m) >> 8;
+                bb = (int) (((p >> bs) & 255) * m) >> 8;
+                if (r > 255) r = 255;
+                if (g > 255) g = 255;
+                if (bb > 255) bb = 255;
+                ob[sl][x] = (p & mask) | ((Uint32) r << rs) | ((Uint32) g << gs)
+                            | ((Uint32) bb << bs);
+            }
+        }
+    }
+    VR_FLUSH(0);
+    VR_FLUSH(1);
+#undef VR_FLUSH
+#undef VR_PX
+#undef VR_LUM
+    if (SDL_MUSTLOCK(s))
+        SDL_UnlockSurface(s);
+    vr_last_ms = SDL_GetTicks() - t0;
+}
+
+/* the light's direction and strength per coarse cell, from the sampled
+   light levels Lg (lw x lh): towards brighter, stronger where it falls off
+   faster (near a source), plus a faint top-left key where it's lit */
+static void
+vl_relief_dirs(const std::vector<float> &Lg, int lw, int lh)
+{
+    int i, j;
+
+    vr_lw = lw, vr_lh = lh;
+    vr_dx.assign((size_t) lw * lh, 0);
+    vr_dy.assign((size_t) lw * lh, 0);
+    vr_cmin.assign((size_t) lh, -1);
+    vr_cmax.assign((size_t) lh, -1);
+    for (j = 1; j < lh - 1; j++)
+        for (i = 1; i < lw - 1; i++) {
+            float L = Lg[(size_t) j * lw + i], gx, gy, mag, st, key;
+
+            if (L < 0.08f)
+                continue; /* too dark to show any relief */
+            gx = Lg[(size_t) j * lw + i + 1] - Lg[(size_t) j * lw + i - 1];
+            gy = Lg[(size_t) (j + 1) * lw + i] - Lg[(size_t) (j - 1) * lw + i];
+            mag = sqrtf(gx * gx + gy * gy);
+            st = mag * 14.0f; /* a few cells from a lamp: full strength */
+            if (st > 1.0f)
+                st = 1.0f;
+            if (L < 1.0f)
+                st *= 0.4f + 0.6f * L;
+            key = 0.22f * (L > 1.0f ? 1.0f : L);
+            {
+                float ux = mag > 1e-5f ? gx / mag : 0, uy = mag > 1e-5f ? gy / mag : 0;
+                float lx = ux * st - 0.6f * key, ly = uy * st - 0.8f * key;
+
+                vr_dx[(size_t) j * lw + i] = (short) (lx * 256.0f);
+                vr_dy[(size_t) j * lw + i] = (short) (ly * 256.0f);
+                if (vr_cmin[j] < 0)
+                    vr_cmin[j] = i;
+                vr_cmax[j] = i;
+            }
+        }
+}
+
 static void
 vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, int h)
 {
@@ -7004,6 +7707,9 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     int lw, lh, i, j;
     Uint32 now = SDL_GetTicks();
     SDL_Rect src, dst;
+    int max0 = ax, may0 = ay, mw0 = w, mh0 = h; /* s145: the map's own rect */
+    static int c_gx0 = 0, c_gy0 = 0;              /* s145: where grid cell 0,0 was */
+    static std::vector<float> Lg;
 
     if (!vl_on || !u.ux || w < 32 || h < 32 || u.uswallow)
         return;
@@ -7014,6 +7720,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         && abs(cx - c_cx) < M && abs(cy - c_cy) < M
         && (vtw_animating || now - c_when < 90) && vl_flashes.empty()) {
         dst.x = ax - M + (cx - c_cx), dst.y = ay - M + (cy - c_cy);
+        vl_relief(max0, may0, mw0, mh0, c_gx0 + (cx - c_cx), c_gy0 + (cy - c_cy), FS);
         SDL_BlitSurface(vl_full, NULL, vulture_screen, &dst);
         return;
     }
@@ -7036,6 +7743,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     }
     if (!vl_low || !vl_full)
         return;
+    Lg.assign((size_t) lw * lh, 0.0f);
     SDL_LockSurface(vl_low);
     for (j = 0; j < lh; j++) {
         Uint32 *row = (Uint32 *) ((Uint8 *) vl_low->pixels + j * vl_low->pitch);
@@ -7056,6 +7764,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
             vl_sample(vx + a, vy + b2, &L, &r, &g, &b);
             if (L < 0)
                 L = 0;
+            Lg[(size_t) j * lw + i] = L; /* s145 */
             dark = (1.0f - (L > 1.0f ? 1.0f : L)) * 0.80f;
             cr = cg = cb = 1.0f;
             if (L > 0.01f)
@@ -7084,6 +7793,9 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         dst.h = h;
     if (SDL_SoftStretchLinear(vl_low, &src, vl_full, &dst) != 0)
         return;
+    vl_relief_dirs(Lg, lw, lh); /* s145 */
+    c_gx0 = ax - FS / 2, c_gy0 = ay - FS / 2; /* cell i covers ax+i*FS +- FS/2 */
+    vl_relief(max0, may0, mw0, mh0, c_gx0, c_gy0, FS);
     dst.x = ax, dst.y = ay;
     SDL_BlitSurface(vl_full, NULL, vulture_screen, &dst);
 }
@@ -7520,6 +8232,7 @@ levelwin::draw()
     vhb_draw(this->abs_x, this->abs_y, this->w, this->h);   /* s126 */
     vbtn_draw();                                            /* s130 */
     vstealth_draw();                                        /* s137 */
+    vgs_draw();                                             /* s145 */
     vrt_draw();                                             /* s140 */
     vtip_draw();                                            /* s142 */
     vhere_draw(this->abs_x, this->abs_y, this->w, this->h); /* s125 */
@@ -7675,6 +8388,10 @@ levelwin::handle_timer_event(window *target, void *result, int time)
             vulture_mouse_set_tooltip(t);
             return V_EVENT_HANDLED_NOREDRAW;
         }
+        if (vgs_hit(mp.x, mp.y) >= 0) { /* s145 */
+            vulture_mouse_set_tooltip(vgs_tip(vgs_hit(mp.x, mp.y)));
+            return V_EVENT_HANDLED_NOREDRAW;
+        }
         if (vspd_rect.w && mp.x >= vspd_rect.x && mp.x < vspd_rect.x + vspd_rect.w
             && mp.y >= vspd_rect.y && mp.y < vspd_rect.y + vspd_rect.h) { /* s144 */
             char sb2[200];
@@ -7798,7 +8515,8 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
                       : vpt_hit(mouse.x, mouse.y) ? 400 : -1);
     }
     if (vhb_hit(mouse.x, mouse.y) >= 0 || vpt_hit(mouse.x, mouse.y)
-        || vbtn_hit(mouse.x, mouse.y) >= 0 || vmp_hit(mouse.x, mouse.y) >= 0) { /* s126 */
+        || vbtn_hit(mouse.x, mouse.y) >= 0 || vmp_hit(mouse.x, mouse.y) >= 0
+        || vgs_hit(mouse.x, mouse.y) >= 0) { /* s126, s145 */
         vulture_set_mcursor(V_CURSOR_NORMAL);
         if (vhv.x != -1) {
             vhv.x = vhv.y = -1;
@@ -7908,6 +8626,16 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
     }
+    if (vgs_hit(mouse.x, mouse.y) >= 0) { /* s145: gear sets */
+        int k = vgs_hit(mouse.x, mouse.y);
+
+        if (button == SDL_BUTTON_LEFT)
+            vgs_equip(k);
+        else if (button == SDL_BUTTON_RIGHT)
+            vgs_store(k);
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+    }
     if (vtip_hit(mouse.x, mouse.y)) { /* s142: close the tip / no more tips */
         if (button == SDL_BUTTON_RIGHT) {
             vtip_state = 1;
@@ -8009,6 +8737,12 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
     int translated_key, key;
     int macronum, i;
 
+    if ((mod & KMOD_CTRL) && !(mod & (KMOD_ALT | KMOD_SHIFT)) && sym >= SDLK_1
+        && sym <= SDLK_3) { /* s145: gear sets */
+        vgs_equip(sym - SDLK_1);
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+    }
     switch (sym) {
     case SDLK_TAB:
         /* s130: Tab fights the nearest enemy (DCSS); Shift+Tab is the map */
@@ -8030,7 +8764,17 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
             force_redraw();
             return V_EVENT_HANDLED_REDRAW;
         }
-        break;
+        if (vauto_mode != VAUTO_NONE) { /* s145: stop FIGHT / REST / gear first */
+            vauto_stop("You stop.");
+            force_redraw();
+            return V_EVENT_HANDLED_REDRAW;
+        }
+        if (vpause_menu(result)) { /* s145: the pause menu */
+            force_redraw();
+            return V_EVENT_HANDLED_FINAL;
+        }
+        force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
 
     case SDLK_a:
         if ((mod & KMOD_SHIFT) && !(mod & (KMOD_CTRL | KMOD_ALT))) {
@@ -8082,9 +8826,15 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
 
-    case SDLK_F9: /* s133: dynamic lighting on/off */
-        vl_on = !vl_on;
-        pline("Dynamic lighting %s.", vl_on ? "on" : "off");
+    case SDLK_F9: /* s133: dynamic lighting; s145: full / flat / off */
+        if (vl_on && vl_relief_on)
+            vl_relief_on = false;
+        else if (vl_on)
+            vl_on = false;
+        else
+            vl_on = vl_relief_on = true;
+        pline("Dynamic lighting: %s.", !vl_on ? "off" : vl_relief_on ? "full, with surface relief"
+                                                                     : "flat (no surface relief)");
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
 

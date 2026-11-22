@@ -3057,6 +3057,49 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Monster card (compact and Shift): "Moves 2.0 squares per move of yours - you can't outrun it" / "Moves once per 1.5 of your moves - you can outrun it", orange when faster than you.
 - Speed badge beside the stealth badge: SPEED: NORMAL / FAST / VERY FAST / SLOW; tooltip gives actions per turn, the Fast/Very fast rule, load warning, and the Alt hint.
 
+### 145. Gear sets, pause menu, click-travel fixes, surface relief lighting
+
+- **Gear sets** (SET 1-3 beside the speed badge, Ctrl+1..3). Click an empty
+  set (or right-click any) to save what you wear and wield; click a saved set
+  to change into it.  Core: `vulture_gear_begin/pending/act/missed` in
+  do_wear.c plan ONE stock action per call - blockers come off through the
+  'A' takeoff occupation (`select_off` + `take_off`, so order, delays, curses
+  and interruptions are stock), then the weapon (`vulture_ready_weapon` in
+  wield.c, swapwep/quiver aware), then each missing piece
+  (`accessory_or_armor_on`; a ring's hand is pre-answered with a queued key,
+  popped again if never asked).  Anything that fails is skipped, never
+  retried.  Driver: VAUTO_GEAR in `vulture_auto_step` (NOT a self-requeueing
+  cmdq chain: `nomul()` clears CQ_CANNED, so multi-turn armour would wipe
+  it).  Stops when hurt or when the takeoff is interrupted.  Saved per
+  character in gearsets-<name>.txt by o_id, tagged with ubirthday.  Tip
+  "gearsets" once you carry spare armour.  Probe VULTURE_SELFTEST_GEAR:
+  coat under the cloak + helm + dagger went on in 5 turns, set flagged worn.
+  Bug found on the way: the de-dup loop's bound grew with the counter it
+  advanced and read an uninitialised pointer (crash) - fixed.
+- **Pause menu on Esc** (`vpause_menu`): Resume / Game options / Interface
+  options / Time mode (cycles) / Help and keys / Save and quit / Quit without
+  saving.  Game commands are queued (doset, dohelp, dosave, done2); Esc first
+  stops a running FIGHT/REST/gear.  The old `vulture_show_mainmenu` was never
+  called and is left alone.
+- **Trail vanished after a click** until Esc: rhack() clears context.travel
+  only at the START of the next command, and context.run stayed 8 after
+  arriving (probe: travel=0 run=8 multi=0).  The preview now hides only while
+  `gm.multi || go.occupation`.
+- **Click-travel looked like teleporting**: runmode "leap" (the default)
+  redrew every 7th step and the walk tween only glides one-square moves, so
+  most steps snapped.  `runmode_delay_output` now redraws every step in leap
+  mode too; each step is the 90 ms glide.
+- **Surface relief** (normal-mapped lighting, `vl_relief`): per frame,
+  texture brightness is read as height, its slope gives a normal per pixel,
+  lit from the light field's own gradient (towards the lamps/fires/glows on
+  the coarse grid) plus a faint top-left key where lit.  Integer, only over
+  each row's lit cells, delayed row write-back so heights come from the
+  untouched frame.  ~6 ms at 1x in the probe (11 ms before the span pass).
+  F9 cycles full / flat / off.  Normal maps are derived, not shipped: no new
+  assets.
+- s144 checks done: hourglass icon, Alt danger map (ant: red ring + orange
+  outer ring), lichen orange-only ring all seen in probe shots.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

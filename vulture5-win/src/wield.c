@@ -169,9 +169,10 @@ empty_handed(void)
 staticfn int
 ready_weapon(struct obj *wep)
 {
-    if (wep)
+    if (wep) {
         vulture_sfx("wield"); /* Vulture s80: action sound */
         vulture_bark(VB_WIELD); /* s113 */
+    }
     /* Separated function so swapping works easily */
     int res = ECMD_OK;
     boolean was_twoweap = u.twoweap, had_wep = (uwep != 0);
@@ -1085,6 +1086,23 @@ mwelded(struct obj *obj)
     if (obj && (obj->owornmask & W_WEP) && will_weld(obj))
         return TRUE;
     return FALSE;
+}
+
+/* Vulture s145: gear sets wield through the stock path (see dowield) */
+int
+vulture_ready_weapon(struct obj *wep)
+{
+    if (wep && (wep->owornmask & (W_ARMOR | W_ACCESSORY)))
+        return ECMD_OK;
+    if (wep && wep == uswapwep)
+        return doswapweapon();
+    if (wep && wep == uquiver)
+        setuqwep((struct obj *) 0);
+    if (!wep && uwep && welded(uwep)) {
+        weldmsg(uwep);
+        return ECMD_OK;
+    }
+    return ready_weapon(wep);
 }
 
 /*wield.c*/

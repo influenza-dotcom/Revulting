@@ -3016,7 +3016,10 @@ runmode_delay_output(void)
            (relative to turn counter; ought to be to start of running);
            for walk and crawl (visual debugging) modes, update the
            display after every step */
-        if (flags.runmode != RUN_LEAP || !(svm.moves % 7L)) {
+        /* Vulture s145: leap mode redraws every step too - each step is a
+           short glide (levelwin vtw), so skipping 6 in 7 made click-travel
+           look like teleporting */
+        if (flags.runmode != RUN_LEAP || TRUE) {
             /* moveloop() suppresses time_botl when running */
             disp.time_botl = flags.time;
             curs_on_u();

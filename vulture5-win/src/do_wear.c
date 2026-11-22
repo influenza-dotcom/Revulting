@@ -3650,4 +3650,309 @@ count_worn_armor(void)
     return ret;
 }
 
+/*
+ * Vulture s145: gear sets.
+ * The interface saves what you wear and wield as a set (object ids and the
+ * slot each was in).  Picking the set calls vulture_gear_pending() and then
+ * queues vulture_gear_act() once per action from its auto-step driver, so
+ * every change is a stock action with stock timing: whatever is in the way
+ * comes off through the 'A' multi-takeoff occupation (order, delays, curses
+ * and interruptions all stock), then the set's weapon is wielded, then each
+ * missing piece is put on.  Anything that can't be done (the piece is gone,
+ * a cursed piece is in the way, the wear fails) is skipped, never retried.
+ */
+#define VG_MAX 16
+static unsigned vg_id[VG_MAX];
+static long vg_slot[VG_MAX];
+static int vg_n = 0, vg_hp0 = 0, vg_nskip = 0, vg_steps = 0, vg_gone = 0;
+static unsigned vg_skip[VG_MAX * 2];
+static boolean vg_removing = FALSE, vg_bare_skip = FALSE;
+static const long vg_order[] = { W_ARMU, W_ARM, W_ARMC, W_ARMH, W_ARMG, W_ARMF,
+                                 W_ARMS, W_AMUL, W_TOOL, W_RINGL, W_RINGR, 0L };
+
+staticfn struct obj *
+vg_obj(unsigned id)
+{
+    struct obj *o;
+
+    for (o = gi.invent; id && o; o = o->nobj)
+        if (o->o_id == id)
+            return o;
+    return (struct obj *) 0;
+}
+
+staticfn boolean
+vg_skipped(struct obj *o)
+{
+    int i;
+
+    for (i = 0; o && i < vg_nskip; i++)
+        if (vg_skip[i] == o->o_id)
+            return TRUE;
+    return FALSE;
+}
+
+staticfn void
+vg_skipit(struct obj *o)
+{
+    if (o && !vg_skipped(o) && vg_nskip < VG_MAX * 2)
+        vg_skip[vg_nskip++] = o->o_id;
+}
+
+staticfn boolean
+vg_in_set(struct obj *o)
+{
+    int i;
+
+    for (i = 0; o && i < vg_n; i++)
+        if (vg_id[i] == o->o_id && vg_slot[i] != W_WEP)
+            return TRUE;
+    return FALSE;
+}
+
+staticfn struct obj *
+vg_in_slot(long slot)
+{
+    switch (slot) {
+    case W_ARM: return uarm;
+    case W_ARMC: return uarmc;
+    case W_ARMH: return uarmh;
+    case W_ARMS: return uarms;
+    case W_ARMG: return uarmg;
+    case W_ARMF: return uarmf;
+    case W_ARMU: return uarmu;
+    case W_AMUL: return uamul;
+    case W_TOOL: return ublindf;
+    case W_RINGL: return uleft;
+    case W_RINGR: return uright;
+    case W_WEP: return uwep;
+    }
+    return (struct obj *) 0;
+}
+
+staticfn boolean
+vg_worn(struct obj *o)
+{
+    return (boolean) (o && (o->owornmask & (W_ARMOR | W_ACCESSORY)) != 0L);
+}
+
+/* the set's weapon entry: 0 none saved, 1 an object (*w), 2 bare hands */
+staticfn int
+vg_weapon(struct obj **w)
+{
+    int i;
+
+    *w = (struct obj *) 0;
+    for (i = 0; i < vg_n; i++)
+        if (vg_slot[i] == W_WEP) {
+            if (!vg_id[i])
+                return 2;
+            *w = vg_obj(vg_id[i]);
+            return *w ? 1 : 0;
+        }
+    return 0;
+}
+
+/* worn things that must come off before set piece o can go on; returns
+   how many were added to bl[] (-1: o can't go on at all) */
+staticfn int
+vg_blockers(struct obj *o, long slot, struct obj **bl, int nb)
+{
+    int n0 = nb;
+    struct obj *occ;
+
+    if (slot == W_RINGL || slot == W_RINGR) {
+        if (uleft && uright) { /* both hands full: free one not in the set */
+            occ = vg_in_slot(slot);
+            if (occ && vg_in_set(occ))
+                occ = (occ == uleft) ? uright : uleft;
+            if (!occ || vg_in_set(occ))
+                return -1;
+            bl[nb++] = occ;
+        }
+        return nb - n0;
+    }
+    occ = vg_in_slot(slot);
+    if (occ && occ != o) {
+        if (vg_in_set(occ))
+            return -1;
+        bl[nb++] = occ;
+    }
+    if ((slot == W_ARM || slot == W_ARMU) && uarmc)
+        bl[nb++] = uarmc; /* a new suit or shirt goes on under the cloak */
+    if (slot == W_ARMU && uarm && uarm != occ)
+        bl[nb++] = uarm;
+    return nb - n0;
+}
+
+/* plan the next action: 1 remove (bl[0..*nb)), 2 wield (*o, NULL = bare
+   hands), 3 put on (*o, *slot), 0 nothing left */
+staticfn int
+vg_plan(struct obj **o, long *slot, struct obj **bl, int *nb)
+{
+    struct obj *w, *p;
+    int i, k, j, kind = vg_weapon(&w);
+
+    *nb = 0;
+    for (k = 0; vg_order[k]; k++)
+        for (i = 0; i < vg_n; i++) {
+            int got, z, dup;
+
+            if (vg_slot[i] != vg_order[k] || !(p = vg_obj(vg_id[i])) || vg_worn(p)
+                || vg_skipped(p))
+                continue;
+            got = vg_blockers(p, vg_slot[i], bl, *nb);
+            if (got < 0) {
+                vg_skipit(p);
+                continue;
+            }
+            for (z = *nb; z < *nb + got; z++)
+                if (vg_skipped(bl[z])) { /* a stuck piece in the way */
+                    vg_skipit(p);
+                    got = 0;
+                    break;
+                }
+            { /* keep the new ones, minus duplicates */
+                int st = *nb, en = *nb + got;
+
+                for (z = st; z < en; z++) {
+                    for (dup = 0, j = 0; j < *nb; j++)
+                        if (bl[j] == bl[z])
+                            dup = 1;
+                    if (!dup)
+                        bl[(*nb)++] = bl[z];
+                }
+            }
+        }
+    /* a two-handed weapon needs the shield off */
+    if (kind == 1 && w != uwep && bimanual(w) && uarms && !vg_in_set(uarms)
+        && !vg_skipped(uarms) && !vg_skipped(w))
+        bl[(*nb)++] = uarms;
+    if (*nb)
+        return 1;
+    if (kind == 1 && w != uwep && !vg_skipped(w) && !vg_worn(w)) {
+        *o = w;
+        return 2;
+    }
+    if (kind == 2 && uwep && !vg_bare_skip) {
+        *o = (struct obj *) 0;
+        return 2;
+    }
+    for (k = 0; vg_order[k]; k++)
+        for (i = 0; i < vg_n; i++)
+            if (vg_slot[i] == vg_order[k] && (p = vg_obj(vg_id[i])) != 0 && !vg_worn(p)
+                && !vg_skipped(p)) {
+                *o = p, *slot = vg_slot[i];
+                return 3;
+            }
+    return 0;
+}
+
+void
+vulture_gear_begin(const unsigned *ids, const long *slots, int n)
+{
+    int i;
+
+    vg_n = vg_nskip = vg_steps = vg_gone = 0;
+    for (i = 0; i < n && vg_n < VG_MAX; i++) {
+        vg_id[vg_n] = ids[i], vg_slot[vg_n] = slots[i];
+        if (ids[i] && !vg_obj(ids[i]))
+            vg_gone++;
+        vg_n++;
+    }
+    vg_removing = vg_bare_skip = FALSE;
+    vg_hp0 = Upolyd ? u.mh : u.uhp;
+}
+
+/* 1 more to do, 0 done, -1 stopped (and says why) */
+int
+vulture_gear_pending(void)
+{
+    struct obj *o = 0, *bl[VG_MAX * 2];
+    long slot = 0L;
+    int nb, hp = Upolyd ? u.mh : u.uhp;
+
+    if (vg_removing && svc.context.takeoff.mask) {
+        You("stop changing gear.");
+        return -1;
+    }
+    vg_removing = FALSE;
+    if (hp < vg_hp0) {
+        You("stop changing gear - you're under attack!");
+        return -1;
+    }
+    vg_hp0 = hp;
+    if (++vg_steps > 40)
+        return 0;
+    return vg_plan(&o, &slot, bl, &nb) ? 1 : 0;
+}
+
+/* pieces of the set that couldn't be put on, or are no longer carried */
+int
+vulture_gear_missed(void)
+{
+    int i, n = vg_gone;
+    struct obj *p;
+
+    for (i = 0; i < vg_n; i++)
+        if (vg_slot[i] != W_WEP && (p = vg_obj(vg_id[i])) != 0 && !vg_worn(p))
+            n++;
+    return n;
+}
+
+int
+vulture_gear_act(void)
+{
+    struct obj *o = 0, *bl[VG_MAX * 2];
+    long slot = 0L;
+    int nb, i, res;
+
+    switch (vg_plan(&o, &slot, bl, &nb)) {
+    case 1: /* everything in the way, in one stock 'A' */
+        reset_remarm();
+        for (i = 0; i < nb; i++) {
+            long before = svc.context.takeoff.mask;
+
+            (void) select_off(bl[i]);
+            if (svc.context.takeoff.mask == before)
+                vg_skipit(bl[i]); /* cursed or otherwise stuck */
+        }
+        if (svc.context.takeoff.mask) {
+            (void) strncpy(svc.context.takeoff.disrobing, "changing gear", CONTEXTVERBSZ);
+            vg_removing = TRUE;
+            (void) take_off();
+        }
+        return ECMD_OK; /* take_off() accounts for the time */
+    case 2:
+        res = vulture_ready_weapon(o);
+        if (uwep != o) {
+            if (o)
+                vg_skipit(o);
+            else
+                vg_bare_skip = TRUE;
+        }
+        return res;
+    case 3: {
+        char key = 0;
+
+        if ((slot == W_RINGL || slot == W_RINGR) && !uleft && !uright) {
+            key = (slot == W_RINGL) ? 'l' : 'r'; /* answer "Right or Left?" */
+            cmdq_add_key(CQ_CANNED, key);
+        }
+        res = accessory_or_armor_on(o);
+        if (key && gc.command_queue[CQ_CANNED]
+            && gc.command_queue[CQ_CANNED]->typ == CMDQ_KEY
+            && gc.command_queue[CQ_CANNED]->key == key) { /* not asked after all */
+            struct _cmd_queue *cq = cmdq_pop();
+
+            free(cq);
+        }
+        if (!vg_worn(o))
+            vg_skipit(o);
+        return res;
+    }
+    }
+    return ECMD_OK;
+}
+
 /*do_wear.c*/
