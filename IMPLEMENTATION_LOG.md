@@ -3348,6 +3348,22 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   kept its sword: the arms roll is 50/50 and fell to x1.2 damage); every
   aim spent; the menu shot shows each part with its chance and effect.
 
+### 157. Multi-square moves glide; boulders and thrown things land with weight
+
+- **Monsters snapped when they moved 2+ squares** between frames you see
+  (fast ones do): vtw_prepare only tweened moves of exactly one square.
+  `VTW_REACH` (3) now applies at all four places (mover detection, mover
+  offsets, camera detection, camera offset): moves up to 3 squares glide
+  along the straight line in the step's time; longer jumps (teleports)
+  still snap.  A probe-only "glide dx,dy" log line marks them.  Not seen
+  in the short probe runs (the fast ant never moved 2 between frames).
+- **Weight, moving half**: `vulture_object_impact(x, y, owt)` - called when
+  a pushed boulder rolls into its square (hack.c, after movobj) and when a
+  thrown object comes to rest (dothrow.c) - queues the same dust / thud /
+  jolt as landings (heft by weight, capped at 6 for a rumbling boulder).
+  The probe could not push the boulder (movement keys follow the view
+  rotation; the hero walked past it), so this hook is untested.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

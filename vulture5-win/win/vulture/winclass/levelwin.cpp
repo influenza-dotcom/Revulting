@@ -311,6 +311,10 @@ static int vheft_obj(const struct obj *o);
 static void vimpact(int x, int y, int heft, int delay_ms);
 static void vstep_puff(int x, int y, int sub, bool wet); /* s154 */
 
+/* s157: moves of up to this many squares glide (fast monsters cover 2-3
+   between the frames you see); longer jumps - teleports - still snap */
+#define VTW_REACH 3
+
 struct vtw_ent {
     int x, y;
     signed char face;
@@ -387,9 +391,12 @@ vtw_prepare(int vx, int vy)
         if (!snap_ok)
             continue;
         int dx = it->second.x - sn->second.x, dy = it->second.y - sn->second.y;
-        if ((dx || dy) && abs(dx) <= 1 && abs(dy) <= 1) {
+        if ((dx || dy) && abs(dx) <= VTW_REACH && abs(dy) <= VTW_REACH) {
             int sx, sy;
 
+            if ((abs(dx) > 1 || abs(dy) > 1) && !vtw_animating && !vtw_pending
+                && getenv("VULTURE_SELFTEST")) /* probe: s157 */
+                vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "glide %d,%d squares\n", dx, dy);
             moved = true;
             vtw_proj(dx, dy, &sx, &sy);
             if (sx > 0)
@@ -399,7 +406,7 @@ vtw_prepare(int vx, int vy)
         }
     }
     if (snap_ok && vtw_snap_vx >= 0 && (vx != vtw_snap_vx || vy != vtw_snap_vy)
-        && abs(vx - vtw_snap_vx) <= 1 && abs(vy - vtw_snap_vy) <= 1)
+        && abs(vx - vtw_snap_vx) <= VTW_REACH && abs(vy - vtw_snap_vy) <= VTW_REACH)
         moved = true;
 
     if (moved && !vtw_animating && !vtw_pending) {
@@ -466,7 +473,7 @@ vtw_prepare(int vx, int vy)
         if (sn == vtw_snap.end() || !snap_ok)
             continue;
         int dx = sn->second.x - x, dy = sn->second.y - y;
-        if ((dx || dy) && abs(dx) <= 1 && abs(dy) <= 1) {
+        if ((dx || dy) && abs(dx) <= VTW_REACH && abs(dy) <= VTW_REACH) {
             int sx, sy;
 
             vtw_proj(dx, dy, &sx, &sy);
@@ -487,8 +494,8 @@ vtw_prepare(int vx, int vy)
             vtw_mv[y][x] = 1;
         }
     }
-    if (snap_ok && vtw_snap_vx >= 0 && abs(vx - vtw_snap_vx) <= 1
-        && abs(vy - vtw_snap_vy) <= 1) {
+    if (snap_ok && vtw_snap_vx >= 0 && abs(vx - vtw_snap_vx) <= VTW_REACH
+        && abs(vy - vtw_snap_vy) <= VTW_REACH) {
         int sx, sy;
 
         vtw_proj(vx - vtw_snap_vx, vy - vtw_snap_vy, &sx, &sy);
@@ -1265,6 +1272,17 @@ vimpact(int x, int y, int heft, int delay_ms)
     q.x = x, q.y = y, q.heft = heft > 8 ? 8 : heft;
     q.when = SDL_GetTicks() + (Uint32) (delay_ms < 0 ? 0 : delay_ms);
     vimp_queue.push_back(q);
+}
+
+/* s157: a pushed boulder or a thrown object comes to rest at (x, y) */
+extern "C" void
+vulture_object_impact(int x, int y, int weight)
+{
+    int h = weight < 15 ? 0 : weight < 60 ? 1 : weight < 200 ? 2 : weight < 450 ? 4
+          : weight < 1500 ? 6 : 8;
+
+    if (levwin)
+        vimpact(x, y, h > 6 ? 6 : h, 40); /* a rolling boulder rumbles, it doesn't slam */
 }
 
 /* fire impacts that are due: dust, a thud, a jolt */
@@ -5910,6 +5928,39 @@ vselftest(void)
             pluslvl(FALSE);
         if (getenv("VULTURE_SELFTEST_AIM")) /* probe: s156 aimed blows, stage by stage */
             vaim_probe(1, dir);
+        if (getenv("VULTURE_SELFTEST_BOULDER")) { /* probe: s157 push a boulder twice */
+            int bdx, dd, placed = 0;
+            static const int ddx[4] = { 1, -1, 0, 0 }, ddy[4] = { 0, 0, 1, -1 };
+
+            /* keys follow the view rotation: a boulder on every side with
+               room behind it, so the push works whichever way 'l' goes */
+            for (dd = 0; dd < 4; dd++) {
+                for (bdx = 1; bdx <= 3; bdx++) {
+                    int xx = u.ux + ddx[dd] * bdx, yy = u.uy + ddy[dd] * bdx;
+
+                    if (!isok(xx, yy) || !ACCESSIBLE(levl[xx][yy].typ) || m_at(xx, yy))
+                        break;
+                }
+                if (bdx > 3) {
+                    (void) mksobj_at(BOULDER, u.ux + ddx[dd], u.uy + ddy[dd], FALSE, FALSE);
+                    newsym(u.ux + ddx[dd], u.uy + ddy[dd]);
+                    placed++;
+                }
+            }
+            if (placed) {
+                vprobe_push_key(SDLK_l);
+                vprobe_push_key(SDLK_l);
+            } else {
+                FILE *bf;
+                char bp[700];
+
+                snprintf(bp, sizeof bp, "%s\\impacts.txt", dir);
+                if ((bf = fopen(bp, "a")) != 0) {
+                    fprintf(bf, "no room east to push a boulder\n");
+                    fclose(bf);
+                }
+            }
+        }
         if (getenv("VULTURE_SELFTEST_WALK")) { /* probe: s147 a held key, then single steps */
             static const SDL_Keycode ks[] = { SDLK_h, SDLK_l, SDLK_j, SDLK_k };
             int q;

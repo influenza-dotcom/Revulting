@@ -207,6 +207,7 @@ dopush(
         unmap_object(rx, ry);
     otmp->next_boulder = 0;
     movobj(otmp, rx, ry); /* does newsym(rx,ry) */
+    vulture_object_impact(rx, ry, (int) otmp->owt); /* s157: it rumbles in */
     if (Blind) {
         feel_location(rx, ry);
         feel_location(sx, sy);

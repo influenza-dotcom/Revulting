@@ -1825,6 +1825,7 @@ throwit(
         }
         gt.thrownobj = (struct obj *) 0;
         place_object(obj, gb.bhitpos.x, gb.bhitpos.y);
+        vulture_object_impact(gb.bhitpos.x, gb.bhitpos.y, (int) obj->owt); /* s157 */
         /* container contents might break;
            do so before turning ownership of gt.thrownobj over to shk
            (container_impact_dmg handles item already owned by shop) */
