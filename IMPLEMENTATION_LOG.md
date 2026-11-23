@@ -3428,6 +3428,25 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   frame 15 -> 9 ms, idle frame 16 -> 10 ms; frames drawn in the same run
   244 -> 442.  No band seams; a 2-minute soak ran clean.
 
+### 168. Frames presented through the GPU (GPU project, stage 2)
+
+- `vgpu_reattach` / `vgpu_present` (vulture_sdl.cpp): with gpu=1 (the default;
+  vulture.conf `gpu=`, and a "GPU presentation" switch in Visual effects that
+  applies on restart) the window gets an accelerated SDL_Renderer; the game
+  keeps drawing into an off-screen RGB888 surface (render_scale times the
+  window) and each refresh uploads the changed rectangle to a streaming
+  texture that the GPU draws - linearly filtered when render_scale > 1, in
+  place of the CPU box filter.  The screen shake is done by the GPU too.  No
+  accelerated renderer -> logged, and the window-surface path runs as
+  before.  A window recreated by a fullscreen switch gets a new renderer
+  (SDL_DestroyWindow freed the old one).  The death-cam's unused
+  SDL_GetWindowSurface call is gone (it would fight the renderer).
+- Probes: the dummy driver has no accelerated renderer -> "gpu: no renderer
+  ... using the window surface" and play as before; VULTURE_GPU_SOFT=1 forces
+  SDL's software renderer through the new path -> "gpu: renderer software",
+  a full fight probe ran and the frames are correct.  The accelerated path
+  itself (Direct3D / OpenGL) needs a real window - untested here.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

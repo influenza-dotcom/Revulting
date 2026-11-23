@@ -3040,8 +3040,7 @@ vulture_replay_play(void)
                                 d.y + d.h - 60,
                                 SDL_MapRGB(vulture_screen->format, 235, 215, 170),
                                 SDL_MapRGB(vulture_screen->format, 0, 0, 0));
-        win = SDL_GetWindowSurface(vulture_sdl_window);
-        nhUse(win);
+        nhUse(win); /* s168: no window-surface grab (a renderer may own the window) */
         vulture_refresh();
         /* slow toward the end */
         SDL_Delay(k > vrp_count - 6 ? 260 : 120);
@@ -8356,12 +8355,30 @@ vfx_menu(void)
             vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, (char) ('a' + k), 0,
                              on[k] ? ATR_BOLD : ATR_NONE, NO_COLOR, lb[k], MENU_ITEMFLAGS_NONE);
         }
+        { /* s168: the GPU presenter, applies on restart */
+            static char gl[96];
+
+            snprintf(gl, sizeof gl, "GPU presentation  -  %s  (takes effect when you restart)",
+                     vulture_opts.gpu ? "ON" : "off");
+            any = cg.zeroany;
+            any.a_int = 7;
+            vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'g', 0,
+                             vulture_opts.gpu ? ATR_BOLD : ATR_NONE, NO_COLOR, gl, MENU_ITEMFLAGS_NONE);
+        }
         vulture_end_menu(winid, "Visual effects  -  pick one to switch it");
         n = vulture_select_menu(winid, PICK_ONE, &sel);
         vulture_destroy_nhwindow(winid);
         pick = (n > 0 && sel) ? sel[0].item.a_int : 0;
         if (sel)
             free((genericptr_t) sel);
+        if (pick == 7) { /* s168 */
+            vulture_opts.gpu = !vulture_opts.gpu;
+            vulture_write_userconfig();
+            vulture_sfx("ui_click");
+            pline("GPU presentation %s - restart the game for it to take effect.",
+                  vulture_opts.gpu ? "on" : "off");
+            continue;
+        }
         if (pick < 1 || pick > 6)
             return;
         switch (pick) {

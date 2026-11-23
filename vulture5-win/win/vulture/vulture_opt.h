@@ -34,6 +34,9 @@ struct vulture_optstruct {
 	 * and shows FOUR TIMES as much of the level, at half apparent size.
 	 * 1 = off, and off is byte-for-byte the historical render path. */
 	int render_scale;
+	/* s168: present frames through the graphics card (an SDL_Renderer);
+	 * falls back to the window surface if no accelerated renderer exists */
+	int gpu;
 	/* Overview-map (Tab) zoom.  The parchment is a fixed 640x480 painting;
 	 * this is the integer factor its art is built at.  0 = auto: the largest
 	 * factor that fits on screen WITHOUT covering the message lines. */

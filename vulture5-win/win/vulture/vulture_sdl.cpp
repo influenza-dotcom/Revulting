@@ -326,6 +326,115 @@ Uint32 vulture_timer_callback(Uint32 interval, void * param)
  * vulture_px_format, derived from vulture_screen->format in
  * vulture_init_colors(), is unchanged).
  */
+/*
+ * IMPLEMENTATION_LOG s168: frames reach the screen through the graphics card.
+ * With gpu=1 the window gets an accelerated SDL_Renderer; the game still draws
+ * into an off-screen software surface (vulture_screen, render_scale times the
+ * window), and each refresh uploads the changed rectangle to a streaming
+ * texture and the GPU draws it - scaled with linear filtering when
+ * render_scale > 1 (that replaces the CPU box filter).  Without an
+ * accelerated renderer it quietly falls back to the window surface.  A
+ * window recreated by a fullscreen switch takes its renderer with it, so a
+ * new one is made for the new window.  (VULTURE_GPU_SOFT=1 forces the
+ * software renderer - for exercising this path in the off-screen probes.)
+ */
+SDL_Renderer *vulture_gpu = NULL;
+static SDL_Texture *vulture_gpu_tex = NULL;
+static SDL_Window *vulture_gpu_win = NULL;
+static int vulture_gpu_failed = 0;
+
+static bool vgpu_reattach(int want)
+{
+	int ow = 0, oh = 0, rw, rh;
+
+	if (vulture_gpu && vulture_gpu_win != vulture_sdl_window) {
+		/* SDL_DestroyWindow took the old renderer and its texture with it */
+		vulture_gpu = NULL;
+		vulture_gpu_tex = NULL;
+	}
+	if (!vulture_gpu) {
+		Uint32 fl = getenv("VULTURE_GPU_SOFT") ? SDL_RENDERER_SOFTWARE : SDL_RENDERER_ACCELERATED;
+
+		vulture_gpu = SDL_CreateRenderer(vulture_sdl_window, -1, fl);
+		if (!vulture_gpu) {
+			vulture_gpu_failed = 1;
+			vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+				"gpu: no renderer (%s) - using the window surface\n", SDL_GetError());
+			return false;
+		}
+		vulture_gpu_win = vulture_sdl_window;
+		{
+			SDL_RendererInfo ri;
+
+			if (SDL_GetRendererInfo(vulture_gpu, &ri) == 0)
+				vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "gpu: renderer %s\n", ri.name);
+		}
+	}
+	if (SDL_GetRendererOutputSize(vulture_gpu, &ow, &oh) != 0 || ow <= 0 || oh <= 0)
+		SDL_GetWindowSize(vulture_sdl_window, &ow, &oh);
+	rw = ow * want, rh = oh * want;
+	if (vulture_render_surface &&
+		(vulture_render_surface->w != rw || vulture_render_surface->h != rh ||
+		 vulture_render_surface->format->format != SDL_PIXELFORMAT_RGB888)) {
+		SDL_FreeSurface(vulture_render_surface);
+		vulture_render_surface = NULL;
+	}
+	if (!vulture_render_surface)
+		vulture_render_surface = SDL_CreateRGBSurfaceWithFormat(0, rw, rh, 32, SDL_PIXELFORMAT_RGB888);
+	if (vulture_gpu_tex) {
+		int tw = 0, th = 0;
+
+		SDL_QueryTexture(vulture_gpu_tex, NULL, NULL, &tw, &th);
+		if (tw != rw || th != rh) {
+			SDL_DestroyTexture(vulture_gpu_tex);
+			vulture_gpu_tex = NULL;
+		}
+	}
+	if (!vulture_gpu_tex)
+		vulture_gpu_tex = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_RGB888,
+			SDL_TEXTUREACCESS_STREAMING, rw, rh);
+	if (!vulture_render_surface || !vulture_gpu_tex) {
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+			"gpu: could not make the frame (%s) - using the window surface\n", SDL_GetError());
+		if (vulture_gpu_tex)
+			SDL_DestroyTexture(vulture_gpu_tex);
+		SDL_DestroyRenderer(vulture_gpu);
+		vulture_gpu = NULL, vulture_gpu_tex = NULL, vulture_gpu_failed = 1;
+		return false;
+	}
+	SDL_SetTextureScaleMode(vulture_gpu_tex, want > 1 ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+	SDL_SetSurfaceBlendMode(vulture_render_surface, SDL_BLENDMODE_NONE);
+	SDL_SetClipRect(vulture_render_surface, NULL);
+	vulture_window_surface = NULL; /* never touch the window surface with a renderer */
+	vulture_render_scale = want;
+	vulture_screen = vulture_render_surface;
+	return true;
+}
+
+/* upload the changed rectangle (render space; NULL = all) and show the frame */
+static void vgpu_present(const SDL_Rect *r)
+{
+	SDL_Surface *s = vulture_screen;
+
+	if (!vulture_gpu || !vulture_gpu_tex || !s)
+		return;
+	if (r && r->w > 0 && r->h > 0) {
+		SDL_Rect c = *r;
+
+		if (c.x < 0) c.w += c.x, c.x = 0;
+		if (c.y < 0) c.h += c.y, c.y = 0;
+		if (c.x + c.w > s->w) c.w = s->w - c.x;
+		if (c.y + c.h > s->h) c.h = s->h - c.y;
+		if (c.w > 0 && c.h > 0)
+			SDL_UpdateTexture(vulture_gpu_tex, &c,
+				(Uint8 *) s->pixels + (size_t) c.y * s->pitch + (size_t) c.x * 4, s->pitch);
+	} else if (!r) {
+		SDL_UpdateTexture(vulture_gpu_tex, NULL, s->pixels, s->pitch);
+	}
+	SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, NULL);
+	SDL_RenderPresent(vulture_gpu);
+}
+
 void vulture_reattach_render_surface(void)
 {
 	int want = vulture_opts.render_scale;
@@ -335,6 +444,8 @@ void vulture_reattach_render_surface(void)
 		want = 1;
 	if (want > V_RENDER_SCALE_MAX)
 		want = V_RENDER_SCALE_MAX;
+	if (vulture_opts.gpu && !vulture_gpu_failed && vulture_sdl_window && vgpu_reattach(want))
+		return; /* s168 */
 
 	vulture_window_surface = vulture_sdl_window ?
 			SDL_GetWindowSurface(vulture_sdl_window) : NULL;
@@ -1086,6 +1197,10 @@ void vulture_refresh_region
 	rect.y = (y1 < 0) ? 0 : y1;
 	rect.w = ((x2 >= vulture_screen->w) ? vulture_screen->w - 1 : x2) - rect.x + 1;
 	rect.h = ((y2 >= vulture_screen->h) ? vulture_screen->h - 1 : y2) - rect.y + 1;
+	if (vulture_gpu) { /* s168 */
+		vgpu_present(&rect);
+		return;
+	}
 
 	/* rect is RENDER space up to here (the callers' coordinates, and the
 	 * clamp above is against the render surface, which is correct).  Map it
@@ -1132,6 +1247,10 @@ void vulture_refresh_region
 
 void vulture_refresh(void)
 {
+	if (vulture_gpu) { /* s168 */
+		vgpu_present(NULL);
+		return;
+	}
 	if (vulture_render_scale > 1 && vulture_window_surface &&
 		vulture_screen != vulture_window_surface) {
 		SDL_Rect whole;
@@ -1162,6 +1281,34 @@ extern "C" void vulture_screen_shake(int strength)
 
 	if (!vulture_sdl_window || strength <= 0)
 		return;
+	if (vulture_gpu && vulture_gpu_tex) { /* s168: shake on the GPU */
+		int ow = 0, oh = 0;
+
+		SDL_GetRendererOutputSize(vulture_gpu, &ow, &oh);
+		SDL_UpdateTexture(vulture_gpu_tex, NULL, vulture_screen->pixels, vulture_screen->pitch);
+		if (strength > 8)
+			strength = 8;
+		amp = 4 + strength * 3;
+		for (f = 0; f < frames; f++) {
+			double k = 1.0 - (double) f / frames;
+			SDL_Rect d;
+
+			d.x = (int) (((rand() % (2 * amp + 1)) - amp) * k) - amp;
+			d.y = (int) (((rand() % (2 * amp + 1)) - amp) * k) - amp;
+			d.w = ow + 2 * amp, d.h = oh + 2 * amp;
+			SDL_SetRenderDrawColor(vulture_gpu, 0, 0, 0, 255);
+			SDL_RenderClear(vulture_gpu);
+			SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, &d);
+			SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_BLEND);
+			SDL_SetRenderDrawColor(vulture_gpu, 170, 0, 0, (Uint8) ((60 + 15 * strength) * k));
+			SDL_RenderFillRect(vulture_gpu, NULL);
+			SDL_RenderPresent(vulture_gpu);
+			SDL_Delay(16);
+		}
+		SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, NULL);
+		SDL_RenderPresent(vulture_gpu);
+		return;
+	}
 	win = SDL_GetWindowSurface(vulture_sdl_window);
 	if (!win)
 		return;
