@@ -4833,6 +4833,155 @@ vitem_compare(struct obj *o)
     return "";
 }
 
+/*
+ * s181: what an identified potion, scroll, wand, ring or amulet does - the
+ * rules, in a line or two, so the hover card answers "what is this for?"
+ * without a wiki.  Only for identified kinds (these are rules, not hidden
+ * state); checked against this 5.0 source where it was in doubt (speed,
+ * see invisible, invisibility, sleeping, full healing, fire, earth,
+ * guarding).  NULL for anything else.
+ */
+static const char *
+vitem_effect(int otyp)
+{
+    switch (otyp) {
+    /* potions */
+    case POT_BOOZE: return "Confuses you for a while (not if blessed) and feeds you a little.\nCursed: you pass out.";
+    case POT_FRUIT_JUICE: return "Food in a bottle: a little nutrition (more if blessed).";
+    case POT_SEE_INVISIBLE: return "You see invisible things for a long while (blessed: sometimes for\ngood); cures blindness unless cursed.  Tastes like fruit juice.";
+    case POT_SICKNESS: return "Costs HP and lowers a random attribute - only a little if you\nresist poison.  Blessed: barely hurts.  Healers are immune.";
+    case POT_CONFUSION: return "Confuses you for a while.";
+    case POT_EXTRA_HEALING: return "Heals a lot and cures blindness and hallucination; healed past\nfull, your max HP rises by 2 (5 if blessed).";
+    case POT_HALLUCINATION: return "You hallucinate for a long while: monsters and items look random.";
+    case POT_HEALING: return "Heals some HP and cures blindness (not if cursed); healed past\nfull, your max HP rises by 1.";
+    case POT_RESTORE_ABILITY: return "Restores a lost attribute (blessed: all of them).  Cursed: nothing.";
+    case POT_SLEEPING: return "Puts you to sleep for a while - unless you resist sleep or have\nfree action.";
+    case POT_BLINDNESS: return "Blinds you for a long while (with telepathy, you then sense minds).";
+    case POT_GAIN_ENERGY: return "Raises your maximum magic energy and refills some.  Cursed: drains it.";
+    case POT_INVISIBILITY: return "Makes you invisible for a while (blessed: rarely for good).\nCursed: wakes monsters.  Shopkeepers won't let the invisible in.";
+    case POT_MONSTER_DETECTION: return "Shows the monsters on this level (blessed: you keep sensing them\nfor a while).";
+    case POT_OBJECT_DETECTION: return "Shows the objects on this level.";
+    case POT_ENLIGHTENMENT: return "Tells you your intrinsics and condition (blessed: +1 Int and Wis).\nCursed: nothing.";
+    case POT_FULL_HEALING: return "Heals fully and cures blindness and hallucination; healed past full,\nmax HP +4 (+8 blessed).  Blessed: restores a lost experience level.";
+    case POT_LEVITATION: return "You float for a while: no going down stairs, no picking things up.\nBlessed: stop at will with >.  Cursed: stuck against the ceiling.";
+    case POT_POLYMORPH: return "Turns you into a random monster for a while - armour may burst.";
+    case POT_SPEED: return "Heals wounded legs; otherwise very fast for a while and, unless\ncursed, fast for good if you weren't.";
+    case POT_ACID: return "Burns you unless you resist acid - and cures stoning.";
+    case POT_OIL: return "Fuel: apply it to light it, or throw it lit as a firebomb.\nDrinking it unlit does no harm.";
+    case POT_GAIN_ABILITY: return "Raises an attribute by 1 (blessed: all of them).  Cursed: nothing.";
+    case POT_GAIN_LEVEL: return "Raises your experience level by one.  Cursed: you rise through\nthe ceiling to the level above.";
+    case POT_PARALYSIS: return "Freezes you in place for a while - unless you have free action.";
+    case POT_WATER: return "Holy water (blessed) blesses what you dip in it and cures\nlycanthropy if drunk; unholy water (cursed) curses.";
+    /* scrolls */
+    case SCR_ENCHANT_ARMOR: return "A piece of your worn armour +1 (blessed: up to +3).  Above +3\n(elven: +5) it may evaporate.  Cursed: -1.";
+    case SCR_DESTROY_ARMOR: return "Destroys a piece of your worn armour, the cloak first.\nConfused: makes armour erodeproof instead.";
+    case SCR_CONFUSE_MONSTER: return "Your hands glow: your next melee hit confuses the monster\n(blessed: several hits).";
+    case SCR_SCARE_MONSTER: return "Lying on the floor, it keeps most monsters from attacking you in\nmelee while you stand on it.  Picked up a second time, it turns to dust.";
+    case SCR_REMOVE_CURSE: return "Uncurses what you wear and wield (blessed: everything you carry).";
+    case SCR_ENCHANT_WEAPON: return "Your wielded weapon +1 (blessed: up to +3); above +5 it may\nevaporate.  Cursed: -1.  Confused: makes it rustproof.";
+    case SCR_CREATE_MONSTER: return "Creates a monster next to you.";
+    case SCR_TAMING: return "Tames the monsters next to you (confused: a wider area).";
+    case SCR_GENOCIDE: return "Wipes out a kind of monster for good (blessed: a whole class).\nCursed: brings them around you instead.";
+    case SCR_LIGHT: return "Lights up the area around you (cursed: darkens it).";
+    case SCR_TELEPORTATION: return "Teleports you somewhere on this level (confused: to another level).";
+    case SCR_GOLD_DETECTION: return "Shows the gold on this level (confused: the traps).";
+    case SCR_FOOD_DETECTION: return "Shows the food on this level.";
+    case SCR_IDENTIFY: return "Identifies an item - sometimes several (blessed: more).";
+    case SCR_MAGIC_MAPPING: return "Maps the whole level.";
+    case SCR_AMNESIA: return "You forget the map of this level (maybe others) and some of what\nyou've identified.";
+    case SCR_FIRE: return "A burst of fire centred on you (blessed: you pick the spot, five\ntimes stronger).  Confused: it only singes your hands.";
+    case SCR_EARTH: return "Boulders fall around you - and on you, unless blessed.\nCursed: only on you.";
+    case SCR_PUNISHMENT: return "Chains a heavy iron ball to you (blessed: nothing happens).";
+    case SCR_CHARGING: return "Recharges a wand, tool or ring (blessed: more).  Confused:\nrestores your magic energy instead.";
+    case SCR_STINKING_CLOUD: return "Places a poison cloud where you choose, nearby.";
+    case SCR_MAIL: return "A letter for you.";
+    case SCR_BLANK_PAPER: return "Blank: write a scroll on it with a magic marker.";
+    /* wands */
+    case WAN_LIGHT: return "Lights up the area around you.";
+    case WAN_SECRET_DOOR_DETECTION: return "Reveals hidden doors, passages and traps near you.";
+    case WAN_ENLIGHTENMENT: return "Tells you your intrinsics and condition.";
+    case WAN_CREATE_MONSTER: return "Creates a monster next to you.";
+    case WAN_WISHING: return "Zap it to wish for an item!";
+    case WAN_NOTHING: return "Does nothing.";
+    case WAN_STRIKING: return "A force bolt at a monster (magic resistance stops it); shatters\nboulders and statues.";
+    case WAN_MAKE_INVISIBLE: return "Makes a monster invisible (zapped at yourself: you, for good).";
+    case WAN_SLOW_MONSTER: return "Slows a monster down (zapped at yourself: you).";
+    case WAN_SPEED_MONSTER: return "Speeds a monster up (zapped at yourself: fast for good).";
+    case WAN_UNDEAD_TURNING: return "Hurts and frightens the undead; brings corpses back to life.";
+    case WAN_POLYMORPH: return "Transforms a monster, or objects it hits (zapped at yourself: you).";
+    case WAN_CANCELLATION: return "Strips the magic from a monster or item.  Never put it in a bag\nof holding - the bag explodes.";
+    case WAN_TELEPORTATION: return "Sends a monster or object elsewhere (zapped at yourself: you).";
+    case WAN_OPENING: return "Opens doors, locks and boxes; frees a monster - or you - from a trap.";
+    case WAN_LOCKING: return "Locks doors and boxes; closes trap doors and holes.";
+    case WAN_PROBING: return "Shows a monster's HP and what it carries (zapped at yourself:\nyour own).";
+    case WAN_DIGGING: return "Digs a tunnel through rock; zapped down, a hole to the level below.";
+    case WAN_MAGIC_MISSILE: return "A ray of magic missiles (magic resistance stops it).";
+    case WAN_FIRE: return "A ray of fire.  Engraving with it burns words that won't smudge.";
+    case WAN_COLD: return "A ray of cold; freezes water it crosses.";
+    case WAN_SLEEP: return "A ray that puts monsters to sleep - one of the best escapes.";
+    case WAN_DEATH: return "A death ray: kills most living things outright - not demons, the\nundead, or anything that resists magic or reflects.";
+    case WAN_LIGHTNING: return "A ray of lightning that can blind.  Engraving with it burns words\nthat won't smudge (and blinds you).";
+    /* rings */
+    case RIN_ADORNMENT: return "Charisma up (or down) by its enchantment.";
+    case RIN_GAIN_STRENGTH: return "Strength up (or down) by its enchantment.";
+    case RIN_GAIN_CONSTITUTION: return "Constitution up (or down) by its enchantment.";
+    case RIN_INCREASE_ACCURACY: return "You hit more often (or less) by its enchantment.";
+    case RIN_INCREASE_DAMAGE: return "You hit harder (or softer) by its enchantment.";
+    case RIN_PROTECTION: return "Better armour class by its enchantment.";
+    case RIN_REGENERATION: return "Heals you 1 HP every turn; you get hungry faster.";
+    case RIN_SEARCHING: return "Searches for hidden things around you every turn.";
+    case RIN_STEALTH: return "Your steps don't wake sleeping monsters.";
+    case RIN_SUSTAIN_ABILITY: return "Your attributes can't change - nothing lost, nothing gained.";
+    case RIN_LEVITATION: return "You float while you wear it: no stairs down, no picking up.\nIf it's cursed, it won't come off.";
+    case RIN_HUNGER: return "You get hungry much faster.";
+    case RIN_AGGRAVATE_MONSTER: return "Wakes monsters and draws them to you.";
+    case RIN_CONFLICT: return "Monsters near you fight each other - and you.  Uses up food.";
+    case RIN_WARNING: return "Shows hostile monsters nearby as numbers - higher is deadlier.";
+    case RIN_POISON_RESISTANCE: return "Protects you from poison.";
+    case RIN_FIRE_RESISTANCE: return "Protects you from fire.";
+    case RIN_COLD_RESISTANCE: return "Protects you from cold.";
+    case RIN_SHOCK_RESISTANCE: return "Protects you from electricity.";
+    case RIN_FREE_ACTION: return "You can't be paralysed or frozen in place.";
+    case RIN_SLOW_DIGESTION: return "You get hungry very slowly.";
+    case RIN_TELEPORTATION: return "Teleports you at random now and then.";
+    case RIN_TELEPORT_CONTROL: return "You choose where you teleport.";
+    case RIN_POLYMORPH: return "Polymorphs you at random now and then.";
+    case RIN_POLYMORPH_CONTROL: return "You choose what you polymorph into.";
+    case RIN_INVISIBILITY: return "Makes you invisible while you wear it.";
+    case RIN_SEE_INVISIBLE: return "You see invisible things.";
+    case RIN_PROTECTION_FROM_SHAPE_CHAN: return "Shapeshifters stay in their true form.";
+    /* amulets */
+    case AMULET_OF_ESP: return "Telepathy: you sense monsters' minds nearby - on the whole level\nwhile you're blind.";
+    case AMULET_OF_LIFE_SAVING: return "If you die while wearing it, you live instead - once.";
+    case AMULET_OF_STRANGULATION: return "Strangles you: take it off within 6 turns or die.";
+    case AMULET_OF_RESTFUL_SLEEP: return "Makes you fall asleep now and then.";
+    case AMULET_VERSUS_POISON: return "Protects you from poison.";
+    case AMULET_OF_CHANGE: return "Changes your sex when you put it on - then it's gone.";
+    case AMULET_OF_UNCHANGING: return "Keeps your form: you can't polymorph - or change back.";
+    case AMULET_OF_REFLECTION: return "Reflects rays, gazes and breath attacks.";
+    case AMULET_OF_MAGICAL_BREATHING: return "You need no air: no drowning, choking or poison gas.";
+    case AMULET_OF_FLYING: return "You fly: over water, lava and holes.";
+    case AMULET_OF_GUARDING: return "Armour class +2, and fewer special attacks get through\n(stronger magic cancellation).";
+    case FAKE_AMULET_OF_YENDOR: return "A cheap plastic imitation of the Amulet of Yendor.";
+    case AMULET_OF_YENDOR: return "The Amulet of Yendor - take it up to the Astral Plane.";
+    default: return NULL;
+    }
+}
+
+/* s181: what to do about an item you haven't identified */
+static const char *
+vitem_unknown_hint(struct obj *o)
+{
+    switch (o->oclass) {
+    case POTION_CLASS: return "Unidentified potion - drinking it tells you what it was.";
+    case SCROLL_CLASS: return "Unidentified scroll - reading it tells you what it was.";
+    case WAND_CLASS: return "Unidentified wand - engrave with it (E) for a clue to what it is\n(that uses a charge).";
+    case RING_CLASS: return "Unidentified ring - risky to try: a cursed ring won't come off.\nDrop it on an altar first to see if it's cursed.";
+    case AMULET_CLASS: return "Unidentified amulet - risky to try: one kind strangles you.\nDrop it on an altar first, and never wear a cursed one.";
+    default: return "Unidentified";
+    }
+}
+
 std::string
 vulture_item_info(struct obj *o)
 {
@@ -4922,8 +5071,10 @@ vulture_item_info(struct obj *o)
                && o->otyp != SPE_NOVEL && o->otyp != SPE_BOOK_OF_THE_DEAD) {
         snprintf(b, sizeof b, "Spell level %d", objects[o->otyp].oc_level);
         s += b;
+    } else if (tk && vitem_effect(o->otyp)) { /* s181 */
+        s += vitem_effect(o->otyp);
     } else if (!tk) {
-        s += "Unidentified";
+        s += vitem_unknown_hint(o); /* s181 */
     }
     if (!o->bknown)
         s += s.empty() ? "Curse status unknown" : "\nCurse status unknown";
@@ -5745,6 +5896,23 @@ vsq_hint(int x, int y)
 
             if (!cmp.empty()) {
                 fs = cmp + "  -  click to pick it up";
+                return fs.c_str();
+            }
+            /* s181: what it does, when you know what it is - one line,
+               cut short at a word if long (the full text is on its
+               inventory tooltip) */
+            if (fo && !Hallucination && vitem_type_known(fo) && vitem_effect(fo->otyp)) {
+                std::string e = vitem_effect(fo->otyp);
+                size_t q;
+
+                for (q = 0; q < e.size(); q++)
+                    if (e[q] == '\n')
+                        e[q] = ' ';
+                if (e.size() > 100) {
+                    q = e.rfind(' ', 96);
+                    e = e.substr(0, q == std::string::npos ? 96 : q) + "...";
+                }
+                fs = e + "  -  click to pick it up";
                 return fs.c_str();
             }
         }
@@ -6786,6 +6954,47 @@ vselftest(void)
             vprobe_push_key(SDLK_TAB);
             vprobe_push_key(SDLK_TAB);
             vprobe_push_key(SDLK_TAB);
+        }
+        if (getenv("VULTURE_SELFTEST_ITEMFX")) { /* probe: s181 a known item's hover line */
+            int dx, dy;
+            bool done = false;
+
+            makeknown(POT_HEALING);
+            for (dy = 1; dy >= -1 && !done; dy--) /* in front of the hero first */
+                for (dx = 1; dx >= -1 && !done; dx--) {
+                    coordxy fx = (coordxy) (u.ux + dx), fy = (coordxy) (u.uy + dy);
+
+                    if ((dx || dy) && isok(fx, fy) && ACCESSIBLE(levl[fx][fy].typ)
+                        && !m_at(fx, fy) && !OBJ_AT(fx, fy)) {
+                        struct obj *po = mksobj_at(POT_HEALING, fx, fy, FALSE, FALSE);
+                        point sq, mp;
+
+                        po->dknown = 1;
+                        newsym(fx, fy);
+                        flush_screen(1); /* the map learns of it now, not next turn */
+                        sq.x = fx, sq.y = fy;
+                        mp = levwin->map_to_mouse(sq);
+                        vulture_set_mouse_pos(mp.x, mp.y);
+                        vhv = sq;
+                        vhv_since = SDL_GetTicks() - 1000;
+                        done = true;
+                        {
+                            char ip[700];
+                            FILE *itf;
+                            const char *ih = vsq_hint(fx, fy);
+
+                            snprintf(ip, sizeof ip, "%s\\itemfx.txt", dir);
+                            if ((itf = fopen(ip, "w")) != 0) {
+                                fprintf(itf, "hero %d,%d potion %d,%d mouse %d,%d\nname [%s]\nhint [%s]\n",
+                                        u.ux, u.uy, fx, fy, mp.x, mp.y,
+                                        map_data->map_square_description(sq, 0).c_str(),
+                                        ih ? ih : "(null)");
+                                fclose(itf);
+                            }
+                        }
+                    }
+                }
+            break;
         }
         if (getenv("VULTURE_SELFTEST_CLICK") && isok(vhv.x, vhv.y)) { /* probe: s145 travel */
             vck_from.x = u.ux, vck_from.y = u.uy;

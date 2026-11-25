@@ -3632,6 +3632,38 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   DON'T PRAY, no luck badge; the card reads "crits 3%+" in a full-moon game
   (Luck +1 - it said 5% before); the Controls page's badge rows updated.
 
+### 181. What it does: item effects on hover
+
+- The item tooltip (`vulture_item_info`, inventory and item grids) gave
+  numbers for weapons, armour, food and spellbooks but nothing for magic
+  items.  Now an identified potion, scroll, wand, ring or amulet says what
+  it does in a line or two (`vitem_effect`, 114 entries): e.g. "Heals some
+  HP and cures blindness (not if cursed); healed past full, your max HP
+  rises by 1", "Never put it in a bag of holding - the bag explodes",
+  "Strangles you: take it off within 6 turns or die".  Rules only, and only
+  for identified kinds - the hero-knowledge rule (log 59/63/180) holds.
+- Checked against this 5.0 source where in doubt, and corrected from
+  memory where it differed: a non-cursed potion of speed also makes you
+  fast for good; blessed see invisible / invisibility are only sometimes
+  permanent; free action also stops the sleeping potion; blessed full
+  healing restores a lost level; blessed fire lets you pick the spot (5x),
+  confused fire only singes your hands; earth: blessed around you,
+  uncursed around and on you, cursed only on you; guarding = AC +2 and
+  better magic cancellation; magical breathing does NOT save you from
+  strangling (only the message changes); burned Elbereth still erases when
+  you attack from it (so "words that won't smudge", not "permanent").
+- Unidentified magic items get advice instead (`vitem_unknown_hint`):
+  potions / scrolls name themselves when used (s150); engrave-test a wand
+  (uses a charge); a ring or amulet is risky to try - test it on an altar
+  first, never wear a cursed amulet.
+- Floor items: the map hover card shows the effect too (one line, cut at a
+  word past 100 characters).
+- Probe VULTURE_SELFTEST_ITEMFX: an identified potion of healing beside
+  the hero, hovered -> "A potion of healing / Heals some HP and cures
+  blindness (not if cursed); healed past full, your max HP rises by 1."
+  (itemfx.txt logs the square, name and hint; the probe flushes the
+  screen so the map knows the potion before the shot).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
