@@ -3483,6 +3483,27 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   Tourist each started, with the normal kit and the right alignment on the
   status line.
 
+### 173. Racial Tourist kits; choose a kitten or a little dog
+
+- u_init.c: on top of the Tourist kit, by race - dwarf a dwarvish iron helm
+  (worn); elf an elven dagger and 2 lembas wafers; gnome 2 wax candles and an
+  oil lamp (a tin opener was tried first - NetHack wields it, so it became
+  the lamp); orc an orcish helm (worn) and 3 tripe rations; human 2 fortune
+  cookies.
+- Pet choice (vulture_nhplayerselection.cpp, `vulture_player_selection_pet`):
+  after race / role / gender / alignment, a role without a fixed pet (the
+  Tourist among others) asks "Which pet comes with you?" - a kitten, a little
+  dog, surprise me, or no pet - setting preferred_pet (= the pettype
+  option, which pet_type() honours).  Skipped if you declined a pet earlier
+  or for roles whose pet is fixed (Wizard, Knight, Samurai, Caveman); also
+  asked when the config pins the whole character (not in the probes).
+- Fixed on the way: leaving gender or alignment random picked the gender
+  with pick_align and the alignment with pick_gend.
+- Probe: fresh dwarf / elf / gnome / orc / human Tourists each got their
+  extras; pettype:dog -> little dog, pettype:cat -> kitten.  (Earlier runs
+  had resumed old saves of the same names - moved aside.)  The menu's own
+  clicks are untested off-screen.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

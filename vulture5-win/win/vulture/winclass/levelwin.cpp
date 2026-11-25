@@ -6386,6 +6386,11 @@ vselftest(void)
             }
             snprintf(fp, sizeof fp, "%s\\items.txt", dir);
             if ((f = fopen(fp, "w")) != 0) {
+                struct monst *pm4;
+
+                for (pm4 = fmon; pm4; pm4 = pm4->nmon) /* probe: s173 which pet came */
+                    if (!DEADMONSTER(pm4) && pm4->mtame)
+                        fprintf(f, "PET: %s\n", pmname(pm4->data, Mgender(pm4)));
                 for (io = gi.invent; io; io = io->nobj)
                     fprintf(f, "== %s\n%s\n", doname(io), vulture_item_info(io).c_str());
                 fclose(f);

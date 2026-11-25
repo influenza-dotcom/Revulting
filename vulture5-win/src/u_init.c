@@ -159,6 +159,30 @@ static const struct trobj Tourist[] = {
     { CREDIT_CARD, 0, TOOL_CLASS, 1, 1, 0 },
     { 0, 0, 0, 0, 0, 0 }
 };
+/* Vulture s173: a little extra for a Tourist of each race */
+static const struct trobj TouristDwarf[] = { /* a hard hat for the Mines */
+    { DWARVISH_IRON_HELM, 0, ARMOR_CLASS, 1, 1, UNDEF_BLESS },
+    { 0, 0, 0, 0, 0, 0 }
+};
+static const struct trobj TouristElf[] = {
+    { ELVEN_DAGGER, 0, WEAPON_CLASS, 1, 1, UNDEF_BLESS },
+    { LEMBAS_WAFER, 0, FOOD_CLASS, 2, 2, 0 },
+    { 0, 0, 0, 0, 0, 0 }
+};
+static const struct trobj TouristGnome[] = { /* light for the dark Mines */
+    { WAX_CANDLE, 0, TOOL_CLASS, 2, 2, 0 },
+    { OIL_LAMP, 1, TOOL_CLASS, 1, 1, 0 }, /* a real light (a tin opener got wielded) */
+    { 0, 0, 0, 0, 0, 0 }
+};
+static const struct trobj TouristOrc[] = {
+    { ORCISH_HELM, 0, ARMOR_CLASS, 1, 1, UNDEF_BLESS },
+    { TRIPE_RATION, 0, FOOD_CLASS, 3, 3, 0 },
+    { 0, 0, 0, 0, 0, 0 }
+};
+static const struct trobj TouristHuman[] = {
+    { FORTUNE_COOKIE, 0, FOOD_CLASS, 2, 2, 0 },
+    { 0, 0, 0, 0, 0, 0 }
+};
 static const struct trobj Valkyrie[] = {
     { SPEAR, 1, WEAPON_CLASS, 1, 1, UNDEF_BLESS },
     { DAGGER, 0, WEAPON_CLASS, 1, 1, UNDEF_BLESS },
@@ -757,6 +781,17 @@ u_init_role(void)
     case PM_TOURIST:
         u.umoney0 = bestroll_active() ? 1000 : rnd(1000);
         ini_inv(Tourist);
+        /* Vulture s173: the race's own extras */
+        if (Race_if(PM_DWARF))
+            ini_inv(TouristDwarf);
+        else if (Race_if(PM_ELF))
+            ini_inv(TouristElf);
+        else if (Race_if(PM_GNOME))
+            ini_inv(TouristGnome);
+        else if (Race_if(PM_ORC))
+            ini_inv(TouristOrc);
+        else
+            ini_inv(TouristHuman);
         if (bestroll_active())
             ini_inv(Magicmarker); /* the most valuable of the four extras */
         else if (!rn2(25))

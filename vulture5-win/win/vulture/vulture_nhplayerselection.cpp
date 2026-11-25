@@ -366,6 +366,46 @@ player_selection()
 		responsibility to clean up and terminate the process.
 		You need to fill in pl_character[0].
 */
+/* Vulture s173: for a role without a fixed pet (Tourist and others), choose
+   a cat or a dog - or be surprised, or go without */
+static void vulture_player_selection_pet(void)
+{
+	winid window;
+	anything id;
+	menu_item *sel = 0;
+	int n, pick;
+
+	if (flags.initrole < 0 || roles[flags.initrole].petnum != NON_PM)
+		return; /* that role always brings its own kind */
+	if (gp.preferred_pet == 'n' || gp.preferred_pet == 'h')
+		return; /* no pet asked for, or a horse picked in the settings */
+	window = vulture_create_nhwindow(NHW_MENU);
+	vulture_start_menu(window, MENU_BEHAVE_STANDARD);
+	id = cg.zeroany;
+	id.a_int = 'c';
+	vulture_add_menu(window, vulture_menu_glyph(NO_GLYPH), &id, 'c', 0, 0, NO_COLOR, "A kitten",
+		gp.preferred_pet == 'c' ? MENU_ITEMFLAGS_SELECTED : MENU_ITEMFLAGS_NONE);
+	id.a_int = 'd';
+	vulture_add_menu(window, vulture_menu_glyph(NO_GLYPH), &id, 'd', 0, 0, NO_COLOR, "A little dog",
+		gp.preferred_pet == 'd' ? MENU_ITEMFLAGS_SELECTED : MENU_ITEMFLAGS_NONE);
+	id.a_int = '*';
+	vulture_add_menu(window, vulture_menu_glyph(NO_GLYPH), &id, '*', 0, 0, NO_COLOR, "Surprise me",
+		!gp.preferred_pet ? MENU_ITEMFLAGS_SELECTED : MENU_ITEMFLAGS_NONE);
+	id.a_int = 'n';
+	vulture_add_menu(window, vulture_menu_glyph(NO_GLYPH), &id, 'n', 0, 0, NO_COLOR, "No pet",
+		MENU_ITEMFLAGS_NONE);
+	vulture_end_menu(window, "Which pet comes with you?");
+	n = vulture_select_menu(window, PICK_ONE, &sel);
+	vulture_destroy_nhwindow(window);
+	pick = (n > 0 && sel) ? sel[0].item.a_int : 0;
+	if (sel)
+		free(sel);
+	if (pick == 'c' || pick == 'd' || pick == 'n')
+		gp.preferred_pet = (char) pick;
+	else if (pick == '*')
+		gp.preferred_pet = '\0';
+}
+
 void vulture_player_selection_internal (void)
 {
 #ifdef DEBUG
@@ -396,8 +436,11 @@ void vulture_player_selection_internal (void)
 	 * acceptance harness relies on.) */
 	if (flags.initrole >= 0 && flags.initrace >= 0
 	    && flags.initgend >= 0 && flags.initalign >= 0
-	    && !vulture_opts.ask_character)
+	    && !vulture_opts.ask_character) {
+		if (!getenv("VULTURE_SELFTEST")) /* s173: the pet is still yours to pick */
+			vulture_player_selection_pet();
 		return;
+	}
 
 	/* here this interface should present it's character selection */
 	switch (vulture_yn_function("Shall I pick a character's race, role, gender and alignment for you?","ynq",'y')) {
@@ -422,13 +465,17 @@ void vulture_player_selection_internal (void)
 		flags.initrace = pick_race(flags.initrole,flags.initgend,
 								flags.initalign,PICK_RANDOM);
 
+	/* s173: these two used each other's picker (a gender from pick_align,
+	   an alignment from pick_gend) */
 	if (flags.initgend == ROLE_NONE)
-		flags.initgend = pick_align(flags.initrole,flags.initrace,
-									flags.initalign,PICK_RANDOM);
+		flags.initgend = pick_gend(flags.initrole, flags.initrace,
+									flags.initalign, PICK_RANDOM);
 
 	if (flags.initalign == ROLE_NONE)
-		flags.initalign = pick_gend(flags.initrole,flags.initrace,
-									flags.initgend ,PICK_RANDOM);
+		flags.initalign = pick_align(flags.initrole, flags.initrace,
+									flags.initgend, PICK_RANDOM);
+
+	vulture_player_selection_pet(); /* s173 */
 
 }
 
