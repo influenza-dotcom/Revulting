@@ -474,7 +474,10 @@ const struct Role roles[NUM_ROLES+1] = {
       S_SPIDER,
       S_CENTAUR,
       ART_YENDORIAN_EXPRESS_CARD,
-      MH_HUMAN | ROLE_MALE | ROLE_FEMALE | ROLE_NEUTRAL,
+      /* Vulture s172: any race, any alignment (each race still limits its
+         own: dwarves lawful, gnomes neutral, elves and orcs chaotic) */
+      MH_HUMAN | MH_ELF | MH_DWARF | MH_GNOME | MH_ORC | ROLE_MALE | ROLE_FEMALE
+          | ROLE_LAWFUL | ROLE_NEUTRAL | ROLE_CHAOTIC,
       /* Str Int Wis Dex Con Cha */
       { 7, 10, 6, 7, 7, 10 },
       { 15, 10, 10, 15, 30, 20 },

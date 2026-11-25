@@ -3468,6 +3468,21 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   pulses and rising sparks on lava.  Under the Atmosphere switch.  Probe
   LIGHT: the fire vortex blooms warm over the floor.
 
+### 172. Tourists of any race and alignment
+
+- role.c: the Tourist allows human, elf, dwarf, gnome and orc, and lawful /
+  neutral / chaotic; each race keeps its own limits, so the combinations are
+  human any, dwarf lawful, gnome neutral, elf and orc chaotic.  The three
+  Tourist gods already cover the alignments (Blind Io / the Lady / Offler);
+  hack_artifacts() re-aligns the role's quest artifact (the Platinum
+  Yendorian Express Card) to the hero, so it never blasts a lawful or
+  chaotic Tourist; starting kits get the usual racial substitutions.
+  Character creation reads the same tables, so the new picks show up there.
+- Probe (scratchpad selftest_rc.ps1 + tour_<race>.nethackrc): a dwarf
+  (lawful), elf (chaotic), orc (chaotic), gnome (neutral) and human (lawful)
+  Tourist each started, with the normal kit and the right alignment on the
+  status line.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
