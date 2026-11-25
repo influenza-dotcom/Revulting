@@ -2134,8 +2134,12 @@ can_pray(boolean praying) /* false means no messages should be given */
     gp.p_aligntyp = on_altar() ? a_align(u.ux, u.uy) : u.ualign.type;
     gp.p_trouble = in_trouble();
 
+    /* Vulture s177: the test read "|| gp.p_aligntyp != A_NEUTRAL", which
+       turned away chaotic demons (and Moloch's altar) while letting neutral
+       ones pray - the opposite of the comment, and the message below only
+       knows "lawful" and "neutral" */
     if (is_demon(gy.youmonst.data) /* ok if chaotic or none (Moloch) */
-        && (gp.p_aligntyp == A_LAWFUL || gp.p_aligntyp != A_NEUTRAL)) {
+        && (gp.p_aligntyp == A_LAWFUL || gp.p_aligntyp == A_NEUTRAL)) {
         if (praying)
             pline_The("very idea of praying to a %s god is repugnant to you.",
                       gp.p_aligntyp ? "lawful" : "neutral");
@@ -2201,6 +2205,81 @@ pray_revive(void)
 }
 
 /* #pray command */
+/*
+ * Vulture s174: would a prayer save you right now?  A side-effect-free
+ * reading of can_pray() (no messages, no random numbers - the interface
+ * asks every frame).  0 = not in serious trouble; 1 = in serious trouble and
+ * your god will help; 2 = in serious trouble but praying now won't work
+ * (*why says why).  *trouble names the trouble.
+ */
+int
+vulture_prayer_advice(const char **why, const char **trouble)
+{
+    int tr = in_trouble(), alignment;
+    aligntyp at = on_altar() ? a_align(u.ux, u.uy) : u.ualign.type;
+
+    *why = "", *trouble = "";
+    if (tr <= 0)
+        return 0;
+    switch (tr) {
+    case TROUBLE_STONED: *trouble = "turning to stone"; break;
+    case TROUBLE_SLIMED: *trouble = "turning into slime"; break;
+    case TROUBLE_STRANGLED: *trouble = "being strangled"; break;
+    case TROUBLE_LAVA: *trouble = "sinking in lava"; break;
+    case TROUBLE_SICK: *trouble = "deathly ill"; break;
+    case TROUBLE_STARVING: *trouble = "starving"; break;
+    case TROUBLE_REGION: *trouble = "choking in a poison cloud"; break;
+    case TROUBLE_HIT: *trouble = "close to death"; break;
+    case TROUBLE_LYCANTHROPE: *trouble = "infected with lycanthropy"; break;
+    case TROUBLE_COLLAPSING: *trouble = "collapsing from weakness"; break;
+    case TROUBLE_STUCK_IN_WALL: *trouble = "stuck inside rock"; break;
+    case TROUBLE_CURSED_LEVITATION: *trouble = "stuck levitating"; break;
+    case TROUBLE_UNUSEABLE_HANDS: *trouble = "unable to use your hands"; break;
+    case TROUBLE_CURSED_BLINDFOLD: *trouble = "stuck in a cursed blindfold"; break;
+    default: *trouble = "in trouble"; break;
+    }
+    if (is_demon(gy.youmonst.data) && (at == A_LAWFUL || at == A_NEUTRAL)) { /* s177 */
+        *why = "your demonic form repels the gods";
+        return 2;
+    }
+    if (at == A_NONE) {
+        *why = "this altar belongs to Moloch";
+        return 2;
+    }
+    if (u.ualign.type && u.ualign.type == -at)
+        alignment = -u.ualign.record;
+    else if (u.ualign.type != at)
+        alignment = u.ualign.record / 2;
+    else
+        alignment = u.ualign.record;
+    if (u.ublesscnt > 200) {
+        *why = "you prayed too recently";
+        return 2;
+    }
+    if ((int) Luck < 0) {
+        *why = "your luck is bad";
+        return 2;
+    }
+    if (u.ugangr) {
+        *why = "your god is angry with you";
+        return 2;
+    }
+    if (alignment < 0) {
+        *why = "your god disapproves of your conduct";
+        return 2;
+    }
+    if (is_undead(gy.youmonst.data) && !Inhell && (at == A_LAWFUL || at == A_NEUTRAL)) {
+        *why = at == A_LAWFUL ? "your undead form offends your god"
+                              : "your undead form may offend your god (1 in 10)";
+        return 2;
+    }
+    if (Inhell) {
+        *why = "no god can help you in Gehennom";
+        return 2;
+    }
+    return 1;
+}
+
 int
 dopray(void)
 {

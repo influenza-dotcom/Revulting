@@ -560,7 +560,7 @@ void vulture_add_menu(int winid, const glyph_info *glyphinfo,
 	int glyph = (glyphinfo ? glyphinfo->glyph : NO_GLYPH);
 	bool preselected = ((itemflags & MENU_ITEMFLAGS_SELECTED) != 0);
 
-	(void) attr; (void) clr;
+	(void) clr; /* s176: attr is kept now */
 	if (!win)
 		return;
 	
@@ -568,6 +568,7 @@ void vulture_add_menu(int winid, const glyph_info *glyphinfo,
 		win->has_objects = true;
 	
 	win->add_menuitem(str, preselected, identifier->a_void, accelerator, groupacc, glyph);
+	win->items.back().attr = attr; /* s176 */
 }
 
 
@@ -767,6 +768,7 @@ void vulture_putstr(int winid, int attr, const char *str)
 		case NHW_MENU:
 			/* Add the new text line as a menu item */
 			win->add_menuitem(str, false, NULL, '\0', '\0', 0);
+			win->items.back().attr = attr; /* s176: headings */
 			break;
 
 		case NHW_STATUS:

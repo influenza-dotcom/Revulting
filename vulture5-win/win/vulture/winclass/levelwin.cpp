@@ -3331,6 +3331,7 @@ vprobe_push_key(SDL_Keycode k) /* probe: s145 */
     SDL_PushEvent(&e);
 }
 static void vgs_probe(int stage, const char *dir); /* s145 probe */
+static void vcontrols_page(void); /* s175 */
 static SDL_Rect vbtn_rect[4];
 
 /* probe: s166 - VULTURE_SELFTEST_SOAK: play by itself, through real input.
@@ -6566,8 +6567,24 @@ vselftest(void)
                 }
             }
         }
+        if (getenv("VULTURE_SELFTEST_CONTROLS")) { /* probe: s175 the page (modal; the run ends here) */
+            vpause_probe_t = SDL_GetTicks();
+            vcontrols_page();
+        }
+        if (getenv("VULTURE_SELFTEST_DISCO")) { /* probe: s176 gold headings in a NetHack list */
+            vpause_probe_t = SDL_GetTicks();
+            (void) dodiscovered();
+        }
         if (getenv("VULTURE_SELFTEST_LEVEL")) /* probe: s155 the real level-up path */
             pluslvl(FALSE);
+        if (getenv("VULTURE_SELFTEST_PRAY")) { /* probe: s174 ok / soon / unlucky */
+            const char *pm = getenv("VULTURE_SELFTEST_PRAY");
+
+            u.uhp = 1; /* close to death */
+            u.ublesscnt = !strcmp(pm, "soon") ? 600 : 0;
+            u.uluck = !strcmp(pm, "unlucky") ? -3 : !strcmp(pm, "ok") ? 2 : 0;
+            disp.botl = TRUE;
+        }
         if (getenv("VULTURE_SELFTEST_PHOTO")) /* probe: s170 the album polaroid */
             vulture_photo_fx(u.ux + 1, u.uy, PM_JACKAL, 10);
         if (getenv("VULTURE_SELFTEST_DIE")) { /* probe: s165 the run summary on death */
@@ -7177,6 +7194,8 @@ vulture_room_sleepers(int asleep, int woke, int stealthy)
 static SDL_Rect vsb_rect = { 0, 0, 0, 0 };
 static SDL_Rect vspd_rect = { 0, 0, 0, 0 }; /* s144 */
 static int vbadge_row_x = 0, vbadge_row_y = 0, vbadge_row_h = 0, vbadge_row_w = 0; /* s159 */
+static SDL_Rect vpray_rect = { 0, 0, 0, 0 }, vluck_rect = { 0, 0, 0, 0 }; /* s174 */
+static int vpray_adv = 0;
 static double vhero_speed(void);
 
 static const char *
@@ -7233,6 +7252,34 @@ vstealth_draw(void)
         rc.x = 0;
     /* s159: badges only when they say something - the row closes up */
     vbadge_row_x = rc.x, vbadge_row_y = rc.y, vbadge_row_h = rc.h, vbadge_row_w = 0;
+    vpray_rect.w = 0, vluck_rect.w = 0;
+    { /* s174: in serious trouble - will a prayer save you? */
+        const char *why, *tr;
+        int adv = vulture_prayer_advice(&why, &tr);
+
+        if (adv) {
+            const char *pl = adv == 1 ? "PRAY NOW" : "DON'T PRAY";
+            int tw3 = vulture_text_length(V_FONT_SMALL, pl);
+            double pu = 0.5 + 0.5 * sin(SDL_GetTicks() / 160.0);
+            Uint8 pr = adv == 1 ? 120 : 255, pg = adv == 1 ? 240 : 90, pb = adv == 1 ? 140 : 70;
+            SDL_Rect r3 = { (Sint16) rc.x, (Sint16) rc.y, (Uint16) (tw3 + 16), (Uint16) rc.h };
+
+            vbox(r3.x, r3.y, r3.w, r3.h, 220);
+            {
+                SDL_Rect bar = { (Sint16) r3.x, (Sint16) (r3.y + r3.h - 3), (Uint16) r3.w, 3 };
+
+                SDL_FillRect(vulture_screen, &bar,
+                             SDL_MapRGB(vulture_screen->format, (Uint8) (pr * (0.6 + 0.4 * pu)),
+                                        (Uint8) (pg * (0.6 + 0.4 * pu)), (Uint8) (pb * (0.6 + 0.4 * pu))));
+            }
+            vulture_put_text_shadow(V_FONT_SMALL, pl, vulture_screen, r3.x + 8, r3.y + 2,
+                                    SDL_MapRGB(vulture_screen->format, pr, pg, pb),
+                                    SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+            vpray_rect = r3, vpray_adv = adv;
+            vbadge_row_x += r3.w + 4;
+            rc.x += r3.w + 4;
+        }
+    }
     {
         bool sleepers = false;
         struct monst *sm;
@@ -7283,6 +7330,27 @@ vstealth_draw(void)
             vbadge_row_w += r2.w + 4;
         }
     }
+    if ((int) Luck != 0 && !Hallucination) { /* s174: luck, when it isn't neutral */
+        int lk = (int) Luck, tw4;
+        char ll[24];
+        Uint8 lr = lk > 0 ? 250 : 255, lg = lk > 0 ? 215 : 110, lb = lk > 0 ? 90 : 90;
+        SDL_Rect r4;
+
+        snprintf(ll, sizeof ll, "%s %+d", lk > 0 ? "LUCK" : "BAD LUCK", lk);
+        tw4 = vulture_text_length(V_FONT_SMALL, ll);
+        r4.x = vbadge_row_x + vbadge_row_w, r4.y = rc.y, r4.w = tw4 + 14, r4.h = rc.h;
+        vbox(r4.x, r4.y, r4.w, r4.h, 200);
+        {
+            SDL_Rect bar = { (Sint16) r4.x, (Sint16) (r4.y + r4.h - 2), (Uint16) r4.w, 2 };
+
+            SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, lr, lg, lb));
+        }
+        vulture_put_text_shadow(V_FONT_SMALL, ll, vulture_screen, r4.x + 7, r4.y + 2,
+                                SDL_MapRGB(vulture_screen->format, lr, lg, lb),
+                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+        vluck_rect = r4;
+        vbadge_row_w += r4.w + 4;
+    }
 }
 
 static bool
@@ -7302,8 +7370,8 @@ struct vtip_def {
 static const vtip_def vtip_defs[] = {
     { "welcome", "Welcome",
       "Click to move, click a monster to attack, right-click for actions.\n"
-      "Hover anything to learn about it - hold Shift on a monster\n"
-      "for its full codex: attacks, resistances, what its corpse does." },
+      "Hover anything to learn about it - hold Shift on a monster for its\n"
+      "codex.  Esc, then Controls, lists every shortcut." },
     { "sleeper", "Sleeping monsters",
       "z z marks a sleeper. A sneak attack on it always hits for triple\n"
       "damage - kill it before it wakes for a SILENT KILL. Stealth keeps\n"
@@ -8677,6 +8745,67 @@ vfx_menu(void)
     }
 }
 
+/* ---- s175: every shortcut this interface adds, on one page ----
+   Each row is "key<TAB>what it does": the text window lines tab columns up
+   (scrollwin::layout), so the keys sit in one column whatever the font.  A
+   row without a tab is a section heading (bold) or a plain note. */
+static void
+vcontrols_page(void)
+{
+    static const char *const lines[] = {
+        "Moving and fighting",
+        "  Left-click\twalk there, attack, pick up or open (the marker shows which)",
+        "  Ctrl+click an enemy\tan aimed blow: eyes, head, arms, legs, groin or torso",
+        "  Tab\tfight the nearest enemy",
+        "  Shift+A, then click\tattack-move: walk there, fighting on the way",
+        "  F5 or REST\trest until healed (stops when something shows up)",
+        "  EXPLORE\texplore the level by yourself",
+        "  > or <\twalk to the stairs you have seen (press again to take them)",
+        "  s\tsearch the squares around you",
+        "",
+        "Seeing more",
+        "  Hover anything\twhat it is, what it does, your odds against it",
+        "  Shift, over a monster\tits full codex: attacks, resistances, its corpse",
+        "  Alt\tevery enemy's reach: the squares they can hit you from",
+        "  Mouse wheel\tzoom in and out",
+        "  Middle-drag\tmove the camera",
+        "  Click your portrait\tcentre the camera on you (double-click: keep it there)",
+        "  PageUp / PageDown\tturn the view",
+        "  Shift+Tab\tthe level map",
+        "",
+        "Gear and items",
+        "  Right-click yourself\tactions here (an altar test on an altar, pray, ...)",
+        "  1 - 0\tuse an ability-bar slot (right-click a slot to fill it)",
+        "  SET 1-3 / Ctrl+1-3\tsave an outfit / change back into it",
+        "",
+        "Game",
+        "  Esc\tthis menu: visual effects, time mode, save",
+        "  Pause\ttime mode: turn-based / real-time / real-time until combat",
+        "  F9\tlighting: full / flat / off",
+        "  F7\twall height",
+        "  F8\tzoomed-out view",
+        "  F11\tphoto mode (the map without the interface)",
+        "  F12\tscreenshot",
+        "  Ctrl+Shift+O\tinterface options",
+        "  Ctrl+Shift+P\tthe message log",
+        "",
+        "Badges above your portrait (only when they matter; hover one for why)",
+        "  PRAY NOW / DON'T PRAY\twhether praying would help right now",
+        "  STEALTHY / NOISY\twhether your steps can wake sleeping monsters",
+        "  FAST / SLOW\tyour speed, when it isn't normal",
+        "  LUCK / BAD LUCK\tyour luck, when it isn't zero",
+        "  SET 1-3\tyour saved outfits",
+        NULL
+    };
+    winid w = vulture_create_nhwindow(NHW_TEXT);
+    int k;
+
+    for (k = 0; lines[k]; k++)
+        vulture_putstr(w, (lines[k][0] && lines[k][0] != ' ') ? ATR_BOLD : ATR_NONE, lines[k]);
+    vulture_display_nhwindow(w, TRUE);
+    vulture_destroy_nhwindow(w);
+}
+
 /* ---- s145: the pause menu (Esc during play) ----
    Nothing moves while it is open: turns only pass on commands, and the
    real-time clock never ticks inside a menu.  Game commands are queued so
@@ -8696,6 +8825,7 @@ vpause_menu(void *result)
                   { 2, 'o', "Game options" },
                   { 3, 'i', "Interface options" },
                   { 4, 't', NULL },
+                  { 9, 'c', "Controls" },
                   { 8, 'v', "Visual effects" },
                   { 5, 'h', "Help and keys" },
                   { 6, 's', "Save and quit" },
@@ -8735,6 +8865,9 @@ vpause_menu(void *result)
         return false;
     case 8: /* s161 */
         vfx_menu();
+        return false;
+    case 9: /* s175 */
+        vcontrols_page();
         return false;
     case 5:
         cmdq_add_ec(CQ_CANNED, dohelp);
@@ -10506,6 +10639,42 @@ levelwin::handle_timer_event(window *target, void *result, int time)
             vulture_mouse_set_tooltip(t);
             return V_EVENT_HANDLED_NOREDRAW;
         }
+        if (vpray_rect.w && mp.x >= vpray_rect.x && mp.x < vpray_rect.x + vpray_rect.w
+            && mp.y >= vpray_rect.y && mp.y < vpray_rect.y + vpray_rect.h) { /* s174 */
+            const char *why, *tr;
+            int adv = vulture_prayer_advice(&why, &tr);
+            std::string t;
+
+            if (adv == 1)
+                t = std::string("You're ") + tr + " - your god will help.\n"
+                    "Click here (or #pray) to pray now.";
+            else if (adv == 2)
+                t = std::string("You're ") + tr + ", but don't pray: " + why + ".\n"
+                    "Instead: retreat, quaff a healing potion, use an escape item,\n"
+                    "or engrave Elbereth in the dust (most monsters won't step on it).";
+            if (!t.empty()) {
+                vulture_mouse_set_tooltip(t);
+                return V_EVENT_HANDLED_NOREDRAW;
+            }
+        }
+        if (vluck_rect.w && mp.x >= vluck_rect.x && mp.x < vluck_rect.x + vluck_rect.w
+            && mp.y >= vluck_rect.y && mp.y < vluck_rect.y + vluck_rect.h) { /* s174 */
+            char lt[400];
+
+            if ((int) Luck > 0)
+                snprintf(lt, sizeof lt,
+                         "Luck %+d: you hit a little more often, critical hits come more often\n"
+                         "and wishes and prayers go your way.  It slowly drifts back to 0\n"
+                         "unless you carry a blessed or uncursed luckstone.", (int) Luck);
+            else
+                snprintf(lt, sizeof lt,
+                         "Luck %+d: you hit less often, critical hits dry up, and PRAYER FAILS\n"
+                         "while it's below zero.  Usual causes: breaking a mirror, killing a\n"
+                         "peaceful, attacking while displaced.  It drifts back toward 0 with time.",
+                         (int) Luck);
+            vulture_mouse_set_tooltip(lt);
+            return V_EVENT_HANDLED_NOREDRAW;
+        }
         if (vgs_hit(mp.x, mp.y) >= 0) { /* s145 */
             vulture_mouse_set_tooltip(vgs_tip(vgs_hit(mp.x, mp.y)));
             return V_EVENT_HANDLED_NOREDRAW;
@@ -10634,7 +10803,9 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
     }
     if (vhb_hit(mouse.x, mouse.y) >= 0 || vpt_hit(mouse.x, mouse.y)
         || vbtn_hit(mouse.x, mouse.y) >= 0 || vmp_hit(mouse.x, mouse.y) >= 0
-        || vgs_hit(mouse.x, mouse.y) >= 0) { /* s126, s145 */
+        || vgs_hit(mouse.x, mouse.y) >= 0
+        || (vpray_rect.w && mouse.x >= vpray_rect.x && mouse.x < vpray_rect.x + vpray_rect.w
+            && mouse.y >= vpray_rect.y && mouse.y < vpray_rect.y + vpray_rect.h)) { /* s126, s145, s174 */
         vulture_set_mcursor(V_CURSOR_NORMAL);
         if (vhv.x != -1) {
             vhv.x = vhv.y = -1;
@@ -10742,6 +10913,18 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
             vfx_click(mappos.x, mappos.y, VCK_ATTACK, false);
         }
         force_redraw();
+        return V_EVENT_HANDLED_REDRAW;
+    }
+    if (vpray_rect.w && mouse.x >= vpray_rect.x && mouse.x < vpray_rect.x + vpray_rect.w
+        && mouse.y >= vpray_rect.y && mouse.y < vpray_rect.y + vpray_rect.h
+        && button == SDL_BUTTON_LEFT) { /* s174: pray from the badge */
+        if (vpray_adv == 1) {
+            cmdq_add_ec(CQ_CANNED, dopray);
+            vulture_click_consumed = TRUE;
+            vauto_result(result);
+            return V_EVENT_HANDLED_FINAL;
+        }
+        vulture_sfx("ui_error");
         return V_EVENT_HANDLED_REDRAW;
     }
     if (vgs_hit(mouse.x, mouse.y) >= 0) { /* s145: gear sets */

@@ -15,7 +15,7 @@ class menuitem
              char group_accel, int glyph)
         : identifier(ident), str(str), glyph(glyph), preselected(sel),
           accelerator(accel), group_accelerator(group_accel), selected(false),
-          count(-1){};
+          count(-1), attr(0){};
     const void *identifier;
     std::string str;
     int glyph;
@@ -24,6 +24,7 @@ class menuitem
     char group_accelerator;
     bool selected;
     int count;
+    int attr; /* s176: NetHack's ATR_* for the row (headings are drawn gold) */
 };
 
 #endif

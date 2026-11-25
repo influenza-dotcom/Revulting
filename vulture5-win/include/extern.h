@@ -435,6 +435,7 @@ extern void vulture_crit_fx(int, int, int);
 extern void vulture_object_impact(int, int, int); /* s157 */
 extern void vulture_run_summary(int); /* s165 */
 extern void vulture_photo_fx(int, int, int, int); /* s170 */
+extern int vulture_prayer_advice(const char **, const char **); /* s174 */
 extern void vulture_dmg_taken_add(int);
 /* s156: aimed blows */
 #define VAP_TORSO 1

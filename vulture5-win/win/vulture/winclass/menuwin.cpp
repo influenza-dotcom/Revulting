@@ -17,6 +17,26 @@ extern "C" {
 #include "optionwin.h"
 #include "scrollwin.h"
 #include "textwin.h"
+#include "vulture_gra.h" /* s176: vulture_px_format */
+
+/* s176: a row NetHack marks as a heading - its menu_headings attribute, or
+   bold / underlined / inverse text - is drawn in gold, so a long list
+   (discoveries, the dungeon overview, a pick-up menu, the Controls page)
+   reads as sections at a glance */
+static bool
+vmenu_is_heading(int attr)
+{
+    int a = attr & 7;
+
+    return a == ATR_BOLD || a == ATR_ULINE || a == ATR_INVERSE;
+}
+
+static void
+vmenu_style_row(textwin *t, const menuitem &it)
+{
+    if (t && vmenu_is_heading(it.attr) && vulture_px_format)
+        t->textcolor = SDL_MapRGBA(vulture_px_format, 0xff, 0xd0, 0x6a, 0xff);
+}
 
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
@@ -349,7 +369,7 @@ menuwin::layout()
         newcaption += i->str;
 
         if (select_how == PICK_NONE)
-            new textwin(scrollarea, newcaption);
+            vmenu_style_row(new textwin(scrollarea, newcaption), *i);
         else if (newcaption.empty()) {
             new textwin(scrollarea, "--------------");
         }
@@ -360,7 +380,7 @@ menuwin::layout()
              * skills.  Render them as plain text so they can never be
              * clicked or returned; the inventory window already does
              * the equivalent via objheaderwin. */
-            new textwin(scrollarea, newcaption);
+            vmenu_style_row(new textwin(scrollarea, newcaption), *i);
         else
             new optionwin(scrollarea, &(*i), newcaption, i->accelerator,
                           i->group_accelerator, i->glyph, i->preselected,

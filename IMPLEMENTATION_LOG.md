@@ -3504,6 +3504,60 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   had resumed old saves of the same names - moved aside.)  The menu's own
   clicks are untested off-screen.
 
+### 174. Should I pray?  The prayer and luck badges
+
+- pray.c `vulture_prayer_advice(&why, &trouble)`: 0 = no serious trouble; 1 =
+  in serious trouble and your god will answer; 2 = in trouble but praying
+  would go wrong, with the reason - demon form, a Moloch altar, prayed too
+  recently (prayer timeout over 200), bad luck, an angry god, negative
+  alignment, undead form, Gehennom.  It reads the same state can_pray() does
+  without calling it (can_pray() sets prayer state as a side effect).
+- Badge row: "PRAY NOW" (green, pulsing) or "DON'T PRAY" (red) first, while
+  you are in serious trouble; the tooltip names the trouble or why not, and
+  suggests Elbereth when praying is out.  Clicking PRAY NOW prays.  A "LUCK
+  +n" / "BAD LUCK n" badge appears after the speed badge when luck isn't
+  zero; its tooltip says what luck changes.
+- Probe VULTURE_SELFTEST_PRAY=ok / soon / unlucky (1 HP; timeout 0 / 600;
+  Luck -3): PRAY NOW; DON'T PRAY "you prayed too recently"; DON'T PRAY "your
+  luck is bad" with BAD LUCK -3.
+
+### 175. A Controls page
+
+- Esc -> Controls lists every shortcut this interface adds, in four sections
+  (moving and fighting, seeing more, gear and items, game) plus what each
+  badge means.  Each row is "key<TAB>what it does" - Vulture's text windows
+  line tab columns up (scrollwin::layout), so the keys stay in one column in
+  the proportional font (space padding came out ragged).  Every key listed
+  was checked against levelwin's key handler; "s" is listed as a plain
+  search (the 5-turn search I first wrote does not exist).
+- The welcome tip now ends "Esc, then Controls, lists every shortcut."
+- Probe VULTURE_SELFTEST_CONTROLS shot the page.
+
+### 176. Headings in gold
+
+- Menus and text windows draw a row NetHack marks as a heading (the
+  menu_headings attribute, or bold / underlined / inverse text) in gold.
+  Vulture used to drop putstr's and add_menu's attribute; menuitem now keeps
+  it (`attr`) and menuwin::layout colours those text rows
+  (`vmenu_style_row`).  The discoveries list, the dungeon overview, pick-up
+  menus' class headings and the Controls page now read as sections.
+- menuitem changed size, so the whole window port was rebuilt (its build
+  directory moved aside - most objects have no header dependencies).
+- Probe VULTURE_SELFTEST_DISCO: the discoveries list shows gold Weapons /
+  Armor / Scrolls / Spellbooks / Potions / Rings / Wands headings.
+
+### 177. Demons and prayer (an upstream typo)
+
+- can_pray() in the NetHack 5.0.0 baseline tested
+  `p_aligntyp == A_LAWFUL || p_aligntyp != A_NEUTRAL` for a hero in demon
+  form: chaotic demons (and Moloch's altar) were turned away and neutral
+  ones could pray - the opposite of its own comment ("ok if chaotic or none
+  (Moloch)"), and its message only knows "lawful" / "neutral".  Now `==
+  A_NEUTRAL`.  Found while checking the PRAY badge's advice against
+  can_pray; the advice mirrors the fix, and for a neutral god it now says an
+  undead form "may offend your god (1 in 10)" - the real odds.
+- Probe PRAY=unlucky re-run: DON'T PRAY + BAD LUCK -3 as before.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
