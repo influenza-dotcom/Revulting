@@ -334,6 +334,7 @@ static bool vtw_linear = false;           /* s117: walking glide, no easing */
 int vulture_tween_ate_ms = 0;             /* s117: delay_output skips this */
 static char vtw_mv[ROWNO][COLNO];         /* s79: square holds a mover */
 #define VTW_HERO 0xFFFFFFFFu
+static void vprobe_seq_shot(const char *tag); /* probe: s184 */
 
 static void
 vtw_proj(int a, int b, int *sx, int *sy)
@@ -936,6 +937,7 @@ vanim_frames(int kind, int frames, int delay_ms)
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         vulture_refresh_window_region();
+        vprobe_seq_shot(kind == 1 ? "lunge" : "anim"); /* probe: s184 */
         frames++;
         if (t >= 1.0)
             break;
@@ -971,12 +973,35 @@ vulture_anim_attack(int ax, int ay, int tx, int ty)
          the square you were walking into while you were still drawn on the
          old one.  Draw once (which notices the pending moves) and play them
          out, so the blow lands where you visibly are. */
+        if (getenv("VULTURE_SELFTEST")) /* probe: s184 */
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                              "lunge %d,%d -> %d,%d: hero %d,%d drawn-from %d,%d pending %d\n",
+                              ax, ay, tx, ty, u.ux, u.uy,
+                              vtw_snap.count(VTW_HERO) ? vtw_snap[VTW_HERO].x : -1,
+                              vtw_snap.count(VTW_HERO) ? vtw_snap[VTW_HERO].y : -1, (int) vtw_pending);
+        /* s184: the core's display buffer first.  The blow comes mid-turn,
+           before the core flushes what it drew; until then Vulture's map
+           still shows you (and a monster that just moved) on the old
+           square - the glide below moved nothing, the lunge struck an empty
+           square, and you popped into it afterwards. */
+        flush_screen(1);
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         if (vtw_pending)
             vulture_tween_run();
         if (vanim_kind || vtw_animating)
             return;
+        if (vtw_pending) { /* s184: a glide it skipped (a teleport-mode run):
+                              snap it, so the blow lands where you are drawn */
+            vtw_t = 1.0;
+            vtw_pending = false;
+            vtw_commit(vtw_last_vx, vtw_last_vy);
+        }
+        if (getenv("VULTURE_SELFTEST")) /* probe: s184 */
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                              "lunge plays: hero drawn-from %d,%d (at %d,%d)\n",
+                              vtw_snap.count(VTW_HERO) ? vtw_snap[VTW_HERO].x : -1,
+                              vtw_snap.count(VTW_HERO) ? vtw_snap[VTW_HERO].y : -1, u.ux, u.uy);
     }
     vanim_ax = ax, vanim_ay = ay, vanim_tx = tx, vanim_ty = ty;
     { /* s132: a swing you can hear, three variants in turn */
@@ -1605,6 +1630,22 @@ vfx_square_screen(int j, int i, int cx, int cy, int vx, int vy, int *sx, int *sy
     *sy = cy + V_MAP_YMOD * (va + vb);
 }
 
+/* s184: where the creature on square (j, i) is DRAWN right now - the square
+   plus the glide offset of whoever is stepping into it (vtw_ox / vtw_oy).
+   Text and effects that follow a creature (barks, speech, the searching
+   label, damage numbers, the level-up burst, the trail from the hero) used
+   the square alone, so mid-step they jumped ahead to the square it was
+   walking into while its sprite was still sliding there. */
+static void
+vfx_mover_screen(int j, int i, int cx, int cy, int vx, int vy, int *sx, int *sy)
+{
+    vfx_square_screen(j, i, cx, cy, vx, vy, sx, sy);
+    if (j >= 0 && j < COLNO && i >= 0 && i < ROWNO) {
+        *sx += vtw_ox[i][j];
+        *sy += vtw_oy[i][j];
+    }
+}
+
 /* a small filled square, clipped */
 static void
 vfx_dot(int x, int y, int sz, Uint32 col)
@@ -2135,7 +2176,7 @@ vsay_draw(const vfx_ent &e, double age, int cx, int cy, int vx, int vy)
             bw = w;
     }
     bw += 14, bh = (int) lines.size() * lh + 8;
-    vfx_square_screen(x, y, cx, cy, vx, vy, &sx, &sy);
+    vfx_mover_screen(x, y, cx, cy, vx, vy, &sx, &sy); /* s184 */
     bx = sx - bw / 2, by = sy - 100 - bh;
     if (!e.mid) /* above a bark line, if one is showing */
         for (i = 0; i < vfx_list.size(); i++)
@@ -2518,7 +2559,7 @@ vfx_draw(int cx, int cy, int vx, int vy)
         vfx_ent ic;
 
         memset(&ic, 0, sizeof ic);
-        vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &hx2, &hy2);
+        vfx_mover_screen(u.ux, u.uy, cx, cy, vx, vy, &hx2, &hy2); /* s184 */
         hx2 += 22, hy2 -= 96;
         if (vsr_kind == 1) { /* a magnifying glass, sweeping */
             int ox = (int) (3 * sin(ph2));
@@ -2551,7 +2592,7 @@ vfx_draw(int cx, int cy, int vx, int vy)
         for (zm = fmon; zm; zm = zm->nmon) {
             if (DEADMONSTER(zm) || !canseemon(zm) || !(zm->msleeping || !zm->mcanmove))
                 continue;
-            vfx_square_screen(zm->mx, zm->my, cx, cy, vx, vy, &sx, &sy);
+            vfx_mover_screen(zm->mx, zm->my, cx, cy, vx, vy, &sx, &sy); /* s184 */
             if (zm->msleeping) {
                 for (k = 0; k < 3; k++) {
                     double ph = fmod(now / 2200.0 + k / 3.0 + (zm->m_id % 7) * 0.13, 1.0);
@@ -2584,7 +2625,7 @@ vfx_draw(int cx, int cy, int vx, int vy)
         if (age < 1.0 && e.kind == 11) { /* s155: level up, around you */
             int k3;
 
-            vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &sx, &sy);
+            vfx_mover_screen(u.ux, u.uy, cx, cy, vx, vy, &sx, &sy); /* s184 */
             for (k3 = 0; k3 < 3; k3++) { /* rings rippling out from the feet */
                 double a3 = (age - 0.12 * k3) / 0.55;
 
@@ -2712,7 +2753,7 @@ vfx_draw(int cx, int cy, int vx, int vy)
         if (age < 1.0 && e.kind == 4) { /* s109: a bark over the hero's head */
             int tw = vulture_text_length(V_FONT_SMALL, e.txt);
 
-            vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &sx, &sy);
+            vfx_mover_screen(u.ux, u.uy, cx, cy, vx, vy, &sx, &sy); /* s184 */
             vulture_put_text_shadow(V_FONT_SMALL, e.txt, vulture_screen,
                                     sx - tw / 2, sy - 104 - (int) (8 * age),
                                     SDL_MapRGB(vulture_screen->format, e.r, e.g, e.b),
@@ -2723,6 +2764,8 @@ vfx_draw(int cx, int cy, int vx, int vy)
             continue;
         vfx_square_screen(e.x, e.y, cx, cy, vx, vy, &sx, &sy);
         if (e.kind == 1) {
+            if (isok(e.x, e.y)) /* s184: with the sprite, mid-step */
+                sx += vtw_ox[e.y][e.x], sy += vtw_oy[e.y][e.x];
             int ty = sy - 62 - (int) (34 * (1.0 - (1.0 - age) * (1.0 - age)))
                      - e.sub * (vulture_get_lineheight(V_FONT_LARGE) + 2); /* s146 */
             int w = vulture_text_length(V_FONT_LARGE, e.txt);
@@ -3607,6 +3650,23 @@ vulture_travel_pan(void)
 
 static bool vtw_fast = false; /* s112: this step is part of a run/travel */
 
+/* probe: s184 - VULTURE_SELFTEST_APPROACH saves every frame of the glide and
+   the lunge that follow its step, to check what is drawn where */
+static bool vprobe_seq_on = false;
+static int vprobe_seq_n = 0;
+
+static void
+vprobe_seq_shot(const char *tag)
+{
+    const char *dir = getenv("VULTURE_SELFTEST");
+    char p[700];
+
+    if (!vprobe_seq_on || !dir || vprobe_seq_n >= 40)
+        return;
+    snprintf(p, sizeof p, "%s\\seq%02d_%s.bmp", dir, vprobe_seq_n++, tag);
+    vulture_save_frame_bmp(p);
+}
+
 void
 vulture_tween_run(void)
 {
@@ -3647,6 +3707,7 @@ vulture_tween_run(void)
             levwin->force_redraw();
             ROOTWIN->draw_windows();
             vulture_refresh_window_region();
+            vprobe_seq_shot("glide"); /* probe: s184 */
             frames++;
             if (t >= 1.0)
                 break;
@@ -4187,7 +4248,7 @@ vpath_draw(int cx, int cy, int vx, int vy)
            the distance, so you can still judge how far it is */
         int hx, hy, tx, ty, k, steps = distmin(u.ux, u.uy, vhv.x, vhv.y) * 3;
 
-        vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &hx, &hy);
+        vfx_mover_screen(u.ux, u.uy, cx, cy, vx, vy, &hx, &hy); /* s184 */
         vfx_square_screen(vhv.x, vhv.y, cx, cy, vx, vy, &tx, &ty);
         for (k = 1; k <= steps; k++)
             vfx_glowdot(hx + (tx - hx) * k / steps, hy + (ty - hy) * k / steps,
@@ -4204,7 +4265,7 @@ vpath_draw(int cx, int cy, int vx, int vy)
            each square, a soft pulse marching toward the target */
         int px0, py0;
 
-        vfx_square_screen(u.ux, u.uy, cx, cy, vx, vy, &px0, &py0);
+        vfx_mover_screen(u.ux, u.uy, cx, cy, vx, vy, &px0, &py0); /* s184 */
         for (i = n - 1; i >= 0; i--) {
             int k = n - 1 - i, j, a = 150 + (int) (90 * (0.5 + 0.5 * sin(ph - k * 0.9)));
 
@@ -6947,6 +7008,34 @@ vselftest(void)
 
             for (q = 0; q < 6; q++)
                 vprobe_push_key(ks[q & 3]);
+        }
+        if (getenv("VULTURE_SELFTEST_APPROACH")) { /* probe: s184 step next to a hostile */
+            int ex1 = u.ux + 1, ex2 = u.ux + 2, ey = u.uy;
+
+            if (isok(ex2, ey) && ACCESSIBLE(levl[ex1][ey].typ) && ACCESSIBLE(levl[ex2][ey].typ)
+                && !m_at(ex1, ey) && !m_at(ex2, ey)) {
+                struct monst *jm = makemon(&mons[PM_JACKAL], ex2, ey, NO_MM_FLAGS);
+
+                if (jm) {
+                    jm->mpeaceful = 0, jm->msleeping = 0;
+                    jm->mhpmax = jm->mhp = 40; /* it strikes, it doesn't die */
+                    jm->movement = 2 * NORMAL_SPEED; /* and in the same turn as your step */
+                    newsym(ex2, ey);
+                }
+                {
+                    point sq; /* a real click on the square between (the keys
+                                 turn with the view, so 'l' isn't map-east) */
+
+                    sq.x = ex1, sq.y = ey;
+                    vprobe_seq_on = true;
+                    vprobe_push_click(sq);
+                }
+                vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                                  "approach: hero %d,%d, jackal %s at %d,%d, clicking %d,%d\n",
+                                  u.ux, u.uy, jm ? "made" : "NOT made", ex2, ey, ex1, ey);
+            } else {
+                vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "approach: no room east\n");
+            }
         }
         if (getenv("VULTURE_SELFTEST_CRIT")) { /* probe: s146 Tab at the sleeper */
             struct monst *cm;

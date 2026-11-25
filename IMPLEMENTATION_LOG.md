@@ -3723,6 +3723,35 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   ms (p90 6.2); GPU map - map draw median 1 ms (p90 3, p99 12), present
   1.6 ms (p90 3.4).  About 9 ms -> 2.6 ms of CPU per frame.
 
+### 184. Blows land where you are (for real); text rides the glide
+
+- The user, still: monsters attack the square you are walking into before
+  you get there, and text that follows the hero runs ahead of it.
+- Root cause of the first, found with a frame-by-frame probe: the blow
+  (mattacku -> vulture_anim_attack) comes MID-TURN, before the core
+  flushes its display buffer, so Vulture's map still showed the hero (and
+  a monster that had just moved) on the OLD square.  s154's "play the
+  pending step first" glided positions taken from u.ux / m->mx while the
+  sprites stayed put - the lunge struck an empty square and the hero
+  popped into it afterwards.  vulture_anim_attack now calls
+  flush_screen(1) before it draws, so the glide moves the sprites and the
+  blow lands on them.  A glide the tween would skip (teleport-mode runs)
+  is snapped before the lunge as well.
+- Second: anything following a creature took its square alone, with no
+  glide offset, so mid-step it sat on the destination while the sprite
+  slid there.  `vfx_mover_screen` adds the square's vtw_ox / vtw_oy; used
+  by the hero's barks, speech bubbles, the searching / resting label, the
+  level-up burst, sleepers' Zs and the stunned's stars, damage numbers,
+  and the hero end of the path trail.  Floor things (click markers,
+  puffs, blood) stay on the floor.
+- Probe VULTURE_SELFTEST_APPROACH: a hostile jackal two squares away (with
+  the movement to strike at once), a real click on the square between;
+  every glide / lunge frame is saved (seqNN_*.bmp).  Before: the hero
+  stays on the stairs through the glide and the jackal lunges at the
+  empty marked square.  After: the hero walks onto it (the bark "Right."
+  with them), then the jackal lunges and the hero flashes red.  The keys
+  turn with the view, so the probe clicks instead of pressing 'l'.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
