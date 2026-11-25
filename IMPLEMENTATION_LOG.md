@@ -3558,6 +3558,23 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   undead form "may offend your god (1 in 10)" - the real odds.
 - Probe PRAY=unlucky re-run: DON'T PRAY + BAD LUCK -3 as before.
 
+### 178. Last moments, and a tidier run summary
+
+- The run summary (end.c `vulture_run_summary`) ends with "Last moments":
+  the last 8 messages before the end, oldest first, repeats folded into
+  "(x3)", long lines cut at 99 characters - so a sudden death ("who is Jora
+  and why am I dead?") can be read back.  Deaths only (how <= GENOCIDED).
+  It walks the dumplog buffer (gs.saved_plines) itself: upstream's
+  get_saved_pline() starts at slot 45 instead of 49 once the index wraps to
+  0 (unsigned (0 - 1) % 50), so it would return the wrong lines.  The
+  buffer is still intact here - the dump log frees it later in really_done.
+- The summary's rows are "label<TAB>value" now, so the values line up
+  (s175's tab columns); "The run" and "Last moments" are headings, gold
+  since s176.  "(died on N)" only shows for a death.
+- Probe VULTURE_SELFTEST_DIE: the summary shows the aligned rows and the
+  last four messages of the probe game.  (The probe calls done() directly,
+  so its list has no "You die..." line; a real death's does.)
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

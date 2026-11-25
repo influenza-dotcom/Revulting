@@ -1186,33 +1186,84 @@ vulture_run_summary(int how)
                 ba = v, besta = o;
         }
     }
+    /* s178: rows are "label<TAB>value" - Vulture's text window lines the
+       tab columns up, so the values sit in one column in any font */
     w = create_nhwindow(NHW_TEXT);
-    putstr(w, ATR_BOLD, "        The run");
+    putstr(w, ATR_BOLD, "The run");
     putstr(w, 0, "");
     formatkiller(kb, sizeof kb, how, TRUE);
-    Sprintf(buf, "  How it ended:     %s", kb);
+    Sprintf(buf, "  How it ended\t%s", kb);
     putstr(w, 0, buf);
-    Sprintf(buf, "  Turns survived:   %ld", svm.moves);
+    Sprintf(buf, "  Turns survived\t%ld", svm.moves);
     putstr(w, 0, buf);
-    Sprintf(buf, "  Deepest level:    %d   (died on %d)", (int) deepest_lev_reached(FALSE),
-            (int) depth(&u.uz));
+    if (how <= GENOCIDED)
+        Sprintf(buf, "  Deepest level\t%d (died on %d)", (int) deepest_lev_reached(FALSE),
+                (int) depth(&u.uz));
+    else
+        Sprintf(buf, "  Deepest level\t%d", (int) deepest_lev_reached(FALSE));
     putstr(w, 0, buf);
-    Sprintf(buf, "  Experience level: %d", u.ulevel);
+    Sprintf(buf, "  Experience level\t%d", u.ulevel);
     putstr(w, 0, buf);
-    Sprintf(buf, "  Monsters you killed: %ld", u.uconduct.killer);
+    Sprintf(buf, "  Monsters you killed\t%ld", u.uconduct.killer);
     putstr(w, 0, buf);
-    Sprintf(buf, "  Damage you dealt:    %ld", vulture_dmg_dealt);
+    Sprintf(buf, "  Damage you dealt\t%ld", vulture_dmg_dealt);
     putstr(w, 0, buf);
-    Sprintf(buf, "  Damage you took:     %ld", vulture_dmg_taken);
+    Sprintf(buf, "  Damage you took\t%ld", vulture_dmg_taken);
     putstr(w, 0, buf);
     if (bestw) {
-        Sprintf(buf, "  Best weapon:  %s", doname(bestw));
+        Sprintf(buf, "  Best weapon\t%s", doname(bestw));
         putstr(w, 0, buf);
     }
     if (besta) {
-        Sprintf(buf, "  Best armour:  %s", doname(besta));
+        Sprintf(buf, "  Best armour\t%s", doname(besta));
         putstr(w, 0, buf);
     }
+#ifdef DUMPLOG_CORE
+    /* s178: the last few messages, oldest first, so a sudden death can be
+       read back ("what just happened?").  Walked straight from the dumplog
+       buffer: get_saved_pline() starts at slot 45, not 49, once the index
+       wraps to 0 (unsigned (0 - 1) % 50).  Repeats fold into "(x3)". */
+    if (how <= GENOCIDED) {
+#define VLM_MAX 8
+        const char *lm[VLM_MAX];
+        int lmn[VLM_MAX], n = 0, k;
+        unsigned i;
+
+        for (i = 0; i < DUMPLOG_MSG_COUNT && n < VLM_MAX; i++) {
+            unsigned slot = (gs.saved_pline_index + DUMPLOG_MSG_COUNT - 1 - i)
+                            % DUMPLOG_MSG_COUNT;
+            const char *m = gs.saved_plines[slot];
+
+            if (!m)
+                break; /* the slots before this one were never used */
+            if (!*m)
+                continue;
+            if (n && !strcmp(lm[n - 1], m)) {
+                lmn[n - 1]++;
+                continue;
+            }
+            lm[n] = m, lmn[n] = 1, n++;
+        }
+        if (n) {
+            putstr(w, 0, "");
+            putstr(w, ATR_BOLD, "Last moments");
+            for (k = n - 1; k >= 0; k--) {
+                char mb[100];
+
+                (void) strncpy(mb, lm[k], sizeof mb - 1);
+                mb[sizeof mb - 1] = '\0';
+                if (strlen(lm[k]) > sizeof mb - 1)
+                    Strcpy(mb + sizeof mb - 4, "...");
+                if (lmn[k] > 1)
+                    Sprintf(buf, "  %s  (x%d)", mb, lmn[k]);
+                else
+                    Sprintf(buf, "  %s", mb);
+                putstr(w, 0, buf);
+            }
+        }
+#undef VLM_MAX
+    }
+#endif
     putstr(w, 0, "");
     display_nhwindow(w, TRUE);
     destroy_nhwindow(w);
