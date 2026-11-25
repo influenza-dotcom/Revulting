@@ -3541,8 +3541,9 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   it (`attr`) and menuwin::layout colours those text rows
   (`vmenu_style_row`).  The discoveries list, the dungeon overview, pick-up
   menus' class headings and the Controls page now read as sections.
-- menuitem changed size, so the whole window port was rebuilt (its build
-  directory moved aside - most objects have no header dependencies).
+- menuitem changed size; the window port was rebuilt from scratch (its
+  build directory moved aside) to be safe - not needed after all: its
+  objects, winclass/ included, track header dependencies (.d files).
 - Probe VULTURE_SELFTEST_DISCO: the discoveries list shows gold Weapons /
   Armor / Scrolls / Spellbooks / Potions / Rings / Wands headings.
 
@@ -3574,6 +3575,62 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Probe VULTURE_SELFTEST_DIE: the summary shows the aligned rows and the
   last four messages of the probe game.  (The probe calls done() directly,
   so its list has no "You die..." line; a real death's does.)
+
+### 179. A soak bot that keeps moving
+
+- VULTURE_SELFTEST_SOAK (levelwin `vsoak_tick`) used to fight one monster
+  forever (Tab at something it could not reach or kill) and stall on levels
+  whose stairs it never found.  Now: after 60 Tab presses or 150 turns at
+  the same monster it ignores that one for 400 turns, and leaves Tab alone
+  while an ignored monster is the nearest (Tab always goes for the
+  nearest); a level that drags on is magic-mapped after 1200 turns and
+  left after 2500 (schedule_goto straight down the main dungeon) - or after
+  60 s / 150 s without moving, since a hero sealed in a vault or caught in
+  a trap may pass only a turn a second (the first run sat on dlvl 8 like
+  that); with no
+  enemy near, every 25 s it reads or quaffs an unidentified scroll or
+  potion (autopickup brings them, and with none in the pack the probe
+  makes one; this drives s150's auto-ID paths);
+  20 s without a game turn gets random steps.  The 30 s status line adds
+  XL, kills, ignored, used, mapped, dropped.
+
+### 180. The prayer badge reads only what the hero knows
+
+- s174's badge read the prayer timeout and Luck, and showed a LUCK badge.
+  The user ruled exactly that out at log 59 / 63 ("knowing your luck is
+  also cheating"; the status line's prayer cell was reworked to hero
+  knowledge then).  Reworked: `vulture_prayer_advice` now uses the trouble
+  the hero can see (a cursed blindfold / levitation item only once its
+  curse is known), the turns since they last prayed (the chronicle,
+  vq_turns_since_prayer), an angry god (they were told), their form, the
+  altar they stand on, Gehennom, the Friday-the-13th warning, and one fixed
+  rule (every game: the gods don't answer in the first 100 turns - the
+  timeout starts at 300 and major trouble needs 200 or less).
+- Three states: PRAY NOW (green: never prayed and past turn 100, or 1000+
+  turns since), PRAY? (yellow: prayed under 1000 turns ago - "it may be
+  too soon" / "probably too soon" under 500; its tooltip says a too-early
+  prayer angers your god but is worth the gamble if you'd die anyway;
+  clicking it prays), DON'T PRAY (red, with the reason).  The PRAY NOW
+  tooltip adds that a god secretly displeased (bad luck, misdeeds) may
+  still refuse - the part the hero can't know.
+- The LUCK / BAD LUCK badge is gone, and its row on the Controls page.
+- Probe VULTURE_SELFTEST_PRAY=ok / soon / early / angry.
+- The same audit found two smaller leaks, fixed: the hover card's "you hit
+  it N%" (s134 `vodds`) used find_roll_to_hit as-is, which counts Luck,
+  an unidentified weapon's or accuracy ring's enchantment, and a blessed
+  weapon's +2 against undead before the blessing is known - those are
+  taken back out, and the monster's to-hit uses its kind's level, not its
+  own (hidden) one; the stealth tooltip said "by what you wear" for
+  unidentified elven boots / cloak / ring of stealth put on while already
+  stealthy (no message, no identification) - it now names only identified
+  gear (`vworn_known_stealth`).  Item comparison (s163) was already clean.
+- And a third: the card's "crits N%" was vulture_crit_chance() = 3 + 2 x
+  Luck, so it read Luck off exactly.  It shows the luck-free base now,
+  "crits 3%+" (`vulture_crit_chance_shown`); the roll itself is unchanged.
+  The aimed-blow picker takes its odds from vodds, so it is clean too.
+- Probes: PRAY=ok -> PRAY NOW, soon -> PRAY?, early -> DON'T PRAY, angry ->
+  DON'T PRAY, no luck badge; the card reads "crits 3%+" in a full-moon game
+  (Luck +1 - it said 5% before); the Controls page's badge rows updated.
 
 ## 6. Open risks
 

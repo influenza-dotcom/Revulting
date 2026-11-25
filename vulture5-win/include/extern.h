@@ -431,6 +431,7 @@ extern int vulture_gear_missed(void);
 extern int vulture_ready_weapon(struct obj *);
 extern boolean vulture_unaware(struct monst *); /* s146 */
 extern int vulture_crit_chance(void);
+extern int vulture_crit_chance_shown(void); /* s180 */
 extern void vulture_crit_fx(int, int, int);
 extern void vulture_object_impact(int, int, int); /* s157 */
 extern void vulture_run_summary(int); /* s165 */

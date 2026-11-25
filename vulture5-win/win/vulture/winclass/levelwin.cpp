@@ -3338,22 +3338,42 @@ static SDL_Rect vbtn_rect[4];
    Tops up HP and food each tick; Tab when an enemy is close, otherwise the
    EXPLORE button; when exploring stops moving you, '>' twice (walk to the
    stairs, go down); a menu or prompt that stays up gets Esc.  Logs a status
-   line every 30 s. */
+   line every 30 s.
+   s179: it no longer fights one monster forever - after 60 Tab presses or
+   150 turns at the same one it ignores that monster for 400 turns (and
+   leaves Tab alone while it is the nearest); a level that drags on is
+   magic-mapped after 1200 turns and left after 2500 (straight down the
+   main dungeon); with no enemy near it reads or quaffs an unidentified
+   scroll or potion now and then (the auto-ID paths; with none in the pack
+   it makes one); and 20 s without a game turn gets random steps.  Stuck
+   in one spot (a vault, a trap) also counts in real time: 60 s maps the
+   level, 150 s leaves it - a stuck hero may pass only a turn a second -
+   and so does a level as a whole (4 min maps it, 8 min leaves it): a loop
+   that meets a prompt every lap moves, but only a few turns a minute. */
 static void
 vsoak_tick(bool at_map)
 {
-    static Uint32 last = 0, off_map_since = 0, last_log = 0;
+    static Uint32 last = 0, off_map_since = 0, last_log = 0, last_use = 0, turn_t = 0,
+                  moved_t = 0, lvl_t0 = 0;
     static int still = 0, lastx = -1, lasty = -1, cycle = 0;
+    static unsigned tgt_id = 0, ign_id[4] = { 0, 0, 0, 0 };
+    static long tgt_moves0 = 0, ign_until[4] = { 0, 0, 0, 0 }, turn_moves = -1;
+    static int tgt_tabs = 0, ign_next = 0, ign_total = 0, uses = 0, lvl = -1, lvl_maps = 0,
+               lvl_drops = 0;
+    static long lvl_moves0 = 0;
+    static bool lvl_mapped = false;
+    static const SDL_Keycode dirs[8] = { SDLK_h, SDLK_j, SDLK_k, SDLK_l,
+                                         SDLK_y, SDLK_u, SDLK_b, SDLK_n };
     Uint32 now = SDL_GetTicks();
-    struct monst *m;
-    bool foe = false;
+    struct monst *m, *near = 0, *near_any = 0;
+    int dn = 99, dany = 99, i;
 
     if (!getenv("VULTURE_SELFTEST_SOAK") || !u.ux)
         return;
-    if (!at_map) { /* a menu or prompt: give it 2.5 s, then Esc */
+    if (!at_map) { /* a menu or prompt: give it 1.5 s, then Esc */
         if (!off_map_since)
             off_map_since = now;
-        else if (now - off_map_since > 2500) {
+        else if (now - off_map_since > 1500) {
             vprobe_push_key(SDLK_ESCAPE);
             off_map_since = now;
         }
@@ -3369,29 +3389,115 @@ vsoak_tick(bool at_map)
     u.uhunger = 900;
     if (now - last_log > 30000) {
         last_log = now;
-        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "soak: turn %ld dlvl %d at %d,%d\n",
-                          svm.moves, (int) depth(&u.uz), u.ux, u.uy);
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                          "soak: turn %ld dlvl %d at %d,%d  XL %d kills %ld  ignored %d"
+                          "  used %d  mapped %d  dropped %d\n",
+                          svm.moves, (int) depth(&u.uz), u.ux, u.uy, u.ulevel,
+                          u.uconduct.killer, ign_total, uses, lvl_maps, lvl_drops);
     }
-    for (m = fmon; m; m = m->nmon)
-        if (!DEADMONSTER(m) && canspotmon(m) && !m->mtame && !m->mpeaceful
-            && distmin(u.ux, u.uy, m->mx, m->my) <= 6)
-            foe = true;
+    /* game turns: none for 20 s means every action here is a no-op */
+    if (svm.moves != turn_moves)
+        turn_moves = svm.moves, turn_t = now;
+    /* the level clock: map a level that drags on, then leave it */
+    if (depth(&u.uz) != lvl)
+        lvl = depth(&u.uz), lvl_moves0 = svm.moves, lvl_mapped = false, moved_t = now,
+        lvl_t0 = now;
+    if (u.ux != lastx || u.uy != lasty || !moved_t)
+        moved_t = now;
+    if (!lvl_mapped
+        && (svm.moves - lvl_moves0 > 1200 || now - moved_t > 60000 || now - lvl_t0 > 240000)) {
+        lvl_mapped = true, lvl_maps++;
+        do_mapping();
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "soak: dlvl %d dragged on - mapped it\n",
+                          lvl);
+    } else if ((svm.moves - lvl_moves0 > 2500 || now - moved_t > 150000
+                || now - lvl_t0 > 480000)
+               && !u.utotype && !In_endgame(&u.uz)) {
+        d_level nl;
+
+        nl.dnum = 0; /* the Dungeons of Doom: dlevel == depth there */
+        nl.dlevel = (xint16) (depth(&u.uz) + 1);
+        lvl_moves0 = svm.moves, moved_t = now, lvl_t0 = now; /* not again at once */
+        if (nl.dlevel <= dunlevs_in_dungeon(&nl)) {
+            lvl_drops++;
+            schedule_goto(&nl, UTOTYPE_NONE, (char *) 0, (char *) 0);
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                              "soak: dlvl %d dragged on - sent down\n", lvl);
+        }
+    }
+    /* the nearest enemy, and the nearest one not being ignored */
+    for (m = fmon; m; m = m->nmon) {
+        bool ign = false;
+        int d;
+
+        if (DEADMONSTER(m) || !canspotmon(m) || m->mtame || m->mpeaceful)
+            continue;
+        d = distmin(u.ux, u.uy, m->mx, m->my);
+        if (d > 6)
+            continue;
+        for (i = 0; i < 4; i++)
+            if (ign_id[i] == m->m_id && svm.moves < ign_until[i])
+                ign = true;
+        if (d < dany)
+            dany = d, near_any = m;
+        if (!ign && d < dn)
+            dn = d, near = m;
+    }
     if (u.ux == lastx && u.uy == lasty)
         still++;
     else
         still = 0;
     lastx = u.ux, lasty = u.uy;
     cycle++;
-    if (foe && still < 12) {
-        vprobe_push_key(SDLK_TAB);
-    } else if (still >= 8) { /* exploring has stopped: head down */
-        vprobe_push_key(SDLK_GREATER);
-        vprobe_push_key(SDLK_GREATER);
-        if (still > 30) { /* stuck somewhere: a random step */
-            static const SDL_Keycode ks[4] = { SDLK_h, SDLK_j, SDLK_k, SDLK_l };
-
-            vprobe_push_key(ks[cycle & 3]);
+    if (now - turn_t > 20000) { /* nothing has taken a turn: shake loose */
+        vprobe_push_key(dirs[cycle & 7]);
+        return;
+    }
+    if (near && near == near_any && still < 12) { /* Tab goes for the nearest */
+        if (near->m_id != tgt_id)
+            tgt_id = near->m_id, tgt_tabs = 0, tgt_moves0 = svm.moves;
+        if (++tgt_tabs > 60 || svm.moves - tgt_moves0 > 150) {
+            ign_id[ign_next] = tgt_id, ign_until[ign_next] = svm.moves + 400;
+            ign_next = (ign_next + 1) & 3, ign_total++;
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                              "soak: giving up on %s after %d tries / %ld turns\n",
+                              pmname(near->data, Mgender(near)), tgt_tabs,
+                              svm.moves - tgt_moves0);
+            tgt_id = 0;
+            return;
         }
+        vprobe_push_key(SDLK_TAB);
+        return;
+    }
+    if (!near_any && now - last_use > 25000) { /* try an unknown scroll / potion */
+        struct obj *o;
+
+        for (o = gi.invent; o; o = o->nobj)
+            if ((o->oclass == SCROLL_CLASS || o->oclass == POTION_CLASS)
+                && !objects[o->otyp].oc_name_known && o->invlet >= 'a' && o->invlet <= 'z')
+                break;
+        last_use = now;
+        if (!o) { /* nothing to try: the probe brings its own */
+            o = mkobj(rn2(2) ? SCROLL_CLASS : POTION_CLASS, FALSE);
+            if (o)
+                o = addinv(o);
+            if (o && (o->invlet < 'a' || o->invlet > 'z'))
+                o = 0;
+        }
+        if (o) {
+            uses++;
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "soak: %s %s\n",
+                              o->oclass == SCROLL_CLASS ? "reading" : "quaffing", xname(o));
+            vprobe_push_key(o->oclass == SCROLL_CLASS ? SDLK_r : SDLK_q);
+            vprobe_push_key((SDL_Keycode) o->invlet);
+            return;
+        }
+    }
+    if (still >= 8) { /* exploring has stopped: head down */
+        vprobe_push_key(SDLK_GREATER);
+        vprobe_push_key(SDLK_GREATER);
+        if (still > 30) /* stuck somewhere: a random step */
+            vprobe_push_key(dirs[cycle & 7]);
     } else if (vbtn_rect[3].w) { /* the EXPLORE button, clicked for real */
         SDL_Event e;
 
@@ -5301,9 +5407,26 @@ vodds(struct monst *m, int *you_hit, int *it_hit, int *it_pct)
     double dmg = 0;
 
     tmp = find_roll_to_hit(m, AT_WEAP, uwep, &cnt, &pen);
+    /* s180: only what the hero knows.  The game's formula counts Luck, the
+       enchantment of a weapon or accuracy ring nobody has identified, and a
+       blessed weapon's bonus against the undead before its blessing is
+       known; left in, the odds would give those hidden values away. */
+    tmp -= (int) Luck;
+    if (uwep && (uwep->oclass == WEAPON_CLASS || is_weptool(uwep))) {
+        if (!uwep->known)
+            tmp -= uwep->spe;
+        if (uwep->blessed && !uwep->bknown
+            && (is_undead(m->data) || is_demon(m->data) || is_vampshifter(m)))
+            tmp -= 2;
+    }
+    if (uleft && uleft->otyp == RIN_INCREASE_ACCURACY && !uleft->known)
+        tmp -= uleft->spe;
+    if (uright && uright->otyp == RIN_INCREASE_ACCURACY && !uright->known)
+        tmp -= uright->spe;
     *you_hit = (tmp - 1) * 5;
-    /* negative AC: AC_VALUE rolls -rnd(-AC); use its average */
-    t2 = (ac >= 0 ? ac : -((-ac + 1) / 2)) + 10 + m->m_lev;
+    /* negative AC: AC_VALUE rolls -rnd(-AC); use its average.  s180: its
+       kind's level (the codex knows it) - this one's own level is hidden */
+    t2 = (ac >= 0 ? ac : -((-ac + 1) / 2)) + 10 + m->data->mlevel;
     *it_hit = (t2 - 1) * 5;
     for (i = 0; i < NATTK; i++) {
         struct attack *a = &m->data->mattk[i];
@@ -5424,8 +5547,8 @@ vcard_draw(const std::string &name)
             if (vulture_unaware(m)) /* s146 */
                 snprintf(ob, sizeof ob, "You hit it %d%%  -  it hasn't noticed you: AMBUSH x2", yh);
             else
-                snprintf(ob, sizeof ob, "You hit it %d%%  -  crits %d%%  -  Ctrl+click to aim", yh,
-                         vulture_crit_chance()); /* s156 */
+                snprintf(ob, sizeof ob, "You hit it %d%%  -  crits %d%%+  -  Ctrl+click to aim", yh,
+                         vulture_crit_chance_shown()); /* s156; s180: no Luck in it */
             odds1 = ob;
             snprintf(ob, sizeof ob, "It hits you %d%%, ~%d%% of your health", ih, ip);
             odds2 = ob;
@@ -6581,8 +6704,14 @@ vselftest(void)
             const char *pm = getenv("VULTURE_SELFTEST_PRAY");
 
             u.uhp = 1; /* close to death */
-            u.ublesscnt = !strcmp(pm, "soon") ? 600 : 0;
-            u.uluck = !strcmp(pm, "unlucky") ? -3 : !strcmp(pm, "ok") ? 2 : 0;
+            /* s180: ok = never prayed, 1500 turns in; soon = prayed 300
+               turns ago; early = turn 1-3; angry = an angry god */
+            if (strcmp(pm, "early"))
+                svm.moves = 1500;
+            if (!strcmp(pm, "soon"))
+                gamelog_add(LL_MINORAC, 1200L, "prayed to the probe");
+            if (!strcmp(pm, "angry"))
+                u.ugangr = 1;
             disp.botl = TRUE;
         }
         if (getenv("VULTURE_SELFTEST_PHOTO")) /* probe: s170 the album polaroid */
@@ -7194,9 +7323,22 @@ vulture_room_sleepers(int asleep, int woke, int stealthy)
 static SDL_Rect vsb_rect = { 0, 0, 0, 0 };
 static SDL_Rect vspd_rect = { 0, 0, 0, 0 }; /* s144 */
 static int vbadge_row_x = 0, vbadge_row_y = 0, vbadge_row_h = 0, vbadge_row_w = 0; /* s159 */
-static SDL_Rect vpray_rect = { 0, 0, 0, 0 }, vluck_rect = { 0, 0, 0, 0 }; /* s174 */
+static SDL_Rect vpray_rect = { 0, 0, 0, 0 }; /* s174 (s180: no luck badge - Luck is hidden) */
 static int vpray_adv = 0;
 static double vhero_speed(void);
+
+/* s180: worn stealth the hero has identified.  Putting on elven boots, an
+   elven cloak or a ring of stealth while already stealthy says nothing and
+   identifies nothing, so "by what you wear" would give the item away. */
+static bool
+vworn_known_stealth(void)
+{
+    return (uarmf && uarmf->otyp == ELVEN_BOOTS && objects[ELVEN_BOOTS].oc_name_known)
+           || (uarmc && uarmc->otyp == ELVEN_CLOAK && objects[ELVEN_CLOAK].oc_name_known)
+           || (uleft && uleft->otyp == RIN_STEALTH && objects[RIN_STEALTH].oc_name_known)
+           || (uright && uright->otyp == RIN_STEALTH && objects[RIN_STEALTH].oc_name_known)
+           || (EStealth & (W_ART | W_ARTI)) != 0; /* an artifact's powers come with its name */
+}
 
 static const char *
 vstealth_state(Uint8 *r, Uint8 *g, Uint8 *b, std::string *why)
@@ -7208,8 +7350,11 @@ vstealth_state(Uint8 *r, Uint8 *g, Uint8 *b, std::string *why)
             && objects[RIN_AGGRAVATE_MONSTER].oc_name_known);
 
     if (Stealth) {
-        *why = HStealth ? "Stealthy by nature" : "Stealthy thanks to something you wear";
-        if (HStealth && EStealth)
+        bool worn = EStealth && vworn_known_stealth(); /* s180 */
+
+        *why = HStealth ? "Stealthy by nature" : worn ? "Stealthy thanks to something you wear"
+                                                      : "Stealthy";
+        if (HStealth && worn)
             *why = "Stealthy by nature and by what you wear";
         *why += " - your steps never wake sleeping monsters (ettins excepted)";
         *r = 120, *g = 220, *b = 140;
@@ -7252,16 +7397,17 @@ vstealth_draw(void)
         rc.x = 0;
     /* s159: badges only when they say something - the row closes up */
     vbadge_row_x = rc.x, vbadge_row_y = rc.y, vbadge_row_h = rc.h, vbadge_row_w = 0;
-    vpray_rect.w = 0, vluck_rect.w = 0;
+    vpray_rect.w = 0;
     { /* s174: in serious trouble - will a prayer save you? */
         const char *why, *tr;
         int adv = vulture_prayer_advice(&why, &tr);
 
-        if (adv) {
-            const char *pl = adv == 1 ? "PRAY NOW" : "DON'T PRAY";
+        if (adv) { /* s180: PRAY NOW / PRAY? (maybe too soon) / DON'T PRAY */
+            const char *pl = adv == 1 ? "PRAY NOW" : adv == 3 ? "PRAY?" : "DON'T PRAY";
             int tw3 = vulture_text_length(V_FONT_SMALL, pl);
-            double pu = 0.5 + 0.5 * sin(SDL_GetTicks() / 160.0);
-            Uint8 pr = adv == 1 ? 120 : 255, pg = adv == 1 ? 240 : 90, pb = adv == 1 ? 140 : 70;
+            double pu = 0.5 + 0.5 * sin(SDL_GetTicks() / (adv == 1 ? 160.0 : 320.0));
+            Uint8 pr = adv == 1 ? 120 : 255, pg = adv == 1 ? 240 : adv == 3 ? 205 : 90,
+                  pb = adv == 1 ? 140 : 70;
             SDL_Rect r3 = { (Sint16) rc.x, (Sint16) rc.y, (Uint16) (tw3 + 16), (Uint16) rc.h };
 
             vbox(r3.x, r3.y, r3.w, r3.h, 220);
@@ -7329,27 +7475,6 @@ vstealth_draw(void)
             vspd_rect = r2;
             vbadge_row_w += r2.w + 4;
         }
-    }
-    if ((int) Luck != 0 && !Hallucination) { /* s174: luck, when it isn't neutral */
-        int lk = (int) Luck, tw4;
-        char ll[24];
-        Uint8 lr = lk > 0 ? 250 : 255, lg = lk > 0 ? 215 : 110, lb = lk > 0 ? 90 : 90;
-        SDL_Rect r4;
-
-        snprintf(ll, sizeof ll, "%s %+d", lk > 0 ? "LUCK" : "BAD LUCK", lk);
-        tw4 = vulture_text_length(V_FONT_SMALL, ll);
-        r4.x = vbadge_row_x + vbadge_row_w, r4.y = rc.y, r4.w = tw4 + 14, r4.h = rc.h;
-        vbox(r4.x, r4.y, r4.w, r4.h, 200);
-        {
-            SDL_Rect bar = { (Sint16) r4.x, (Sint16) (r4.y + r4.h - 2), (Uint16) r4.w, 2 };
-
-            SDL_FillRect(vulture_screen, &bar, SDL_MapRGB(vulture_screen->format, lr, lg, lb));
-        }
-        vulture_put_text_shadow(V_FONT_SMALL, ll, vulture_screen, r4.x + 7, r4.y + 2,
-                                SDL_MapRGB(vulture_screen->format, lr, lg, lb),
-                                SDL_MapRGB(vulture_screen->format, 0, 0, 0));
-        vluck_rect = r4;
-        vbadge_row_w += r4.w + 4;
     }
 }
 
@@ -8790,10 +8915,9 @@ vcontrols_page(void)
         "  Ctrl+Shift+P\tthe message log",
         "",
         "Badges above your portrait (only when they matter; hover one for why)",
-        "  PRAY NOW / DON'T PRAY\twhether praying would help right now",
+        "  PRAY NOW / PRAY? / DON'T PRAY\tin serious trouble: whether a prayer should save you",
         "  STEALTHY / NOISY\twhether your steps can wake sleeping monsters",
         "  FAST / SLOW\tyour speed, when it isn't normal",
-        "  LUCK / BAD LUCK\tyour luck, when it isn't zero",
         "  SET 1-3\tyour saved outfits",
         NULL
     };
@@ -10645,9 +10769,14 @@ levelwin::handle_timer_event(window *target, void *result, int time)
             int adv = vulture_prayer_advice(&why, &tr);
             std::string t;
 
-            if (adv == 1)
-                t = std::string("You're ") + tr + " - your god will help.\n"
-                    "Click here (or #pray) to pray now.";
+            if (adv == 1) /* s180: only what the hero knows */
+                t = std::string("You're ") + tr + ".  Praying should save you: " + why + ".\n"
+                    "(A god you've secretly displeased - bad luck, misdeeds - may still refuse.)\n"
+                    "Click here (or #pray) to pray.";
+            else if (adv == 3)
+                t = std::string("You're ") + tr + ", and " + why + ".\n"
+                    "A prayer that comes too soon angers your god - but if you'd die\n"
+                    "otherwise, it's a gamble worth taking.  Click here to pray anyway.";
             else if (adv == 2)
                 t = std::string("You're ") + tr + ", but don't pray: " + why + ".\n"
                     "Instead: retreat, quaff a healing potion, use an escape item,\n"
@@ -10656,24 +10785,6 @@ levelwin::handle_timer_event(window *target, void *result, int time)
                 vulture_mouse_set_tooltip(t);
                 return V_EVENT_HANDLED_NOREDRAW;
             }
-        }
-        if (vluck_rect.w && mp.x >= vluck_rect.x && mp.x < vluck_rect.x + vluck_rect.w
-            && mp.y >= vluck_rect.y && mp.y < vluck_rect.y + vluck_rect.h) { /* s174 */
-            char lt[400];
-
-            if ((int) Luck > 0)
-                snprintf(lt, sizeof lt,
-                         "Luck %+d: you hit a little more often, critical hits come more often\n"
-                         "and wishes and prayers go your way.  It slowly drifts back to 0\n"
-                         "unless you carry a blessed or uncursed luckstone.", (int) Luck);
-            else
-                snprintf(lt, sizeof lt,
-                         "Luck %+d: you hit less often, critical hits dry up, and PRAYER FAILS\n"
-                         "while it's below zero.  Usual causes: breaking a mirror, killing a\n"
-                         "peaceful, attacking while displaced.  It drifts back toward 0 with time.",
-                         (int) Luck);
-            vulture_mouse_set_tooltip(lt);
-            return V_EVENT_HANDLED_NOREDRAW;
         }
         if (vgs_hit(mp.x, mp.y) >= 0) { /* s145 */
             vulture_mouse_set_tooltip(vgs_tip(vgs_hit(mp.x, mp.y)));
@@ -10918,7 +11029,7 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
     if (vpray_rect.w && mouse.x >= vpray_rect.x && mouse.x < vpray_rect.x + vpray_rect.w
         && mouse.y >= vpray_rect.y && mouse.y < vpray_rect.y + vpray_rect.h
         && button == SDL_BUTTON_LEFT) { /* s174: pray from the badge */
-        if (vpray_adv == 1) {
+        if (vpray_adv == 1 || vpray_adv == 3) { /* s180: PRAY? prays too */
             cmdq_add_ec(CQ_CANNED, dopray);
             vulture_click_consumed = TRUE;
             vauto_result(result);

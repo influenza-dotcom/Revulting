@@ -2206,17 +2206,27 @@ pray_revive(void)
 
 /* #pray command */
 /*
- * Vulture s174: would a prayer save you right now?  A side-effect-free
- * reading of can_pray() (no messages, no random numbers - the interface
- * asks every frame).  0 = not in serious trouble; 1 = in serious trouble and
- * your god will help; 2 = in serious trouble but praying now won't work
- * (*why says why).  *trouble names the trouble.
+ * Vulture s174, reworked s180: should you pray right now?  It reads only
+ * what the hero knows: the trouble they can see, how long since they last
+ * prayed (the chronicle - vq_turns_since_prayer), whether their god is
+ * angry (they were told), what they are, where they stand, and what the
+ * game announced at the start (Friday the 13th).  Never the hidden prayer
+ * timeout, Luck or alignment record: the user rules reading those as
+ * cheating (log 59 / 63 - the status line's Pray / Pray? cell keeps the
+ * same rule).  The one fixed rule it uses is the same in every game: the
+ * gods don't answer in the first 100 turns.  No messages and no random
+ * numbers - the interface asks every frame.
+ * 0 = not in serious trouble; 1 = praying should work; 3 = it may be too
+ * soon; 2 = praying would go wrong.  *why says why (for 1: since when);
+ * *trouble names the trouble.
  */
 int
 vulture_prayer_advice(const char **why, const char **trouble)
 {
-    int tr = in_trouble(), alignment;
+    static char wbuf[96];
+    int tr = in_trouble();
     aligntyp at = on_altar() ? a_align(u.ux, u.uy) : u.ualign.type;
+    long since;
 
     *why = "", *trouble = "";
     if (tr <= 0)
@@ -2238,7 +2248,17 @@ vulture_prayer_advice(const char **why, const char **trouble)
     case TROUBLE_CURSED_BLINDFOLD: *trouble = "stuck in a cursed blindfold"; break;
     default: *trouble = "in trouble"; break;
     }
-    if (is_demon(gy.youmonst.data) && (at == A_LAWFUL || at == A_NEUTRAL)) { /* s177 */
+    /* a curse the hero hasn't found yet is no trouble they know of */
+    if (tr == TROUBLE_CURSED_BLINDFOLD && !(ublindf && ublindf->bknown))
+        return 0;
+    if (tr == TROUBLE_CURSED_LEVITATION
+        && !((uarmf && uarmf->bknown && uarmf->cursed)
+             || (uleft && uleft->otyp == RIN_LEVITATION && uleft->bknown && uleft->cursed)
+             || (uright && uright->otyp == RIN_LEVITATION && uright->bknown
+                 && uright->cursed)
+             || (uarmg && uarmg->bknown && uarmg->cursed)))
+        return 0;
+    if (is_demon(gy.youmonst.data) && (at == A_LAWFUL || at == A_NEUTRAL)) {
         *why = "your demonic form repels the gods";
         return 2;
     }
@@ -2246,38 +2266,42 @@ vulture_prayer_advice(const char **why, const char **trouble)
         *why = "this altar belongs to Moloch";
         return 2;
     }
-    if (u.ualign.type && u.ualign.type == -at)
-        alignment = -u.ualign.record;
-    else if (u.ualign.type != at)
-        alignment = u.ualign.record / 2;
-    else
-        alignment = u.ualign.record;
-    if (u.ublesscnt > 200) {
-        *why = "you prayed too recently";
-        return 2;
-    }
-    if ((int) Luck < 0) {
-        *why = "your luck is bad";
-        return 2;
-    }
     if (u.ugangr) {
         *why = "your god is angry with you";
-        return 2;
-    }
-    if (alignment < 0) {
-        *why = "your god disapproves of your conduct";
-        return 2;
-    }
-    if (is_undead(gy.youmonst.data) && !Inhell && (at == A_LAWFUL || at == A_NEUTRAL)) {
-        *why = at == A_LAWFUL ? "your undead form offends your god"
-                              : "your undead form may offend your god (1 in 10)";
         return 2;
     }
     if (Inhell) {
         *why = "no god can help you in Gehennom";
         return 2;
     }
-    return 1;
+    if (is_undead(gy.youmonst.data) && (at == A_LAWFUL || at == A_NEUTRAL)) {
+        *why = at == A_LAWFUL ? "your undead form offends your god"
+                              : "your undead form may offend your god (1 in 10)";
+        return 2;
+    }
+    if (flags.friday13 && flags.moonphase != FULL_MOON) {
+        *why = "it's Friday the 13th (you were warned) - your luck is "
+               "probably bad, and gods turn away the unlucky";
+        return 2;
+    }
+    since = vq_turns_since_prayer();
+    if (since == svm.moves) { /* never prayed */
+        if (svm.moves <= 100L) {
+            *why = "the gods don't answer in your first 100 turns";
+            return 2;
+        }
+        *why = "you haven't prayed yet";
+        return 1;
+    }
+    if (since >= 1000L) {
+        Sprintf(wbuf, "you last prayed %ld turns ago", since);
+        *why = wbuf;
+        return 1;
+    }
+    Sprintf(wbuf, "you prayed only %ld turns ago - %s", since,
+            since >= 500L ? "it may be too soon" : "probably too soon");
+    *why = wbuf;
+    return 3;
 }
 
 int

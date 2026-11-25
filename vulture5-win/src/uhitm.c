@@ -586,12 +586,22 @@ vulture_unaware(struct monst *m)
                       && !m_canseeu(m) && (m->mux != u.ux || m->muy != u.uy));
 }
 
+#define VCRIT_BASE 3 /* percent, before Luck */
+
 int
 vulture_crit_chance(void)
 {
-    int c = 3 + 2 * Luck;
+    int c = VCRIT_BASE + 2 * Luck;
 
     return c < 0 ? 0 : c > 35 ? 35 : c;
+}
+
+/* s180: what the hover card may show - the chance without Luck, which the
+   hero can't know (each point of it adds 2%; "3%+" says it can be more) */
+int
+vulture_crit_chance_shown(void)
+{
+    return VCRIT_BASE;
 }
 
 staticfn void
