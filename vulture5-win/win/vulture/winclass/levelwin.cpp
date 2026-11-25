@@ -618,16 +618,26 @@ vtw_flipped(int tile_id, SDL_Surface *s)
  * temporary ARGB surface: only animating sprites take this path, and they
  * are ~70x90 px, so it costs next to nothing.
  */
+/* s169: the sprite transformer - scale, rotate, tint and fade a sprite.
+   Reads the sprite's own 32-bit pixels where it can (no per-call format
+   conversion), samples BILINEARLY with alpha weighting (smooth squash,
+   stretch, breathing and lean instead of jaggy nearest pixels), writes into
+   one reused buffer, and does the pixel maths inline (no SDL_GetRGBA /
+   SDL_MapRGBA per pixel). */
 static void
 vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
          bool red, int alpha)
 {
-    SDL_Surface *src, *dst;
-    double rad, c, s, ax, ay, cx[4], cy[4], minx, miny, maxx, maxy;
-    int w, h, bw, bh, x, y, k;
-    Uint32 key = 0;
-    bool haskey;
+    static SDL_Surface *dst = NULL;
+    SDL_Surface *src = NULL, *conv = NULL;
+    double rad, c, s, ax, ay, minx, miny, maxx, maxy;
+    int w, h, bw, bh, x, y, k, rsh, gsh, bsh, ash;
+    Uint32 key = 0, amask;
+    bool haskey, hasalpha;
+    int amul = alpha < 0 ? 0 : alpha > 255 ? 255 : alpha;
 
+    if (!img)
+        return;
     if (sx == 1.0 && sy == 1.0 && deg == 0.0 && alpha >= 255) {
         if (red)
             SDL_SetSurfaceColorMod(img, 255, 70, 70);
@@ -636,18 +646,26 @@ vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
             SDL_SetSurfaceColorMod(img, 255, 255, 255);
         return;
     }
-    src = SDL_ConvertSurfaceFormat(img, SDL_PIXELFORMAT_ARGB8888, 0);
-    if (!src)
-        return;
+    if (img->format->BytesPerPixel == 4) {
+        src = img;
+    } else {
+        conv = SDL_ConvertSurfaceFormat(img, SDL_PIXELFORMAT_ARGB8888, 0);
+        if (!conv)
+            return;
+        src = conv;
+    }
+    rsh = src->format->Rshift, gsh = src->format->Gshift, bsh = src->format->Bshift;
+    ash = src->format->Ashift, amask = src->format->Amask;
+    hasalpha = amask != 0;
     haskey = (SDL_GetColorKey(src, &key) == 0);
     /* s94: a sprite with no alpha and no colour key would come out as a
        black box: treat its pure black as transparent */
-    if (!img->format->Amask && !haskey) {
+    if (!hasalpha && !haskey) {
         haskey = true;
-        key = SDL_MapRGBA(src->format, 0, 0, 0, 255);
+        key = SDL_MapRGB(src->format, 0, 0, 0) & ~amask;
     }
     w = src->w, h = src->h;
-    ax = w / 2.0, ay = (double) h;           /* the feet */
+    ax = w / 2.0, ay = (double) h; /* the feet */
     rad = deg * 3.14159265358979 / 180.0;
     c = cos(rad), s = sin(rad);
     {
@@ -657,59 +675,106 @@ vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
         minx = miny = 1e9, maxx = maxy = -1e9;
         for (k = 0; k < 4; k++) {
             double qx = px[k] * sx, qy = py[k] * sy;
+            double cx2 = qx * c - qy * s, cy2 = qx * s + qy * c;
 
-            cx[k] = qx * c - qy * s;
-            cy[k] = qx * s + qy * c;
-            if (cx[k] < minx) minx = cx[k];
-            if (cx[k] > maxx) maxx = cx[k];
-            if (cy[k] < miny) miny = cy[k];
-            if (cy[k] > maxy) maxy = cy[k];
+            if (cx2 < minx) minx = cx2;
+            if (cx2 > maxx) maxx = cx2;
+            if (cy2 < miny) miny = cy2;
+            if (cy2 > maxy) maxy = cy2;
         }
     }
-    bw = (int) (maxx - minx) + 2, bh = (int) (maxy - miny) + 2;
-    if (bw <= 0 || bh <= 0 || bw > 1000 || bh > 1000) {
-        SDL_FreeSurface(src);
+    bw = (int) (maxx - minx) + 3, bh = (int) (maxy - miny) + 3;
+    if (bw <= 0 || bh <= 0 || bw > 1000 || bh > 1000 || sx == 0.0 || sy == 0.0) {
+        if (conv)
+            SDL_FreeSurface(conv);
         return;
     }
-    dst = SDL_CreateRGBSurfaceWithFormat(0, bw, bh, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (!dst) {
-        SDL_FreeSurface(src);
-        return;
+    if (!dst || dst->w < bw || dst->h < bh) {
+        if (dst)
+            SDL_FreeSurface(dst);
+        dst = SDL_CreateRGBSurfaceWithFormat(0, bw > 160 ? bw : 160, bh > 200 ? bh : 200, 32,
+                                             SDL_PIXELFORMAT_ARGB8888);
+        if (!dst) {
+            if (conv)
+                SDL_FreeSurface(conv);
+            return;
+        }
+        SDL_SetSurfaceBlendMode(dst, SDL_BLENDMODE_BLEND);
     }
     SDL_LockSurface(src);
     SDL_LockSurface(dst);
-    for (y = 0; y < bh; y++) {
-        Uint32 *drow = (Uint32 *) ((Uint8 *) dst->pixels + y * dst->pitch);
+    {
+        /* inverse mapping, stepped incrementally along each row */
+        double isx = 1.0 / sx, isy = 1.0 / sy;
+        double dux = c * isx, dvx = -s * isy; /* source step per destination x */
+        const Uint8 *sp = (const Uint8 *) src->pixels;
+        int spitch = src->pitch;
+        /* destination pixel (X0 + x, Y0 + y): its centre, relative to the
+           sprite's anchor (dx + ax, dy + ay), is where we sample from */
+        int X0 = dx + (int) floor(ax + minx) - 1, Y0 = dy + (int) floor(ay + miny) - 1;
 
-        for (x = 0; x < bw; x++) {
-            /* inverse: rotate back, unscale, then into source pixels */
-            double rx = x + minx, ry = y + miny;
-            double ux = (rx * c + ry * s) / sx, uy = (-rx * s + ry * c) / sy;
-            int sxp = (int) floor(ux + ax), syp = (int) floor(uy + ay);
-            Uint32 p;
-            Uint8 r, g, b, a;
+        for (y = 0; y < bh; y++) {
+            Uint32 *drow = (Uint32 *) ((Uint8 *) dst->pixels + y * dst->pitch);
+            double ry = Y0 + y + 0.5 - (dy + ay), rx0 = X0 + 0.5 - (dx + ax);
+            double u = (rx0 * c + ry * s) * isx + ax - 0.5;
+            double v = (-rx0 * s + ry * c) * isy + ay - 0.5;
 
-            drow[x] = 0;
-            if (sxp < 0 || syp < 0 || sxp >= w || syp >= h)
-                continue;
-            p = *(Uint32 *) ((Uint8 *) src->pixels + syp * src->pitch + sxp * 4);
-            if (haskey && p == key)
-                continue;
-            SDL_GetRGBA(p, src->format, &r, &g, &b, &a);
-            if (red) {
-                g = (Uint8) (g * 0.3);
-                b = (Uint8) (b * 0.3);
+            for (x = 0; x < bw; x++, u += dux, v += dvx) {
+                int x0 = (int) floor(u), y0 = (int) floor(v), q;
+                double fx = u - x0, fy = v - y0;
+                double wq[4], aa = 0, rr = 0, gg = 0, bb = 0;
+
+                drow[x] = 0;
+                if (x0 < -1 || y0 < -1 || x0 >= w || y0 >= h)
+                    continue;
+                wq[0] = (1 - fx) * (1 - fy), wq[1] = fx * (1 - fy);
+                wq[2] = (1 - fx) * fy, wq[3] = fx * fy;
+                for (q = 0; q < 4; q++) {
+                    int xx = x0 + (q & 1), yy = y0 + (q >> 1);
+                    Uint32 pp;
+                    double pa;
+
+                    if (xx < 0 || yy < 0 || xx >= w || yy >= h)
+                        continue;
+                    pp = *(const Uint32 *) (sp + yy * spitch + xx * 4);
+                    if (haskey && (pp & ~amask) == (key & ~amask))
+                        continue;
+                    pa = hasalpha ? ((pp & amask) >> ash) / 255.0 : 1.0;
+                    pa *= wq[q];
+                    aa += pa;
+                    rr += pa * ((pp >> rsh) & 255);
+                    gg += pa * ((pp >> gsh) & 255);
+                    bb += pa * ((pp >> bsh) & 255);
+                }
+                if (aa <= 0.004)
+                    continue;
+                {
+                    int R = (int) (rr / aa), G = (int) (gg / aa), B = (int) (bb / aa);
+                    int A = (int) (aa * amul);
+
+                    if (red) {
+                        G = G * 3 / 10;
+                        B = B * 3 / 10;
+                    }
+                    if (A > 255)
+                        A = 255;
+                    drow[x] = ((Uint32) A << 24) | ((Uint32) (R > 255 ? 255 : R) << 16)
+                              | ((Uint32) (G > 255 ? 255 : G) << 8) | (Uint32) (B > 255 ? 255 : B);
+                }
             }
-            a = (Uint8) (a * (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha) / 255);
-            drow[x] = SDL_MapRGBA(dst->format, r, g, b, a);
         }
     }
     SDL_UnlockSurface(dst);
     SDL_UnlockSurface(src);
-    SDL_SetSurfaceBlendMode(dst, SDL_BLENDMODE_BLEND);
-    vulture_put_img(dx + (int) ax + (int) minx, dy + (int) ay + (int) miny, dst);
-    SDL_FreeSurface(dst);
-    SDL_FreeSurface(src);
+    {
+        SDL_Rect sr = { 0, 0, bw, bh }, dr;
+
+        dr.x = dx + (int) floor(ax + minx) - 1, dr.y = dy + (int) floor(ay + miny) - 1;
+        dr.w = bw, dr.h = bh;
+        SDL_BlitSurface(dst, &sr, vulture_screen, &dr);
+    }
+    if (conv)
+        SDL_FreeSurface(conv);
 }
 
 /*
@@ -2151,6 +2216,122 @@ vfx_click_at(int x, int y)
 }
 
 static bool vmagic_light(int tt, int x, int y, double t, double *c, double *pu);
+
+/*
+ * IMPLEMENTATION_LOG s171: halos and living water.  Light sources (lamps,
+ * candles, glowing monsters) and fiery / electric creatures get a soft
+ * additive bloom that flickers with the flame; water squares carry moving
+ * glints, lava slow molten pulses.  Drawn after the light layer, so they
+ * glow over the darkness; part of the "Atmosphere" effect switch.
+ */
+static void
+vhalo(int sx, int sy, int rad, Uint8 r, Uint8 g, Uint8 b, int alpha)
+{
+    static SDL_Surface *disc = NULL;
+    SDL_Rect d;
+
+    if (!disc) {
+        int x, y, n = 128;
+
+        disc = SDL_CreateRGBSurfaceWithFormat(0, n, n, 32, SDL_PIXELFORMAT_ARGB8888);
+        if (!disc)
+            return;
+        SDL_LockSurface(disc);
+        for (y = 0; y < n; y++) {
+            Uint32 *row = (Uint32 *) ((Uint8 *) disc->pixels + y * disc->pitch);
+
+            for (x = 0; x < n; x++) {
+                double dx = (x + 0.5 - n / 2.0) / (n / 2.0), dy = (y + 0.5 - n / 2.0) / (n / 2.0);
+                double r2 = dx * dx + dy * dy, a = r2 >= 1.0 ? 0.0 : pow(1.0 - r2, 2.2);
+
+                row[x] = ((Uint32) (a * 255) << 24) | 0x00FFFFFFu;
+            }
+        }
+        SDL_UnlockSurface(disc);
+        SDL_SetSurfaceBlendMode(disc, SDL_BLENDMODE_ADD);
+    }
+    if (rad < 4 || alpha <= 2)
+        return;
+    SDL_SetSurfaceColorMod(disc, r, g, b);
+    SDL_SetSurfaceAlphaMod(disc, (Uint8) (alpha > 255 ? 255 : alpha));
+    d.x = sx - rad, d.y = sy - rad / 2 - rad / 3, d.w = rad * 2, d.h = rad * 2 * 2 / 3;
+    SDL_BlitScaled(disc, NULL, vulture_screen, &d);
+}
+
+static void
+vhalo_draw(int cx, int cy, int vx, int vy)
+{
+    double t = SDL_GetTicks() / 1000.0;
+    light_source *ls;
+    struct monst *m;
+    int x, y, sx, sy;
+
+    if (!vfx_ambient || !u.ux || u.uswallow || Hallucination)
+        return;
+    for (ls = gl.light_base; ls; ls = ls->next) { /* lamps, candles, glowing things */
+        double fl = 0.85 + 0.10 * sin(t * 9.0 + ls->x * 1.7) + 0.05 * sin(t * 23.0 + ls->y);
+
+        if (!isok(ls->x, ls->y) || !cansee(ls->x, ls->y) || ls->range <= 0)
+            continue;
+        vfx_square_screen(ls->x, ls->y, cx, cy, vx, vy, &sx, &sy);
+        vhalo(sx, sy - 30, (int) (30 + 9 * ls->range), 255, 190, 110, (int) (60 * fl));
+    }
+    for (m = fmon; m; m = m->nmon) { /* fire, lightning and frost creatures */
+        int k, kind = 0;
+
+        if (DEADMONSTER(m) || !canseemon(m))
+            continue;
+        for (k = 0; k < NATTK && !kind; k++) {
+            const struct attack *a = &m->data->mattk[k];
+
+            if (a->aatyp == AT_NONE || a->aatyp == AT_ENGL || a->aatyp == AT_EXPL
+                || a->aatyp == AT_BOOM || m->data->mlet == S_ELEMENTAL)
+                kind = a->adtyp == AD_FIRE ? 1 : a->adtyp == AD_ELEC ? 2 : a->adtyp == AD_COLD ? 3 : 0;
+        }
+        if (!kind)
+            continue;
+        vfx_square_screen(m->mx, m->my, cx, cy, vx, vy, &sx, &sy);
+        if (kind == 1)
+            vhalo(sx, sy - 34, 70, 255, 120, 40, (int) (95 + 25 * sin(t * 11.0 + m->m_id)));
+        else if (kind == 2)
+            vhalo(sx, sy - 34, 64, 150, 180, 255, (rand() % 5) ? 70 : 140);
+        else
+            vhalo(sx, sy - 34, 60, 140, 200, 255, 60);
+    }
+    for (x = vx - 14; x <= vx + 14; x++) /* water glints and lava pulses */
+        for (y = vy - 14; y <= vy + 14; y++) {
+            int g, c;
+
+            if (!isok(x, y) || !cansee(x, y))
+                continue;
+            g = glyph_at(x, y);
+            if (!glyph_is_cmap(g))
+                continue;
+            c = glyph_to_cmap(g);
+            if (c == S_pool || c == S_water) {
+                int k;
+
+                vfx_square_screen(x, y, cx, cy, vx, vy, &sx, &sy);
+                for (k = 0; k < 3; k++) {
+                    double ph = fmod(t * (0.35 + 0.1 * k) + x * 0.37 + y * 0.61 + k * 0.33, 1.0);
+                    int gx = sx + (int) (24 * sin(ph * 6.2832 + k * 2.1 + x)),
+                        gy = sy + (int) (9 * cos(ph * 6.2832 * 0.7 + k + y));
+                    int al = (int) (150 * sin(3.14159265358979 * ph));
+
+                    if (al > 10)
+                        vfx_glowdot(gx, gy, 200, 230, 255, al);
+                }
+            } else if (c == S_lava || c == S_lavawall) {
+                double pu = 0.5 + 0.5 * sin(t * 1.3 + x * 0.9 + y * 1.4);
+
+                vfx_square_screen(x, y, cx, cy, vx, vy, &sx, &sy);
+                vhalo(sx, sy - 6, 40, 255, 110, 30, (int) (40 + 50 * pu));
+                if (pu > 0.85)
+                    vfx_glowdot(sx + (int) (10 * sin(t * 3 + x)), sy - (int) (12 * (pu - 0.85) / 0.15),
+                                255, 200, 90, 200);
+            }
+        }
+}
 
 /*
  * IMPLEMENTATION_LOG s160: atmosphere.  A few dozen particles over the map,
@@ -6382,6 +6563,8 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_LEVEL")) /* probe: s155 the real level-up path */
             pluslvl(FALSE);
+        if (getenv("VULTURE_SELFTEST_PHOTO")) /* probe: s170 the album polaroid */
+            vulture_photo_fx(u.ux + 1, u.uy, PM_JACKAL, 10);
         if (getenv("VULTURE_SELFTEST_DIE")) { /* probe: s165 the run summary on death */
             extern long vulture_dmg_dealt;
 
@@ -6775,6 +6958,99 @@ vaim_probe(int stage, const char *dir)
             vpause_probe_t = SDL_GetTicks();
             (void) vaim_pick(m, dummy);
         }
+    }
+}
+
+/*
+ * IMPLEMENTATION_LOG s170: a new species in the Tourist's photo album.
+ * The camera flashes - white light bursts where the monster stands and the
+ * whole screen flashes briefly - and a polaroid slides in on the right with
+ * the monster's picture, its name and the album count; milestone counts
+ * (10 / 25 / 50 / 100) get a gold frame.  It holds, then slides back out.
+ */
+static Uint32 vphoto_t0 = 0;
+static int vphoto_mndx = -1, vphoto_count = 0;
+
+extern "C" void
+vulture_photo_fx(int x, int y, int mndx, int count)
+{
+    if (!levwin)
+        return;
+    vphoto_t0 = SDL_GetTicks(), vphoto_mndx = mndx, vphoto_count = count;
+    if (isok(x, y))
+        vl_flash(x, y, 1.0f, 1.0f, 1.0f, 1.6f, 4.0f, 350);
+    vulture_sfx("camera");
+}
+
+static void
+vphoto_draw(int ax, int ay, int aw, int ah)
+{
+    Uint32 age;
+    int cw = V_UI(170), ch = V_UI(196), px, py, slide, tile;
+    bool gold;
+
+    if (!vphoto_t0 || vphoto_mndx < 0 || !ismnum(vphoto_mndx))
+        return;
+    age = SDL_GetTicks() - vphoto_t0;
+    if (age > 3400) {
+        vphoto_t0 = 0;
+        return;
+    }
+    if (age < 160) /* the flash */
+        vtint(ax, ay, aw, ah, 255, 255, 255, (int) (170 * (1.0 - age / 160.0)));
+    gold = vphoto_count == 10 || vphoto_count == 25 || vphoto_count == 50 || vphoto_count == 100;
+    /* slide in over 260 ms (eased), hold, slide out over the last 300 */
+    if (age < 260) {
+        double t = age / 260.0;
+
+        slide = (int) ((cw + V_UI(30)) * (1.0 - t) * (1.0 - t));
+    } else if (age > 3100) {
+        double t = (age - 3100) / 300.0;
+
+        slide = (int) ((cw + V_UI(30)) * t * t);
+    } else {
+        slide = 0;
+    }
+    px = ax + aw - cw - V_UI(18) + slide;
+    py = ay + ah / 2 - ch / 2 - V_UI(40);
+    /* the frame: a drop shadow, white (or gold) card, dark photo window */
+    vtint(px + 4, py + 5, cw, ch, 0, 0, 0, 110);
+    if (gold)
+        vtint(px, py, cw, ch, 245, 215, 120, 255);
+    else
+        vtint(px, py, cw, ch, 244, 240, 228, 255);
+    {
+        int wx = px + V_UI(10), wy = py + V_UI(10), ww = cw - V_UI(20), wh = ch - V_UI(58);
+        vulture_tile *t;
+
+        vtint(wx, wy, ww, wh, 34, 30, 28, 255);
+        tile = MONSTER_TO_VTILE(vphoto_mndx);
+        if ((t = vulture_get_tile(tile)) != NULL && t->graphic) {
+            double sc = (double) (wh - V_UI(8)) / (t->graphic->h > 0 ? t->graphic->h : 1);
+
+            if (sc > 1.6)
+                sc = 1.6;
+            /* stand it on the window's floor, centred */
+            vtx_blit(t->graphic, wx + ww / 2 - t->graphic->w / 2, wy + wh - V_UI(6) - t->graphic->h,
+                     sc, sc, 0.0, false, 255);
+        }
+        /* a developing-photo sheen in the first half second */
+        if (age < 700)
+            vtint(wx, wy, ww, wh, 255, 250, 235, (int) (200 * (1.0 - age / 700.0)));
+    }
+    {
+        char l1[64], l2[64];
+        const char *nm = mons[vphoto_mndx].pmnames[NEUTRAL];
+        Uint32 ink = SDL_MapRGB(vulture_screen->format, 40, 34, 30);
+        Uint32 none = SDL_MapRGB(vulture_screen->format, 0, 0, 0);
+
+        snprintf(l1, sizeof l1, "%s", gold ? "MILESTONE!" : "NEW PHOTO");
+        snprintf(l2, sizeof l2, "%s  -  %d species", nm ? nm : "?", vphoto_count);
+        vulture_put_text(V_FONT_SMALL, l1, vulture_screen,
+                         px + cw / 2 - vulture_text_length(V_FONT_SMALL, l1) / 2, py + ch - V_UI(44), ink);
+        vulture_put_text(V_FONT_SMALL, l2, vulture_screen,
+                         px + cw / 2 - vulture_text_length(V_FONT_SMALL, l2) / 2, py + ch - V_UI(26), ink);
+        nhUse(none);
     }
 }
 
@@ -10041,6 +10317,7 @@ levelwin::draw()
     vw_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
     Uint32 vpf_d = SDL_GetTicks(); /* probe */
+    vhalo_draw(map_centre_x, map_centre_y, view_x, view_y); /* s171 */
     vambient_draw(this->abs_x, this->abs_y, this->w, this->h); /* s160 */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
     vpath_draw(map_centre_x, map_centre_y, view_x, view_y); /* s125 */
@@ -10055,6 +10332,7 @@ levelwin::draw()
     Uint32 vpf_f = SDL_GetTicks(); /* probe */
     vstatus_pulse_draw(this->abs_x, this->abs_y, this->w, this->h); /* s129 */
     vmp_draw(this->abs_x, this->abs_y, this->w, this->h); /* s130 */
+    vphoto_draw(this->abs_x, this->abs_y, this->w, this->h); /* s170 */
     vhud_draw(map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
               this->abs_y, this->w, this->h); /* s100: toasts, card, waypoint */
     vhb_draw(this->abs_x, this->abs_y, this->w, this->h);   /* s126 */

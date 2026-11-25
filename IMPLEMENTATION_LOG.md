@@ -3447,6 +3447,27 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   a full fight probe ran and the frames are correct.  The accelerated path
   itself (Direct3D / OpenGL) needs a real window - untested here.
 
+### 169-171. Smooth sprites, the photo-album polaroid, halos and living water
+
+- **169 sprite transformer rewrite** (`vtx_blit`): reads 32-bit sprites in
+  place (no per-call conversion), samples BILINEARLY with alpha weighting
+  (smooth squash / stretch / breathing / lean instead of jaggy nearest
+  pixels), reuses one buffer, inline pixel maths; destination pixels are
+  sampled at their exact centres relative to the sprite's anchor.  Frame
+  time unchanged in the fight probe (median 14 ms) - it was never the
+  bottleneck; the gain is how sprites look.
+- **170 photo album** (`vulture_photo_fx`, from mon.c where a Tourist adds a
+  new species): the camera flashes (white light where the monster stands and
+  a brief full-screen flash, camera.wav) and a polaroid slides in on the
+  right - the monster's picture developing in, "NEW PHOTO", its name and the
+  album count; milestones 10/25/50/100 get a gold frame and "MILESTONE!".
+  Probe VULTURE_SELFTEST_PHOTO shot the gold card.
+- **171 halos and living water** (`vhalo`, `vhalo_draw`): a cached radial
+  disc blitted additively - lamps and candles (flickering, sized by range),
+  fiery / electric / frost creatures; moving glints on water, slow molten
+  pulses and rising sparks on lava.  Under the Atmosphere switch.  Probe
+  LIGHT: the fire vortex blooms warm over the floor.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -6058,6 +6058,7 @@ see_monster_closeup(struct monst *mtmp, boolean photo)
 
                 You("add %s to your photo album.",
                     an(mons[mndx].pmnames[NEUTRAL]));
+                vulture_photo_fx(mtmp->mx, mtmp->my, mndx, (int) n); /* s170 */
                 /* Vulture mod (IMPLEMENTATION_LOG §60): album milestones.
                    Experience bonus at 10/25/50/100 species; from 50 the
                    shopkeepers know your work (famous_photographer(), shk.c)
