@@ -3664,6 +3664,65 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   (itemfx.txt logs the square, name and hint; the probe flushes the
   screen so the map knows the potion before the shot).
 
+### 182. Unlit by default
+
+- The user asked for the map unlit by default: dynamic lighting starts OFF
+  (`vl_on = false`, now defined beside vselftest).  The light passes were
+  the biggest CPU cost of a frame (median ~6 ms, ~25 ms in the slow
+  frames).  F9 still cycles full / flat / off, the Visual effects menu has
+  a "Dynamic lighting - off / flat / full" entry, and either choice is kept
+  in effects.txt (`lighting=`; a file without it means off).
+- The light probes (VULTURE_SELFTEST_LIGHT / PORTAL) and
+  VULTURE_SELFTEST_LIT=1 switch it on for their run.
+
+### 183. The map drawn by the GPU
+
+- With a renderer (gpu=1, the default since s168) and lighting off, the
+  map's tiles and sprites are drawn with SDL_Render* into a render target
+  the size of the frame (vgm_tex) instead of being blitted into
+  vulture_screen.  The hooks are the two primitives everything in the
+  tile passes goes through: `vulture_put_img` (tiles, shaded tiles, magic
+  sprites, highlights - and now the contact shadows and blood stains,
+  which blitted directly before) honours the surface's blend mode, colour
+  and alpha modulation; the sprite transformer `vtx_blit` becomes one
+  SDL_RenderCopyExF scaled and turned about the feet, red-tinted by colour
+  modulation and faded by alpha.  Textures are made once per surface
+  (transparent pixels take a neighbour's colour, so linear filtering grows
+  no dark fringe) and dropped when the surface is freed
+  (`vulture_gpu_forget` in vulture_free_tile, the flipped-sprite cache and
+  the object highlight).
+- Everything drawn after the tile passes - effects, the HUD, every other
+  window - still goes into vulture_screen, which is ARGB now and is
+  cleared to transparent over the map at the start of each map frame: an
+  overlay.  SDL's software blending into a destination with alpha yields
+  premultiplied colour, additive blits leave its alpha alone, and every
+  overlay effect turned out to use plain blend / add blits or opaque fills
+  (no multiply), so the overlay goes over the map with the premultiplied
+  "over" blend (ONE, ONE_MINUS_SRC_ALPHA).  Renderers without custom blend
+  modes (SDL's software one) get the same in two passes.  Map and overlay
+  are composed into vgm_out, then shown.  Zoom (s121) zooms the overlay on
+  the CPU as before and the map layer with the same rectangles on the GPU
+  (1.5x: nearest to 2x, then linear, as s122).
+- Lighting on, a swallow, or no renderer: the old software path, and the
+  overlay is copied opaque.  A switch between the two redraws everything.
+  The death-cam, F11 photos, F12 screenshots and the probes take the frame
+  as shown (`vulture_frame_to_surface` composes and reads back).  Device /
+  render-target resets drop the textures and redraw.  Visual effects has a
+  "Draw the map on the GPU - ON / off" switch (effects.txt `gpumap=`);
+  VULTURE_NO_GPUMAP=1 forces software.
+- Probes: VULTURE_SELFTEST_GPUDIFF draws one frame both ways (and at 2x
+  and 1.5x zoom).  VULTURE_HIDDEN_WINDOW=1 gives a probe a real but hidden
+  window - a real renderer and nothing on screen (the keyboard look
+  cursor then doesn't warp the real pointer).  On this PC (Direct3D):
+  "premultiplied composite"; the same frame both ways differs by a mean
+  of 0.20 per channel, 50 pixels over 16 - sprite edges (GPU linear vs the
+  transformer's bilinear) and particles that moved between the two draws.
+  SDL's software renderer (two-pass): mean 0.28.
+- Measured on this PC, hidden window, 45 s of the soak bot each, lighting
+  off: software map - map draw median 7 ms (p90 16, p99 53), present 2.0
+  ms (p90 6.2); GPU map - map draw median 1 ms (p90 3, p99 12), present
+  1.6 ms (p90 3.4).  About 9 ms -> 2.6 ms of CPU per frame.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

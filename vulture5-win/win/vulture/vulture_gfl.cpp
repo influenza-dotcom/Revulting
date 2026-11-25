@@ -300,7 +300,17 @@ void vulture_save_screenshot(void)
 		filename = vulture_make_filename("", "", namebuf);
 		if (access(filename.c_str(), R_OK) != 0)
 		{
-			vulture_save_png(vulture_screen, filename, 0);
+			{ /* s183: the frame as shown - the GPU map layer included */
+				SDL_Surface *shot = SDL_CreateRGBSurfaceWithFormat(0, vulture_screen->w,
+					vulture_screen->h, 32, SDL_PIXELFORMAT_ARGB8888);
+
+				if (shot && vulture_frame_to_surface(shot, NULL))
+					vulture_save_png(shot, filename, 0);
+				else
+					vulture_save_png(vulture_screen, filename, 0);
+				if (shot)
+					SDL_FreeSurface(shot);
+			}
 			msg = std::string("Screenshot saved as ") + filename + ".";
 
 			if (vulture_windows_inited)

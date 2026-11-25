@@ -58,6 +58,7 @@ inline static void vulture_free_tile(vulture_tile *tile)
 	if (!tile)
 		return;
 
+	vulture_gpu_forget(tile->graphic); /* s183: and its GPU texture */
 	SDL_FreeSurface(tile->graphic);
 	delete tile;
 }
@@ -683,6 +684,7 @@ void vulture_put_tilehighlight(int x, int y, int tile_id)
 	vulture_put_img(x + tile->xmod, y + tile->ymod, highlight);
 
 	/* free the highlight. no caching, as this shouldn't be a hot path */
+	vulture_gpu_forget(highlight); /* s183 */
 	SDL_FreeSurface(highlight);
 }
 

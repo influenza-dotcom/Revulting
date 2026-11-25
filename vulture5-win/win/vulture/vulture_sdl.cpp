@@ -11,6 +11,8 @@ Uses SDL 2.
 #include <unistd.h>
 #endif
 #include <stdarg.h>
+#include <unordered_map> /* s183: before NetHack's min/max macros */
+#include <vector>
 #include "vulture_sound.h"
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -343,6 +345,145 @@ static SDL_Texture *vulture_gpu_tex = NULL;
 static SDL_Window *vulture_gpu_win = NULL;
 static int vulture_gpu_failed = 0;
 
+/*
+ * IMPLEMENTATION_LOG s183: the map layer drawn by the GPU.
+ *
+ * With a renderer (gpu=1) and dynamic lighting off, levelwin draws the
+ * map's tiles and sprites with SDL_Render* into vgm_tex - a render target
+ * the size of the frame - instead of blitting them into vulture_screen
+ * (vulture_put_img and the sprite transformer branch on vulture_gpumap_on).
+ * Everything drawn after them - effects, the HUD, every other window -
+ * still goes into vulture_screen, which is ARGB now and starts each map
+ * frame transparent over the map: an overlay.  SDL's software blending into
+ * a destination with alpha yields premultiplied colour (dst = src*a +
+ * dst*(1-a), A = a + A*(1-a)), additive blits leave A alone, so the overlay
+ * goes over the map with the premultiplied "over" blend (ONE,
+ * ONE_MINUS_SRC_ALPHA).  A renderer without custom blend modes (SDL's
+ * software one, which the off-screen probes use) gets the same result in two
+ * passes: the overlay as black with its alpha, then its colour added.  The
+ * two are composed into vgm_out (render space - the zoom rectangles are
+ * render space too), which is then shown.  Lighting on (its passes read and
+ * write the map's pixels) draws everything the old way; the overlay is then
+ * the whole frame and is copied opaque.
+ */
+bool vulture_gpumap_on = false;      /* drawing the map layer right now */
+bool vulture_gpumap_wanted = true;   /* the Visual effects switch */
+bool vulture_gpumap_lost = false;    /* lost textures: levelwin redraws all */
+static SDL_Texture *vgm_tex = NULL;  /* the map layer */
+static SDL_Texture *vgm_out = NULL;  /* map + overlay */
+static SDL_Texture *vgm_big = NULL;  /* zoom scratch: nearest up to k x, then linear */
+static SDL_Texture *vgm_rgb = NULL;  /* the overlay without alpha (two-pass composite) */
+static bool vgm_rgb_fresh = false;   /* vgm_rgb was just made: upload all of it */
+static bool vgm_valid = false;       /* vgm_tex holds the map under this overlay */
+static int vgm_blend = -1;           /* premultiplied blend: -1 untested, 0 no, 1 yes */
+static SDL_BlendMode vgm_premul = SDL_BLENDMODE_BLEND;
+static bool vgm_zoom = false, vgm_zexact = true;
+static SDL_Rect vgm_zsrc, vgm_zdst;
+static int vgm_zk = 1;
+static int vgm_disabled = 0;         /* this renderer can't (no render targets) */
+
+struct vgm_ent {
+	SDL_Texture *t;
+	int w, h;
+	void *px;
+};
+static std::unordered_map<SDL_Surface *, vgm_ent> vgm_cache;
+
+/* forget every GPU-map texture - destroying them while the renderer lives,
+   or only dropping them once SDL_DestroyWindow / a device reset took them */
+static void vgm_drop(bool destroy)
+{
+	std::unordered_map<SDL_Surface *, vgm_ent>::iterator it;
+
+	if (destroy) {
+		for (it = vgm_cache.begin(); it != vgm_cache.end(); ++it)
+			SDL_DestroyTexture(it->second.t);
+		if (vgm_tex)
+			SDL_DestroyTexture(vgm_tex);
+		if (vgm_out)
+			SDL_DestroyTexture(vgm_out);
+		if (vgm_big)
+			SDL_DestroyTexture(vgm_big);
+		if (vgm_rgb)
+			SDL_DestroyTexture(vgm_rgb);
+	}
+	vgm_cache.clear();
+	vgm_tex = vgm_out = vgm_big = vgm_rgb = NULL;
+	vgm_valid = false;
+	vgm_blend = -1;
+}
+
+/* transparent pixels take a neighbour's colour (alpha stays 0), so a sprite
+   drawn scaled with linear filtering doesn't grow a dark fringe */
+static void vgm_dilate(SDL_Surface *c)
+{
+	static const int ddx[8] = { -1, 1, 0, 0, -1, 1, -1, 1 };
+	static const int ddy[8] = { 0, 0, -1, 1, -1, -1, 1, 1 };
+	int w = c->w, h = c->h, x, y, k;
+	std::vector<Uint32> src((size_t) w * h);
+
+	for (y = 0; y < h; y++)
+		memcpy(&src[(size_t) y * w], (Uint8 *) c->pixels + (size_t) y * c->pitch, (size_t) w * 4);
+	for (y = 0; y < h; y++) {
+		Uint32 *row = (Uint32 *) ((Uint8 *) c->pixels + (size_t) y * c->pitch);
+
+		for (x = 0; x < w; x++) {
+			if (src[(size_t) y * w + x] >> 24)
+				continue;
+			for (k = 0; k < 8; k++) {
+				int xx = x + ddx[k], yy = y + ddy[k];
+				Uint32 p;
+
+				if (xx < 0 || yy < 0 || xx >= w || yy >= h)
+					continue;
+				p = src[(size_t) yy * w + xx];
+				if (p >> 24) {
+					row[x] = p & 0x00FFFFFFu;
+					break;
+				}
+			}
+		}
+	}
+}
+
+/* the texture for a surface (made once, kept until the surface is forgotten) */
+static SDL_Texture *vgm_texture(SDL_Surface *s)
+{
+	std::unordered_map<SDL_Surface *, vgm_ent>::iterator it = vgm_cache.find(s);
+	SDL_Surface *c;
+	SDL_Texture *t;
+
+	if (it != vgm_cache.end()) {
+		if (it->second.w == s->w && it->second.h == s->h && it->second.px == s->pixels)
+			return it->second.t;
+		SDL_DestroyTexture(it->second.t); /* the address now belongs to another surface */
+		vgm_cache.erase(it);
+	}
+	if (vgm_cache.size() > 6000) { /* a safety net for surfaces nobody forgot */
+		for (it = vgm_cache.begin(); it != vgm_cache.end(); ++it)
+			SDL_DestroyTexture(it->second.t);
+		vgm_cache.clear();
+	}
+	c = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0);
+	if (!c)
+		return NULL;
+	if (SDL_LockSurface(c) == 0) {
+		vgm_dilate(c);
+		SDL_UnlockSurface(c);
+	}
+	t = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, c->w, c->h);
+	if (t)
+		SDL_UpdateTexture(t, NULL, c->pixels, c->pitch);
+	SDL_FreeSurface(c);
+	if (t) {
+		vgm_ent e;
+
+		e.t = t, e.w = s->w, e.h = s->h, e.px = s->pixels;
+		vgm_cache[s] = e;
+	}
+	return t;
+}
+
 static bool vgpu_reattach(int want)
 {
 	int ow = 0, oh = 0, rw, rh;
@@ -351,6 +492,7 @@ static bool vgpu_reattach(int want)
 		/* SDL_DestroyWindow took the old renderer and its texture with it */
 		vulture_gpu = NULL;
 		vulture_gpu_tex = NULL;
+		vgm_drop(false); /* s183: and the map layer's */
 	}
 	if (!vulture_gpu) {
 		Uint32 fl = getenv("VULTURE_GPU_SOFT") ? SDL_RENDERER_SOFTWARE : SDL_RENDERER_ACCELERATED;
@@ -375,12 +517,12 @@ static bool vgpu_reattach(int want)
 	rw = ow * want, rh = oh * want;
 	if (vulture_render_surface &&
 		(vulture_render_surface->w != rw || vulture_render_surface->h != rh ||
-		 vulture_render_surface->format->format != SDL_PIXELFORMAT_RGB888)) {
+		 vulture_render_surface->format->format != SDL_PIXELFORMAT_ARGB8888)) { /* s183: ARGB */
 		SDL_FreeSurface(vulture_render_surface);
 		vulture_render_surface = NULL;
 	}
 	if (!vulture_render_surface)
-		vulture_render_surface = SDL_CreateRGBSurfaceWithFormat(0, rw, rh, 32, SDL_PIXELFORMAT_RGB888);
+		vulture_render_surface = SDL_CreateRGBSurfaceWithFormat(0, rw, rh, 32, SDL_PIXELFORMAT_ARGB8888);
 	if (vulture_gpu_tex) {
 		int tw = 0, th = 0;
 
@@ -391,13 +533,14 @@ static bool vgpu_reattach(int want)
 		}
 	}
 	if (!vulture_gpu_tex)
-		vulture_gpu_tex = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_RGB888,
+		vulture_gpu_tex = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888, /* s183 */
 			SDL_TEXTUREACCESS_STREAMING, rw, rh);
 	if (!vulture_render_surface || !vulture_gpu_tex) {
 		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
 			"gpu: could not make the frame (%s) - using the window surface\n", SDL_GetError());
 		if (vulture_gpu_tex)
 			SDL_DestroyTexture(vulture_gpu_tex);
+		vgm_drop(true); /* s183 */
 		SDL_DestroyRenderer(vulture_gpu);
 		vulture_gpu = NULL, vulture_gpu_tex = NULL, vulture_gpu_failed = 1;
 		return false;
@@ -411,12 +554,10 @@ static bool vgpu_reattach(int want)
 	return true;
 }
 
-/* upload the changed rectangle (render space; NULL = all) and show the frame */
-static void vgpu_present(const SDL_Rect *r)
+/* upload a rectangle of the frame (render space; NULL = all, empty = none) */
+static void vgm_upload(SDL_Texture *t, SDL_Surface *s, const SDL_Rect *r)
 {
-	SDL_Surface *s = vulture_screen;
-
-	if (!vulture_gpu || !vulture_gpu_tex || !s)
+	if (!t || !s)
 		return;
 	if (r && r->w > 0 && r->h > 0) {
 		SDL_Rect c = *r;
@@ -426,13 +567,391 @@ static void vgpu_present(const SDL_Rect *r)
 		if (c.x + c.w > s->w) c.w = s->w - c.x;
 		if (c.y + c.h > s->h) c.h = s->h - c.y;
 		if (c.w > 0 && c.h > 0)
-			SDL_UpdateTexture(vulture_gpu_tex, &c,
+			SDL_UpdateTexture(t, &c,
 				(Uint8 *) s->pixels + (size_t) c.y * s->pitch + (size_t) c.x * 4, s->pitch);
 	} else if (!r) {
-		SDL_UpdateTexture(vulture_gpu_tex, NULL, s->pixels, s->pitch);
+		SDL_UpdateTexture(t, NULL, s->pixels, s->pitch);
 	}
-	SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, NULL);
+}
+
+/* s183: is there a GPU map under the overlay right now? */
+static bool vgm_live(void)
+{
+	return vulture_gpu && vulture_gpu_tex && vgm_valid && vgm_tex && vgm_out;
+}
+
+/* s183: the overlay (and, for the two-pass composite, its no-alpha twin) */
+static void vgm_upload_overlay(const SDL_Rect *r)
+{
+	SDL_Surface *s = vulture_screen;
+
+	vgm_upload(vulture_gpu_tex, s, r);
+	if (!vgm_live() || vgm_blend == 1)
+		return;
+	if (vgm_rgb) {
+		int tw = 0, th = 0;
+
+		SDL_QueryTexture(vgm_rgb, NULL, NULL, &tw, &th);
+		if (tw != s->w || th != s->h) {
+			SDL_DestroyTexture(vgm_rgb);
+			vgm_rgb = NULL;
+		}
+	}
+	if (!vgm_rgb) {
+		vgm_rgb = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_RGB888,
+			SDL_TEXTUREACCESS_STREAMING, s->w, s->h);
+		vgm_rgb_fresh = true;
+	}
+	if (vgm_rgb_fresh) {
+		vgm_upload(vgm_rgb, s, NULL);
+		vgm_rgb_fresh = false;
+	} else
+		vgm_upload(vgm_rgb, s, r);
+}
+
+/* s183: the map layer - zoomed the way vzoom_apply zoomed the overlay - with
+   the overlay over it, into vgm_out */
+static void vgm_compose(void)
+{
+	SDL_SetRenderTarget(vulture_gpu, vgm_out);
+	SDL_RenderSetClipRect(vulture_gpu, NULL);
+	SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_NONE);
+	SDL_SetRenderDrawColor(vulture_gpu, 0, 0, 0, 255);
+	SDL_RenderClear(vulture_gpu);
+	SDL_SetTextureBlendMode(vgm_tex, SDL_BLENDMODE_NONE);
+	SDL_SetTextureColorMod(vgm_tex, 255, 255, 255);
+	SDL_SetTextureAlphaMod(vgm_tex, 255);
+	SDL_SetTextureScaleMode(vgm_tex, SDL_ScaleModeNearest);
+	if (!vgm_zoom) {
+		SDL_RenderCopy(vulture_gpu, vgm_tex, NULL, NULL);
+	} else if (vgm_zexact || vgm_zk <= 1) {
+		SDL_RenderCopy(vulture_gpu, vgm_tex, &vgm_zsrc, &vgm_zdst);
+	} else {
+		/* 1.5x (s122's "sharp bilinear"): nearest up to k x, then a small
+		   smooth step down */
+		SDL_Rect big;
+		int bw = 0, bh = 0;
+
+		big.x = 0, big.y = 0, big.w = vgm_zsrc.w * vgm_zk, big.h = vgm_zsrc.h * vgm_zk;
+		if (vgm_big)
+			SDL_QueryTexture(vgm_big, NULL, NULL, &bw, &bh);
+		if (!vgm_big || bw < big.w || bh < big.h) {
+			if (vgm_big)
+				SDL_DestroyTexture(vgm_big);
+			vgm_big = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888,
+				SDL_TEXTUREACCESS_TARGET, big.w, big.h);
+		}
+		if (vgm_big) {
+			SDL_SetRenderTarget(vulture_gpu, vgm_big);
+			SDL_RenderCopy(vulture_gpu, vgm_tex, &vgm_zsrc, &big);
+			SDL_SetRenderTarget(vulture_gpu, vgm_out);
+			SDL_SetTextureBlendMode(vgm_big, SDL_BLENDMODE_NONE);
+			SDL_SetTextureScaleMode(vgm_big, SDL_ScaleModeLinear);
+			SDL_RenderCopy(vulture_gpu, vgm_big, &big, &vgm_zdst);
+		} else
+			SDL_RenderCopy(vulture_gpu, vgm_tex, &vgm_zsrc, &vgm_zdst);
+	}
+	SDL_SetTextureScaleMode(vulture_gpu_tex, SDL_ScaleModeNearest);
+	if (vgm_blend == 1) {
+		SDL_SetTextureBlendMode(vulture_gpu_tex, vgm_premul);
+		SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, NULL);
+	} else {
+		/* two passes: darken the map by (1 - A), then add the colour */
+		SDL_SetTextureBlendMode(vulture_gpu_tex, SDL_BLENDMODE_BLEND);
+		SDL_SetTextureColorMod(vulture_gpu_tex, 0, 0, 0);
+		SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, NULL);
+		SDL_SetTextureColorMod(vulture_gpu_tex, 255, 255, 255);
+		if (vgm_rgb) {
+			SDL_SetTextureBlendMode(vgm_rgb, SDL_BLENDMODE_ADD);
+			SDL_SetTextureScaleMode(vgm_rgb, SDL_ScaleModeNearest);
+			SDL_RenderCopy(vulture_gpu, vgm_rgb, NULL, NULL);
+		}
+	}
+	SDL_SetRenderTarget(vulture_gpu, NULL);
+	SDL_SetTextureScaleMode(vulture_gpu_tex,
+		vulture_render_scale > 1 ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+}
+
+/* upload the changed rectangle (render space; NULL = all) and show the frame */
+static void vgpu_present(const SDL_Rect *r)
+{
+	SDL_Surface *s = vulture_screen;
+
+	Uint64 pc0 = SDL_GetPerformanceCounter(); /* probe: s183 cost of a present */
+
+	if (!vulture_gpu || !vulture_gpu_tex || !s)
+		return;
+	vgm_upload_overlay(r);
+	if (vgm_live()) { /* s183 */
+		vgm_compose();
+		SDL_SetTextureBlendMode(vgm_out, SDL_BLENDMODE_NONE);
+		SDL_SetTextureScaleMode(vgm_out,
+			vulture_render_scale > 1 ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+		SDL_RenderCopy(vulture_gpu, vgm_out, NULL, NULL);
+	} else {
+		SDL_SetTextureBlendMode(vulture_gpu_tex, SDL_BLENDMODE_NONE);
+		SDL_SetTextureColorMod(vulture_gpu_tex, 255, 255, 255);
+		SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, NULL);
+	}
 	SDL_RenderPresent(vulture_gpu);
+	if (getenv("VULTURE_SELFTEST"))
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "present %u us (%s, %dx%d)\n",
+			(unsigned) ((SDL_GetPerformanceCounter() - pc0) * 1000000 / SDL_GetPerformanceFrequency()),
+			vgm_live() ? "gpumap" : "software", r ? r->w : s->w, r ? r->h : s->h);
+}
+
+/* s183: make (or resize) the map layer and the compose target; test the
+   premultiplied blend once */
+static bool vgm_targets(void)
+{
+	int w, h, tw = 0, th = 0;
+
+	if (!vulture_gpu || !vulture_gpu_tex || !vulture_screen || vgm_disabled)
+		return false;
+	w = vulture_screen->w, h = vulture_screen->h;
+	if (vgm_tex) {
+		SDL_QueryTexture(vgm_tex, NULL, NULL, &tw, &th);
+		if (tw != w || th != h) {
+			SDL_DestroyTexture(vgm_tex);
+			vgm_tex = NULL;
+			vgm_valid = false;
+		}
+	}
+	if (vgm_out) {
+		SDL_QueryTexture(vgm_out, NULL, NULL, &tw, &th);
+		if (tw != w || th != h) {
+			SDL_DestroyTexture(vgm_out);
+			vgm_out = NULL;
+		}
+	}
+	if (!vgm_tex)
+		vgm_tex = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888,
+			SDL_TEXTUREACCESS_TARGET, w, h);
+	if (!vgm_out)
+		vgm_out = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888,
+			SDL_TEXTUREACCESS_TARGET, w, h);
+	if (!vgm_tex || !vgm_out) {
+		vgm_disabled = 1;
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+			"gpumap: no render targets (%s) - the map stays in software\n", SDL_GetError());
+		if (vgm_tex)
+			SDL_DestroyTexture(vgm_tex);
+		if (vgm_out)
+			SDL_DestroyTexture(vgm_out);
+		vgm_tex = vgm_out = NULL;
+		vgm_valid = false;
+		return false;
+	}
+	if (vgm_blend < 0) {
+		vgm_premul = SDL_ComposeCustomBlendMode(SDL_BLENDFACTOR_ONE,
+			SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD, SDL_BLENDFACTOR_ONE,
+			SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD);
+		vgm_blend = SDL_SetTextureBlendMode(vulture_gpu_tex, vgm_premul) == 0 ? 1 : 0;
+		SDL_SetTextureBlendMode(vulture_gpu_tex, SDL_BLENDMODE_NONE);
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+			"gpumap: the map is drawn on the GPU (%s composite)\n",
+			vgm_blend ? "premultiplied" : "two-pass");
+	}
+	return true;
+}
+
+/* s183: start drawing the map layer (clip: the region being redrawn) */
+bool vulture_gpumap_begin(const SDL_Rect *clip)
+{
+	SDL_Rect all;
+
+	if (vulture_gpumap_on)
+		return true;
+	if (!vulture_gpumap_wanted || getenv("VULTURE_NO_GPUMAP") || !vgm_targets())
+		return false;
+	if (SDL_SetRenderTarget(vulture_gpu, vgm_tex) != 0) {
+		vgm_disabled = 1;
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+			"gpumap: can't draw into the map layer (%s) - software\n", SDL_GetError());
+		return false;
+	}
+	all.x = 0, all.y = 0, all.w = vulture_screen->w, all.h = vulture_screen->h;
+	SDL_RenderSetClipRect(vulture_gpu, clip ? clip : &all);
+	SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_NONE);
+	SDL_SetRenderDrawColor(vulture_gpu, 0, 0, 0, 255);
+	SDL_RenderFillRect(vulture_gpu, clip ? clip : &all);
+	vulture_gpumap_on = true;
+	return true;
+}
+
+/* s183: the map layer is done for this frame */
+void vulture_gpumap_end(void)
+{
+	if (!vulture_gpumap_on)
+		return;
+	SDL_RenderSetClipRect(vulture_gpu, NULL);
+	SDL_SetRenderTarget(vulture_gpu, NULL);
+	vulture_gpumap_on = false;
+	vgm_valid = true;
+}
+
+/* s183: this frame's map went into vulture_screen (lighting on) */
+void vulture_gpumap_abandon(void)
+{
+	if (vulture_gpumap_on)
+		vulture_gpumap_end();
+	vgm_valid = false;
+	vgm_zoom = false;
+}
+
+bool vulture_gpumap_valid(void)
+{
+	return vgm_live();
+}
+
+/* s183: a surface into the map layer, as SDL_BlitSurface would put it into
+   vulture_screen (its blend mode, colour and alpha modulation) */
+void vulture_gpumap_blit(SDL_Surface *s, const SDL_Rect *srcrect, int x, int y)
+{
+	SDL_Texture *t;
+	SDL_BlendMode bm = SDL_BLENDMODE_BLEND;
+	Uint8 r = 255, g = 255, b = 255, a = 255;
+	SDL_Rect d;
+
+	if (!vulture_gpumap_on || !s || !(t = vgm_texture(s)))
+		return;
+	SDL_GetSurfaceBlendMode(s, &bm);
+	SDL_GetSurfaceColorMod(s, &r, &g, &b);
+	SDL_GetSurfaceAlphaMod(s, &a);
+	SDL_SetTextureBlendMode(t, bm);
+	SDL_SetTextureColorMod(t, r, g, b);
+	SDL_SetTextureAlphaMod(t, a);
+	SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
+	d.x = x, d.y = y;
+	d.w = srcrect ? srcrect->w : s->w, d.h = srcrect ? srcrect->h : s->h;
+	SDL_RenderCopy(vulture_gpu, t, srcrect, &d);
+}
+
+/* s183: the sprite transformer's pose (levelwin vtx_blit): scaled (sx, sy)
+   and turned (deg, clockwise) about the feet - the bottom centre of the
+   untransformed image at (dx, dy) - tinted red, faded */
+void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, double sy, double deg,
+                            bool red, int alpha)
+{
+	SDL_Texture *t;
+	SDL_FRect d;
+	SDL_FPoint c;
+
+	if (!vulture_gpumap_on || !s || sx <= 0.0 || sy <= 0.0 || !(t = vgm_texture(s)))
+		return;
+	d.w = (float) (s->w * sx), d.h = (float) (s->h * sy);
+	d.x = (float) (dx + s->w * 0.5 * (1.0 - sx));
+	d.y = (float) (dy + s->h * (1.0 - sy));
+	c.x = d.w * 0.5f, c.y = d.h;
+	SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+	SDL_SetTextureColorMod(t, 255, red ? 77 : 255, red ? 77 : 255);
+	SDL_SetTextureAlphaMod(t, (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
+	SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+	SDL_RenderCopyExF(vulture_gpu, t, NULL, &d, deg, &c, SDL_FLIP_NONE);
+}
+
+/* s183: vzoom_apply's rectangles (render space) for the map layer; NULL: none */
+void vulture_gpumap_set_zoom(const SDL_Rect *src, const SDL_Rect *dst, int k, bool exact)
+{
+	vgm_zoom = src && dst;
+	if (vgm_zoom) {
+		vgm_zsrc = *src, vgm_zdst = *dst;
+		vgm_zk = k < 1 ? 1 : k;
+		vgm_zexact = exact;
+	}
+}
+
+/* s183: a surface is about to be freed - drop its texture */
+void vulture_gpu_forget(SDL_Surface *s)
+{
+	std::unordered_map<SDL_Surface *, vgm_ent>::iterator it;
+
+	if (!s || vgm_cache.empty())
+		return;
+	it = vgm_cache.find(s);
+	if (it != vgm_cache.end()) {
+		SDL_DestroyTexture(it->second.t);
+		vgm_cache.erase(it);
+	}
+}
+
+/* s183: the frame as it would be shown - the GPU map under the overlay, or
+   just vulture_screen - from `area` (render space) into out (ARGB8888, at
+   least area-sized); always opaque */
+bool vulture_frame_to_surface(SDL_Surface *out, const SDL_Rect *area)
+{
+	SDL_Rect a;
+	bool ok = false;
+	int y, x;
+
+	if (!out || !vulture_screen || out->format->BytesPerPixel != 4)
+		return false;
+	if (area)
+		a = *area;
+	else
+		a.x = 0, a.y = 0, a.w = vulture_screen->w, a.h = vulture_screen->h;
+	if (vgm_live()) {
+		vgm_upload_overlay(NULL);
+		vgm_compose();
+		SDL_SetRenderTarget(vulture_gpu, vgm_out);
+		if (SDL_LockSurface(out) == 0) {
+			ok = SDL_RenderReadPixels(vulture_gpu, &a, out->format->format, out->pixels,
+			                          out->pitch) == 0;
+			SDL_UnlockSurface(out);
+		}
+		SDL_SetRenderTarget(vulture_gpu, NULL);
+	}
+	if (!ok) {
+		SDL_BlendMode bm;
+		SDL_Rect d = { 0, 0, a.w, a.h };
+
+		SDL_GetSurfaceBlendMode(vulture_screen, &bm);
+		SDL_SetSurfaceBlendMode(vulture_screen, SDL_BLENDMODE_NONE);
+		ok = SDL_BlitSurface(vulture_screen, &a, out, &d) == 0;
+		SDL_SetSurfaceBlendMode(vulture_screen, bm);
+	}
+	if (ok && out->format->Amask && SDL_LockSurface(out) == 0) { /* opaque */
+		for (y = 0; y < a.h && y < out->h; y++) {
+			Uint32 *row = (Uint32 *) ((Uint8 *) out->pixels + (size_t) y * out->pitch);
+
+			for (x = 0; x < a.w && x < out->w; x++)
+				row[x] |= out->format->Amask;
+		}
+		SDL_UnlockSurface(out);
+	}
+	return ok;
+}
+
+/* s183: the frame as shown, saved as a BMP (screenshots and the probes) */
+int vulture_save_frame_bmp(const char *path)
+{
+	SDL_Surface *o;
+	int r = -1;
+
+	if (!vulture_screen)
+		return -1;
+	o = SDL_CreateRGBSurfaceWithFormat(0, vulture_screen->w, vulture_screen->h, 32,
+	                                   SDL_PIXELFORMAT_ARGB8888);
+	if (!o)
+		return -1;
+	if (vulture_frame_to_surface(o, NULL))
+		r = SDL_SaveBMP(o, path);
+	SDL_FreeSurface(o);
+	return r;
+}
+
+/* s183: the renderer lost its render targets' pixels, or every texture */
+static void vgm_lost(bool device)
+{
+	vgm_valid = false;
+	vulture_gpumap_lost = true;
+	if (device && vulture_gpu) {
+		vgm_drop(true);
+		if (vulture_gpu_tex)
+			SDL_DestroyTexture(vulture_gpu_tex);
+		vulture_gpu_tex = NULL;
+		vgpu_reattach(vulture_render_scale);
+	}
 }
 
 void vulture_reattach_render_surface(void)
@@ -733,7 +1252,8 @@ static void vulture_set_windowed()
 	} else {
 		vulture_sdl_window = SDL_CreateWindow("Vulture NetHack",
 			SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-			vulture_opts.width, vulture_opts.height, SDL_WINDOW_RESIZABLE);
+			vulture_opts.width, vulture_opts.height, SDL_WINDOW_RESIZABLE
+			| (getenv("VULTURE_HIDDEN_WINDOW") ? SDL_WINDOW_HIDDEN : 0)); /* s183: GPU probes */
 		if (vulture_sdl_window)
 			vulture_reattach_render_surface();
 	}
@@ -800,6 +1320,12 @@ int vulture_handle_global_event(SDL_Event * event)
 
 	switch (event->type)
 	{
+		case SDL_RENDER_TARGETS_RESET: /* s183: the map layer lost its pixels */
+			vgm_lost(false);
+			break;
+		case SDL_RENDER_DEVICE_RESET: /* s183: ... or every texture */
+			vgm_lost(true);
+			break;
 		case SDL_WINDOWEVENT:
 			switch (event->window.event) {
 				case SDL_WINDOWEVENT_EXPOSED:
@@ -1101,7 +1627,8 @@ void vulture_enter_graphics_mode()
 		vulture_sdl_error(__FILE__, __LINE__, "Failed to set configured video mode, trying to fall back to 800x600 windowed");
 		vulture_sdl_window = SDL_CreateWindow("Vulture NetHack",
 			SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-			800, 600, SDL_WINDOW_RESIZABLE);
+			800, 600, SDL_WINDOW_RESIZABLE
+			| (getenv("VULTURE_HIDDEN_WINDOW") ? SDL_WINDOW_HIDDEN : 0)); /* s183 */
 		if (vulture_sdl_window)
 			vulture_reattach_render_surface();
 		vulture_opts.fullscreen = 0;
@@ -1284,8 +1811,16 @@ extern "C" void vulture_screen_shake(int strength)
 	if (vulture_gpu && vulture_gpu_tex) { /* s168: shake on the GPU */
 		int ow = 0, oh = 0;
 
+		SDL_Texture *frame = vulture_gpu_tex;
+
 		SDL_GetRendererOutputSize(vulture_gpu, &ow, &oh);
-		SDL_UpdateTexture(vulture_gpu_tex, NULL, vulture_screen->pixels, vulture_screen->pitch);
+		vgm_upload_overlay(NULL);
+		if (vgm_live()) { /* s183: the map layer under the overlay */
+			vgm_compose();
+			frame = vgm_out;
+		}
+		SDL_SetTextureBlendMode(frame, SDL_BLENDMODE_NONE);
+		SDL_SetTextureColorMod(frame, 255, 255, 255);
 		if (strength > 8)
 			strength = 8;
 		amp = 4 + strength * 3;
@@ -1298,14 +1833,14 @@ extern "C" void vulture_screen_shake(int strength)
 			d.w = ow + 2 * amp, d.h = oh + 2 * amp;
 			SDL_SetRenderDrawColor(vulture_gpu, 0, 0, 0, 255);
 			SDL_RenderClear(vulture_gpu);
-			SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, &d);
+			SDL_RenderCopy(vulture_gpu, frame, NULL, &d);
 			SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_BLEND);
 			SDL_SetRenderDrawColor(vulture_gpu, 170, 0, 0, (Uint8) ((60 + 15 * strength) * k));
 			SDL_RenderFillRect(vulture_gpu, NULL);
 			SDL_RenderPresent(vulture_gpu);
 			SDL_Delay(16);
 		}
-		SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, NULL);
+		SDL_RenderCopy(vulture_gpu, frame, NULL, NULL);
 		SDL_RenderPresent(vulture_gpu);
 		return;
 	}

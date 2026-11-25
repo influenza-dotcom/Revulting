@@ -99,4 +99,26 @@ extern SDL_Surface *vulture_screen;
 extern SDL_Surface *vulture_window_surface;
 extern int vulture_render_scale;
 
+/* s183: the map layer drawn by the GPU (see vulture_sdl.cpp).  While
+ * vulture_gpumap_on is set, vulture_put_img() and the sprite transformer
+ * draw into the GPU map layer instead of vulture_screen; vulture_screen is
+ * then the overlay (effects, HUD, windows) composited on top. */
+extern bool vulture_gpumap_on;      /* drawing the map layer right now */
+extern bool vulture_gpumap_wanted;  /* the Visual effects switch (default on) */
+extern bool vulture_gpumap_lost;    /* the renderer lost its textures: redraw all */
+extern bool vulture_gpumap_begin(const SDL_Rect *clip);
+extern void vulture_gpumap_end(void);
+extern void vulture_gpumap_abandon(void); /* this frame's map was drawn in software */
+extern bool vulture_gpumap_valid(void);
+extern void vulture_gpumap_blit(SDL_Surface *s, const SDL_Rect *srcrect, int x, int y);
+extern void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, double sy,
+                                   double deg, bool red, int alpha);
+extern void vulture_gpumap_set_zoom(const SDL_Rect *src, const SDL_Rect *dst, int k,
+                                    bool exact);
+extern void vulture_gpu_forget(SDL_Surface *s);
+/* the frame as it would be shown (map layer + overlay), copied into out
+ * (ARGB8888) from `area` of the render surface; plain copy without a GPU map */
+extern bool vulture_frame_to_surface(SDL_Surface *out, const SDL_Rect *area);
+extern int vulture_save_frame_bmp(const char *path);
+
 #endif

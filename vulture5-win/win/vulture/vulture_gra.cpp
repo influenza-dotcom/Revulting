@@ -393,6 +393,10 @@ void vulture_put_img
 {
 	if (!a)
 		return;
+	if (vulture_gpumap_on) { /* s183: the map layer is drawn on the GPU */
+		vulture_gpumap_blit(a, NULL, x, y);
+		return;
+	}
 
 	SDL_Rect toRect;
 

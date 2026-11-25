@@ -578,6 +578,7 @@ vtw_flipped(int tile_id, SDL_Surface *s)
     if (ci != cache.end()) {
         if (ci->second.first == s)
             return ci->second.second;
+        vulture_gpu_forget(ci->second.second); /* s183 */
         SDL_FreeSurface(ci->second.second); /* tile was reloaded */
         cache.erase(ci);
     }
@@ -644,6 +645,10 @@ vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
         vulture_put_img(dx, dy, img);
         if (red)
             SDL_SetSurfaceColorMod(img, 255, 255, 255);
+        return;
+    }
+    if (vulture_gpumap_on) { /* s183: the map layer is drawn on the GPU */
+        vulture_gpumap_blit_ex(img, dx, dy, sx, sy, deg, red, alpha);
         return;
     }
     if (img->format->BytesPerPixel == 4) {
@@ -824,7 +829,7 @@ vshadow(int cx, int cy, int w, int alpha)
         return;
     SDL_SetSurfaceAlphaMod(s, (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
     d.x = cx - w / 2, d.y = cy - h / 2, d.w = w, d.h = h;
-    SDL_BlitSurface(s, NULL, vulture_screen, &d);
+    vulture_put_img(d.x, d.y, s); /* s183: GPU-aware */
 }
 
 /* draw a tile facing `face`, transformed */
@@ -1283,7 +1288,7 @@ vst_draw(int j, int i, int x, int y)
             d.w = V_MAP_XMOD * 2, d.h = V_MAP_YMOD * 2;
             SDL_SetSurfaceAlphaMod(vst_art[e.seed],
                                    (Uint8) (e.level == 1 ? 110 : e.level == 2 ? 170 : 225));
-            SDL_BlitSurface(vst_art[e.seed], NULL, vulture_screen, &d);
+            vulture_put_img(d.x, d.y, vst_art[e.seed]); /* s183: GPU-aware */
         }
         return;
     }
@@ -3030,7 +3035,7 @@ vw_photo(levelwin *lw)
     r.x = lw->abs_x, r.y = lw->abs_y, r.w = lw->w, r.h = lw->h;
     shot = SDL_CreateRGBSurfaceWithFormat(0, r.w, r.h, 32, SDL_PIXELFORMAT_ARGB8888);
     if (shot) {
-        SDL_BlitSurface(vulture_screen, &r, shot, NULL);
+        vulture_frame_to_surface(shot, &r); /* s183: GPU map included */
         if (SDL_SaveBMP(shot, path) == 0)
             pline("Photo saved: %s", path);
         else
@@ -3168,14 +3173,8 @@ vulture_replay_capture(void)
         if (!sc)
             return;
         dst.x = dst.y = 0, dst.w = src.w, dst.h = src.h;
-        {
-            SDL_BlendMode bm;
-
-            SDL_GetSurfaceBlendMode(vulture_screen, &bm);
-            SDL_SetSurfaceBlendMode(vulture_screen, SDL_BLENDMODE_NONE);
-            SDL_BlitSurface(vulture_screen, &src, sc, &dst); /* s107 */
-            SDL_SetSurfaceBlendMode(vulture_screen, bm);
-        }
+        nhUse(dst);
+        vulture_frame_to_surface(sc, &src); /* s107; s183: GPU map included */
         vrp_down2(sc, f);
     }
     vrp_head = (vrp_head + 1) % VRP_N;
@@ -3298,6 +3297,12 @@ vulture_idle_wait_ms(bool at_map)
 /* one idle frame for bobbing, breathing and combat effects (called from
    the input loop while the map waits for a command) */
 static void vselftest(void); /* s126 probe */
+
+/* s182: dynamic lighting starts OFF - the user asked for unlit by default
+   (the light passes are the biggest CPU cost in a frame).  F9 and the
+   Visual effects menu turn it on; the choice is kept in effects.txt
+   ("lighting="). */
+static bool vl_on = false;
 static point vck_from = { -1, -1 }, vck_to = { -1, -1 }; /* s145 probe */
 
 static void
@@ -3533,7 +3538,7 @@ vulture_idle_bob(bool at_map)
         vpause_probe_t = 0;
         ROOTWIN->draw_windows();
         snprintf(pp, sizeof pp, "%s\\selftest_pause.bmp", getenv("VULTURE_SELFTEST"));
-        SDL_SaveBMP(vulture_screen, pp);
+        vulture_save_frame_bmp(pp);
     }
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
@@ -6487,8 +6492,14 @@ vselftest(void)
         t0 = SDL_GetTicks();
     if (SDL_GetTicks() - t0 < 1500 + 700u * stage)
         return;
-    if (stage == 0)
+    if (stage == 0) {
         vrt_probe_moves0 = svm.moves; /* probe: s140 */
+        /* s182: lighting is off by default now; the light probes (and
+           VULTURE_SELFTEST_LIT=1 for any run) switch it on */
+        if (getenv("VULTURE_SELFTEST_LIGHT") || getenv("VULTURE_SELFTEST_PORTAL")
+            || getenv("VULTURE_SELFTEST_LIT"))
+            vl_on = true;
+    }
     switch (stage) {
     case 0: {
         struct obj *o;
@@ -6737,7 +6748,7 @@ vselftest(void)
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_hover.bmp", dir);
-        SDL_SaveBMP(vulture_screen, path);
+        vulture_save_frame_bmp(path);
         if (getenv("VULTURE_SELFTEST_LIGHT") || getenv("VULTURE_SELFTEST_CMP")) { /* probe: s145 relief cost */
             char fp2[700];
             FILE *f2;
@@ -6759,7 +6770,7 @@ vselftest(void)
             levwin->force_redraw();
             ROOTWIN->draw_windows();
             snprintf(fp2, sizeof fp2, "%s\\selftest_flat.bmp", dir);
-            SDL_SaveBMP(vulture_screen, fp2);
+            vulture_save_frame_bmp(fp2);
             vl_relief_set(true);
         }
         if (getenv("VULTURE_SELFTEST_MARK")) { /* probe: s148 markers on wall / boulder / floor */
@@ -6806,7 +6817,7 @@ vselftest(void)
             levwin->force_redraw();
             ROOTWIN->draw_windows();
             snprintf(fp3, sizeof fp3, "%s\\selftest_mark.bmp", dir);
-            SDL_SaveBMP(vulture_screen, fp3);
+            vulture_save_frame_bmp(fp3);
         }
         if (getenv("VULTURE_SELFTEST_HEAVY")) { /* probe: s151 a gigantic death + drops */
             coord hc;
@@ -7052,7 +7063,42 @@ vselftest(void)
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_card.bmp", dir);
-        SDL_SaveBMP(vulture_screen, path);
+        vulture_save_frame_bmp(path);
+        if (getenv("VULTURE_SELFTEST_GPUDIFF")) { /* probe: s183 the same frame both ways */
+            bool was = vulture_gpumap_wanted;
+
+            vulture_gpumap_wanted = true;
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            snprintf(path, sizeof path, "%s\\gpudiff_gpu.bmp", dir);
+            vulture_save_frame_bmp(path);
+            vulture_gpumap_wanted = false;
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            snprintf(path, sizeof path, "%s\\gpudiff_soft.bmp", dir);
+            vulture_save_frame_bmp(path);
+            { /* and zoomed: 2x (exact blocks) and 1.5x (nearest, then smooth) */
+                static const double zz[2] = { 2.0, 1.5 };
+                int q;
+
+                for (q = 0; q < 2; q++) {
+                    vzoom = zz[q];
+                    vulture_gpumap_wanted = true;
+                    levwin->force_redraw();
+                    ROOTWIN->draw_windows();
+                    snprintf(path, sizeof path, "%s\\gpudiff_z%d_gpu.bmp", dir, q);
+                    vulture_save_frame_bmp(path);
+                    vulture_gpumap_wanted = false;
+                    levwin->force_redraw();
+                    ROOTWIN->draw_windows();
+                    snprintf(path, sizeof path, "%s\\gpudiff_z%d_soft.bmp", dir, q);
+                    vulture_save_frame_bmp(path);
+                }
+                vzoom = 1.0;
+            }
+            vulture_gpumap_wanted = was;
+            levwin->force_redraw();
+        }
         vulture_aim_set(true, u.ux - 6, u.uy - 1);
         if (getenv("VULTURE_SELFTEST_AOE")) { /* probe: s138 fire ray at a hostile */
             for (m = fmon; m; m = m->nmon)
@@ -7071,7 +7117,7 @@ vselftest(void)
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(path, sizeof path, "%s\\selftest_aim.bmp", dir);
-        SDL_SaveBMP(vulture_screen, path);
+        vulture_save_frame_bmp(path);
         vulture_aim_set(false, -1, -1);
         if (getenv("VULTURE_SELFTEST_CLICK")) /* probe: s145 pause menu */
             vprobe_push_key(SDLK_ESCAPE);
@@ -7081,7 +7127,7 @@ vselftest(void)
             levwin->force_redraw();
             ROOTWIN->draw_windows();
             snprintf(path, sizeof path, "%s\\selftest_alt.bmp", dir);
-            SDL_SaveBMP(vulture_screen, path);
+            vulture_save_frame_bmp(path);
             SDL_SetModState(KMOD_NONE);
         }
         if (getenv("VULTURE_SELFTEST_AOE")) { /* probe: s138 skilled fireball spot */
@@ -7136,7 +7182,7 @@ vselftest(void)
             levwin->force_redraw();
             ROOTWIN->draw_windows();
             snprintf(path, sizeof path, "%s\\selftest_blast.bmp", dir);
-            SDL_SaveBMP(vulture_screen, path);
+            vulture_save_frame_bmp(path);
         }
         vulture_aim_mode = 0;
         break;
@@ -8951,6 +8997,8 @@ vulture_auto_step(void *result)
 
 /* ---- s161: Visual effects - every new effect can be switched off ----
    Kept per Windows user in effects.txt. */
+
+/* vl_on (s182, lighting off by default) is defined near vselftest */
 static void vl_relief_set(bool on);
 static bool vl_relief_get(void);
 
@@ -8974,6 +9022,8 @@ vfxm_save(void)
     fprintf(f, "normalmaps=%d\nshadows=%d\natmosphere=%d\npuffs=%d\njolts=%d\nwords=%d\n",
             (int) vl_relief_get(), (int) vfx_shadows, (int) vfx_ambient, (int) vfx_puffs,
             (int) vfx_jolts, (int) vfx_words);
+    fprintf(f, "lighting=%d\n", (int) vl_on); /* s182 */
+    fprintf(f, "gpumap=%d\n", (int) vulture_gpumap_wanted); /* s183 */
     fclose(f);
 }
 
@@ -9009,6 +9059,10 @@ vfxm_load(void)
             vfx_jolts = v != 0;
         else if (!strcmp(ln, "words"))
             vfx_words = v != 0;
+        else if (!strcmp(ln, "lighting")) /* s182 */
+            vl_on = v != 0;
+        else if (!strcmp(ln, "gpumap")) /* s183 */
+            vulture_gpumap_wanted = v != 0;
     }
     fclose(f);
 }
@@ -9038,6 +9092,30 @@ vfx_menu(void)
             vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, (char) ('a' + k), 0,
                              on[k] ? ATR_BOLD : ATR_NONE, NO_COLOR, lb[k], MENU_ITEMFLAGS_NONE);
         }
+        { /* s182: dynamic lighting, off by default */
+            static char ll[96];
+
+            snprintf(ll, sizeof ll, "Dynamic lighting  -  %s  (F9 cycles it too)",
+                     !vl_on ? "off" : vl_relief_get() ? "full, normal-mapped" : "flat");
+            any = cg.zeroany;
+            any.a_int = 8;
+            vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'l', 0,
+                             vl_on ? ATR_BOLD : ATR_NONE, NO_COLOR, ll, MENU_ITEMFLAGS_NONE);
+        }
+        { /* s183: the map drawn on the GPU (needs GPU presentation, lighting off) */
+            extern SDL_Renderer *vulture_gpu;
+            static char ml[120];
+
+            snprintf(ml, sizeof ml, "Draw the map on the GPU  -  %s%s",
+                     vulture_gpumap_wanted ? "ON" : "off",
+                     !vulture_gpu ? "  (needs GPU presentation)"
+                     : vl_on ? "  (only while dynamic lighting is off)" : "");
+            any = cg.zeroany;
+            any.a_int = 9;
+            vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'm', 0,
+                             vulture_gpumap_wanted ? ATR_BOLD : ATR_NONE, NO_COLOR, ml,
+                             MENU_ITEMFLAGS_NONE);
+        }
         { /* s168: the GPU presenter, applies on restart */
             static char gl[96];
 
@@ -9060,6 +9138,27 @@ vfx_menu(void)
             vulture_sfx("ui_click");
             pline("GPU presentation %s - restart the game for it to take effect.",
                   vulture_opts.gpu ? "on" : "off");
+            continue;
+        }
+        if (pick == 9) { /* s183 */
+            vulture_gpumap_wanted = !vulture_gpumap_wanted;
+            vfxm_save();
+            vulture_sfx("ui_click");
+            if (levwin)
+                levwin->force_redraw();
+            continue;
+        }
+        if (pick == 8) { /* s182: off -> flat -> full -> off */
+            if (!vl_on)
+                vl_on = true, vl_relief_set(false);
+            else if (!vl_relief_get())
+                vl_relief_set(true);
+            else
+                vl_on = false;
+            vfxm_save();
+            vulture_sfx("ui_click");
+            if (levwin)
+                levwin->force_redraw();
             continue;
         }
         if (pick < 1 || pick > 6)
@@ -9446,7 +9545,7 @@ vmp_mark(int cx, int cy, int vx, int vy)
  * stretched up and laid over the map as a darkness + tint layer, under
  * the glows, markers and UI.  F9 toggles it.
  */
-static bool vl_on = true;
+/* vl_on: defined with the Visual effects settings (s182) */
 static bool vl_relief_on2 = true; /* s149: mirrors vl_relief_on for vnm_begin */
 static bool vnm_ok = false;        /* s149: the buffer holds this frame's normals */
 static bool vl_magic = false;      /* s149: pulsing magic in view: refresh faster */
@@ -10332,6 +10431,7 @@ vzoom_apply(int ax, int ay, int w, int h)
 {
     SDL_Rect src, dst;
 
+    vulture_gpumap_set_zoom(NULL, NULL, 1, true); /* s183 */
     if (vzoom <= 1.0 || w < 16 || h < 16
         || vulture_screen->format->BytesPerPixel != 4)
         return;
@@ -10359,6 +10459,11 @@ vzoom_apply(int ax, int ay, int w, int h)
             dst.x = (w - dst.w) / 2, dst.y = (h - dst.h) / 2;
             if (SDL_SoftStretch(vulture_screen, &src, vzoom_buf, &dst) != 0)
                 return;
+            {
+                SDL_Rect gd = { ax + dst.x, ay + dst.y, dst.w, dst.h }; /* s183 */
+
+                vulture_gpumap_set_zoom(&src, &gd, k, true);
+            }
         } else {
             SDL_Rect big;
 
@@ -10375,6 +10480,11 @@ vzoom_apply(int ax, int ay, int w, int h)
             if (SDL_SoftStretch(vulture_screen, &src, vzoom_big, &big) != 0
                 || SDL_SoftStretchLinear(vzoom_big, &big, vzoom_buf, &dst) != 0)
                 return;
+            {
+                SDL_Rect gd = { ax, ay, w, h }; /* s183 */
+
+                vulture_gpumap_set_zoom(&src, &gd, k, false);
+            }
         }
     }
     dst.x = ax, dst.y = ay;
@@ -10463,6 +10573,19 @@ levelwin::draw()
 
     if (vzoom > 1.0)
         prev_cx = -1; /* s121: zoomed, every frame is a full redraw */
+    { /* s183: the map on the GPU when there is a renderer and lighting is
+         off (the light passes work on the map's pixels); switching between
+         the two, or textures lost, redraws everything */
+        extern SDL_Renderer *vulture_gpu;
+        static int last_gpu = -1;
+        int want_gpu = !vl_on && vulture_gpumap_wanted && vulture_gpu != NULL;
+
+        if (want_gpu != last_gpu || vulture_gpumap_lost) {
+            prev_cx = -1;
+            last_gpu = want_gpu;
+            vulture_gpumap_lost = false;
+        }
+    }
     if (prev_cx != view_x || prev_cy != view_y
         || map_data->map_swallow != V_TILE_NONE) {
         clip_tl_x = this->abs_x;
@@ -10489,6 +10612,8 @@ levelwin::draw()
 
     /* If swallowed draw ONLY the engulf tile and the player! */
     if (u.uswallow && map_data->map_swallow != V_TILE_NONE) {
+        vulture_gpumap_abandon(); /* s183: drawn in software, opaque */
+        prev_cx = -1;             /* and all of it again afterwards */
         /* Clear map area */
         SDL_FillRect(vulture_screen, NULL, CLR32_BLACK);
 
@@ -10526,6 +10651,19 @@ levelwin::draw()
                / (2 * V_MAP_XMOD * V_MAP_YMOD);
 
     Uint32 vpf_a = SDL_GetTicks(); /* probe: s152 frame stages */
+    bool vgm = false; /* s183: tiles and sprites into the GPU map layer */
+
+    if (!vl_on) {
+        SDL_Rect cr;
+
+        cr.x = clip_tl_x, cr.y = clip_tl_y;
+        cr.w = clip_br_x + 1 - clip_tl_x, cr.h = clip_br_y + 1 - clip_tl_y;
+        vgm = vulture_gpumap_begin(&cr);
+    }
+    if (vgm)
+        SDL_FillRect(vulture_screen, NULL, 0); /* the overlay starts clear over the map */
+    else
+        vulture_gpumap_abandon();
     vnm_begin(); /* s149: the map's tiles lay their normal maps from here */
 
     /* without the +-1 small corners within the viewport are not drawn */
@@ -10781,6 +10919,8 @@ levelwin::draw()
         }
     }
     vulture_normal_capture = false; /* s149 */
+    if (vgm)
+        vulture_gpumap_end(); /* s183: effects and the HUD go into the overlay */
     Uint32 vpf_b = SDL_GetTicks(); /* probe */
     vl_render(map_data, map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
               this->abs_y, this->w, this->h); /* s133: dynamic lighting */
@@ -11469,6 +11609,7 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
             vl_on = true, vl_relief_set(true);
         pline("Dynamic lighting: %s.", !vl_on ? "off" : vl_relief_on ? "full, normal-mapped"
                                                                      : "flat (no normal maps)");
+        vfxm_save(); /* s182: remembered */
         force_redraw();
         return V_EVENT_HANDLED_REDRAW;
 

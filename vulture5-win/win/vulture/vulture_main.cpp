@@ -1307,7 +1307,7 @@ void vulture_curs(winid window, int x, int y)
 		/* §53: the pointer is an OS cursor now, so a keyboard-driven
 		 * look/teleport cursor has to move the real pointer too
 		 * (window space = render space / render_scale) */
-		if (vulture_sdl_window)
+		if (vulture_sdl_window && !getenv("VULTURE_HIDDEN_WINDOW")) /* s183: not the real pointer */
 			SDL_WarpMouseInWindow(vulture_sdl_window,
 								  mouse.x / vulture_render_scale,
 								  mouse.y / vulture_render_scale);
