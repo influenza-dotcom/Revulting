@@ -4286,6 +4286,42 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   more of it.  The art is done and committed - do NOT run make_hd_tiles.py
   again on this machine.  At 1x zoom nothing in tiles_hd is ever loaded.
 
+### 202. Impact: blows, misses, missiles, shattering
+
+- The user: "add impact effects to attacks and thrown items and whatnot".
+  A hit showed a damage number and blood (s85) and a big one a burst
+  (s129); the lunge (s78) made the target recoil before the hit was even
+  decided; misses, thrown things and breakage showed nothing.
+- levelwin.cpp "s202" (vimp_*, vfl_*):
+  - A hit on a creature in sight bursts at the point of contact in the
+    style of what struck it (vimp_style_of: the weapon's damage type - S/P/B
+    from oc_dir - or the creature's first melee attack): an edged weapon
+    sweeps a bright arc and throws sparks, a pointed one jabs a streak
+    through with a star at the tip, a blunt one flashes and rings the floor
+    with grit, claws rake three red lines, a bite snaps shut, fire / frost /
+    lightning attacks burst in their colour.  Sprayed away from the attacker
+    (vulture_anim_attack records who swung at whom; a missile's flight says
+    where from), sized by the share of HP it took, a light flash with it, and
+    the creature flinches from the blow (vimp_recoil_xform, in vanim_xform).
+  - vfx_scan sees non-lethal hits; a killing blow is caught in
+    vulture_anim_death (the monster is gone before the next scan), and only
+    when a blow or missile we saw did it - no burst for poison, traps,
+    hunger.  The hero only bursts for a blow or missile too.
+  - A miss ("You miss", "misses": vulture_msg_fx from vulture_putstr)
+    whiffs past the target, who leans aside.
+  - Thrown / fired / kicked things: the core's tmp_at now tells Vulture
+    about DISP_FLASH / DISP_TETHER flights (display.c: vulture_flight_begin /
+    step / end); the thing streaks through the air, and one stopped by a
+    wall, closed door or tree chips stone, throws sparks (metal) or
+    splinters (wood).  Glass breaking is breakobj's to show.
+  - Shattering (dothrow.c breakobj, potion.c potionhit -> vulture_shatter_fx):
+    glass shards glinting as they fall, and a splash in the potion's colour
+    (the colour you see), yolk for eggs.
+  - New particle mode 5 (a solid bit: chips, splinters, drops).
+- Probe VULTURE_SELFTEST_IMPACT: two blows a 60-HP jackal survives, a
+  killing blow, two bites back, a dagger flown into a wall through tmp_at,
+  a potion shattering - each shot as it plays.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

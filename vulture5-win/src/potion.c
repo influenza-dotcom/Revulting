@@ -1635,6 +1635,8 @@ potionhit(struct monst *mon, struct obj *obj, int how)
     struct obj *saddle = (struct obj *) 0;
     boolean hit_saddle = FALSE, your_fault = (how <= POTHIT_HERO_THROW);
 
+    vulture_shatter_fx(isyou ? u.ux : mon->mx, isyou ? u.uy : mon->my,
+                       obj->otyp); /* Vulture s202: it breaks on them */
     if (isyou) {
         tx = u.ux, ty = u.uy;
         distance = 0;

@@ -1191,6 +1191,8 @@ tmp_at(coordxy x, coordxy y)
         tglyph->sidx = 0;
         tglyph->style = x;
         tglyph->glyph = y;
+        if (x == DISP_FLASH || x == DISP_TETHER)
+            vulture_flight_begin(y); /* Vulture s202: a thing takes off */
         flush_screen(0); /* flush buffered glyphs */
         return;
 
@@ -1216,6 +1218,8 @@ tmp_at(coordxy x, coordxy y)
             break;
 
         case DISP_END:
+            if (tglyph->style == DISP_FLASH || tglyph->style == DISP_TETHER)
+                vulture_flight_end(); /* Vulture s202: where it stopped */
             if (tglyph->style == DISP_BEAM || tglyph->style == DISP_ALL) {
                 int i;
 
@@ -1294,6 +1298,8 @@ tmp_at(coordxy x, coordxy y)
             }
 
             show_glyph(x, y, tglyph->glyph); /* show it */
+            if (tglyph->style == DISP_FLASH || tglyph->style == DISP_TETHER)
+                vulture_flight_step(x, y);   /* Vulture s202: its streak */
             flush_screen(0);                 /* make sure it shows up */
             break;
         } /* end switch */

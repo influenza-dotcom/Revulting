@@ -434,6 +434,10 @@ extern int vulture_crit_chance(void);
 extern int vulture_crit_chance_shown(void); /* s180 */
 extern void vulture_crit_fx(int, int, int);
 extern void vulture_object_impact(int, int, int); /* s157 */
+extern void vulture_flight_begin(int); /* s202: a thrown thing's flight */
+extern void vulture_flight_step(int, int);
+extern void vulture_flight_end(void);
+extern void vulture_shatter_fx(int, int, int); /* s202: shards, a splash */
 extern void vulture_run_summary(int); /* s165 */
 extern void vulture_photo_fx(int, int, int, int); /* s170 */
 extern int vulture_prayer_advice(const char **, const char **); /* s174 */

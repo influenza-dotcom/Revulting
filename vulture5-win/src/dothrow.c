@@ -2494,6 +2494,7 @@ breakobj(
         return (erode_obj(obj, armor_simple_name(obj), ERODE_CRACK,
                           EF_DESTROY | EF_VERBOSE) == ER_DESTROYED);
 
+    vulture_shatter_fx(x, y, obj->otyp); /* Vulture s202: shards, a splash */
     switch (obj->oclass == POTION_CLASS ? POT_WATER : obj->otyp) {
     case MIRROR:
         if (hero_caused)

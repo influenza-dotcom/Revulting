@@ -706,6 +706,8 @@ void vulture_raw_print_bold(const char *str)
 
 
 
+extern void vulture_msg_fx(const char *s); /* s202: levelwin.cpp - a miss whiffs */
+
 void vulture_putstr(int winid, int attr, const char *str)
 {
 	nhwindow *win;
@@ -748,6 +750,7 @@ void vulture_putstr(int winid, int attr, const char *str)
 				return;
 
 			msgwin->add_message(std::string(str));
+			vulture_msg_fx(str); /* s202: a miss whiffs */
 
 			/* Play any event sounds associated with this message
 			 * (s75: unless the core already played them for the original

@@ -899,6 +899,10 @@ vtw_put_tile_x(int x, int y, int tile_id, int face, double sx, double sy,
  * same way the movement tween does.  Each run is timed into vulture_log.
  */
 static int vanim_kind = 0;           /* 0 none, 1 lunge, 2 death */
+static void vimp_note_attack(int ax, int ay, int tx, int ty);                /* s202 */
+static void vimp_recoil_xform(int j, int i, int *ox, int *oy, double *deg); /* s202 */
+static void vimp_hit(int x, int y, int dmg, int maxhp, bool hero);         /* s202 */
+static void vimp_kill(int x, int y, int maxhp);                            /* s202 */
 static int vanim_ax, vanim_ay, vanim_tx, vanim_ty;
 static double vanim_t = 0.0;
 struct vanim_death {
@@ -977,6 +981,7 @@ vanim_frames(int kind, int frames, int delay_ms)
 extern "C" void
 vulture_anim_attack(int ax, int ay, int tx, int ty)
 {
+    vimp_note_attack(ax, ay, tx, ty); /* s202: who swings at whom, for the impact */
     if (!levwin || vulture_windows_inited != TRUE || vanim_kind || vtw_animating)
         return;
     if (abs(ax - tx) > 1 || abs(ay - ty) > 1 || (ax == tx && ay == ty))
@@ -1046,6 +1051,8 @@ vulture_anim_death(int x, int y)
         vanim_deaths[vanim_ndeaths].heft = dm ? vheft_mon(dm->data) : 2; /* s151 */
         if (!dm || !noncorporeal(dm->data))
             vst_add(x, y, 2); /* s93: a death leaves a pool */
+        if (dm) /* s202: the killing blow lands too (vfx_scan never sees it) */
+            vimp_kill(x, y, dm->mhpmax);
     }
     vanim_ndeaths++;
 }
@@ -1170,6 +1177,7 @@ vanim_xform(int j, int i, int *ox, int *oy, double *xs, double *ys,
     double t = vanim_t;
     int sx, sy, side;
 
+    vimp_recoil_xform(j, i, ox, oy, deg); /* s202: a flinch or a lean */
     if (vanim_kind != 1)
         return;
     vtw_proj(vanim_tx - vanim_ax, vanim_ty - vanim_ay, &sx, &sy);
@@ -1585,6 +1593,7 @@ vfx_scan(void)
     if (vfx_hero_hp >= 0 && poly == vfx_hero_poly && hp != vfx_hero_hp && hp > 0) {
         if (hp < vfx_hero_hp) {
             vfx_hit(u.ux, u.uy, vfx_hero_hp - hp, 255, 70, 60, true);
+            vimp_hit(u.ux, u.uy, vfx_hero_hp - hp, Upolyd ? u.mhmax : u.uhpmax, true); /* s202 */
             vhurt_flash(vfx_hero_hp - hp, Upolyd ? u.mhmax : u.uhpmax); /* s136 */
             /* s129: a hit worth a quarter of your max HP lands hard */
             if ((vfx_hero_hp - hp) * 4 >= (Upolyd ? u.mhmax : u.uhpmax)) {
@@ -1611,6 +1620,7 @@ vfx_scan(void)
 
             vfx_hit(m->mx, m->my, dmg, 255, big ? 205 : 245, big ? 70 : 210,
                     !noncorporeal(m->data));
+            vimp_hit(m->mx, m->my, dmg, m->mhpmax, false); /* s202 */
             if (big) {
                 vfx_burst(m->mx, m->my, 255, 235, 190);
                 vhitstop_ms = 70;
@@ -4084,6 +4094,9 @@ vsp_draw_parts(Uint32 now, double t, double dt)
             a = p.alpha * (1.0 - age) * (0.35 + 0.65 * fabs(sin(t * 13.0 + (p.t0 % 97) * 0.37)));
             vsp_blob(px, py, p.size, p.r, p.g, p.b, (int) a, true);
             break;
+        case 5: /* s202: a solid bit - chips, splinters, drops */
+            vsp_blob(px, py, p.size, p.r, p.g, p.b, (int) (p.alpha * (1.0 - age)), false);
+            break;
         case 1: /* gas, mist */
             vsp_blob(px, py, p.size, p.r, p.g, p.b, (int) (p.alpha * sin(3.14159265 * age)), true);
             break;
@@ -4093,6 +4106,682 @@ vsp_draw_parts(Uint32 now, double t, double dt)
         }
     }
     vsp_parts.resize(n);
+}
+
+
+/*
+ * IMPLEMENTATION_LOG s202: impact.  A blow that lands, a missile that
+ * strikes, a thrown thing that stops, a flask that shatters - each shows
+ * where and how it hit, not only the number and the blood:
+ *  - every hit on a creature in sight (vfx_scan sees its HP drop) bursts at
+ *    the point of contact in the style of what struck it - an edged weapon
+ *    sweeps a bright arc and throws sparks, a pointed one jabs a streak
+ *    through, a blunt one flashes and rings the floor with dust, claws rake
+ *    three red lines, a bite snaps shut, fire / frost / lightning burst in
+ *    their colour - sprayed away from the attacker (vulture_anim_attack
+ *    says who swung; a missile's flight says where from); the room flashes
+ *    with it and the creature flinches from the blow;
+ *  - a miss ("You miss", "misses") whiffs past the target, who leans aside;
+ *  - thrown and fired things (the core's tmp_at DISP_FLASH / TETHER, via
+ *    vulture_flight_*) streak through the air, and one stopped by a wall
+ *    chips stone, throws sparks (metal) or splinters (wood);
+ *  - potions and glass shatter (breakobj, potionhit): shards, and a splash
+ *    in the potion's colour (the colour you see).
+ */
+enum { VIMP_GENERIC, VIMP_SLASH, VIMP_PIERCE, VIMP_BLUNT, VIMP_CLAW, VIMP_BITE, VIMP_FIRE,
+       VIMP_COLD, VIMP_SHOCK };
+struct vimp_attack_t {
+    int ax, ay, tx, ty, style;
+    Uint32 t;
+};
+static vimp_attack_t vimp_last = { 0, 0, 0, 0, 0, 0 };
+struct vimp_fx_t {
+    int x, y, style;
+    float dx, dy, size; /* the blow's screen direction (unit, or 0), its size */
+    Uint32 t0, dur;
+    bool whiff;
+};
+static std::vector<vimp_fx_t> vimp_fx;
+struct vimp_rec_t { /* a creature flinching from a blow, or leaning from a miss */
+    int x, y;
+    float dx, dy, amp;
+    Uint32 t0, dur;
+    bool dodge;
+};
+static std::vector<vimp_rec_t> vimp_recs;
+struct vfl_pt_t {
+    int x, y;
+    Uint32 t;
+};
+static std::vector<vfl_pt_t> vfl_pts; /* the flight in the air, or just over */
+static bool vfl_on = false;
+static int vfl_style = VIMP_GENERIC, vfl_mat = 0; /* 0 other, 1 metal, 2 wood, 3 stone, 4 glass */
+static Uint32 vfl_end_t = 0;
+static int vfl_end_x = -1, vfl_end_y = -1;
+static float vfl_end_dx = 0.0f, vfl_end_dy = 0.0f;
+static const Uint8 vimp_col[9][3] = {
+    { 255, 245, 220 }, { 255, 240, 200 }, { 230, 240, 255 }, { 255, 235, 205 }, { 255, 110, 90 },
+    { 255, 200, 200 }, { 255, 150, 50 },  { 170, 220, 255 }, { 200, 215, 255 },
+};
+/* NetHack's 16 colours, as the map shows them */
+static const Uint8 vimp_nhrgb[16][3] = {
+    { 60, 60, 70 },   { 205, 40, 35 },  { 50, 170, 50 },   { 160, 105, 45 },
+    { 60, 80, 225 },  { 190, 55, 190 }, { 45, 180, 190 },  { 175, 175, 175 },
+    { 200, 200, 200 }, { 255, 140, 35 }, { 100, 255, 100 }, { 255, 245, 80 },
+    { 110, 150, 255 }, { 255, 100, 255 }, { 100, 255, 255 }, { 255, 255, 255 },
+};
+
+/* how a thing strikes: its weapon's damage type, or the creature's first
+   melee attack */
+static int
+vimp_style_of(int ax, int ay)
+{
+    struct monst *m = NULL;
+    struct obj *w = NULL;
+    const struct permonst *pd = NULL;
+    int k;
+
+    if (u_at(ax, ay))
+        w = uwep, pd = Upolyd ? gy.youmonst.data : NULL;
+    else if ((m = m_at(ax, ay)) != 0)
+        w = MON_WEP(m), pd = m->data;
+    if (w && (w->oclass == WEAPON_CLASS || is_weptool(w))) {
+        int d = objects[w->otyp].oc_dir;
+
+        return (d & SLASH) ? VIMP_SLASH : (d & PIERCE) ? VIMP_PIERCE : VIMP_BLUNT;
+    }
+    if (w)
+        return VIMP_BLUNT; /* a tool, a corpse... */
+    if (pd)
+        for (k = 0; k < NATTK; k++) {
+            const struct attack *a = &pd->mattk[k];
+
+            if (a->aatyp == AT_NONE || a->aatyp == AT_BOOM || a->aatyp == AT_EXPL
+                || a->aatyp == AT_BREA || a->aatyp == AT_SPIT || a->aatyp == AT_GAZE
+                || a->aatyp == AT_MAGC || a->aatyp == AT_ENGL)
+                continue;
+            if (a->adtyp == AD_FIRE)
+                return VIMP_FIRE;
+            if (a->adtyp == AD_COLD)
+                return VIMP_COLD;
+            if (a->adtyp == AD_ELEC)
+                return VIMP_SHOCK;
+            if (a->aatyp == AT_CLAW)
+                return VIMP_CLAW;
+            if (a->aatyp == AT_BITE)
+                return VIMP_BITE;
+            if (a->aatyp == AT_STNG)
+                return VIMP_PIERCE;
+            return VIMP_BLUNT;
+        }
+    return VIMP_BLUNT; /* fists */
+}
+
+/* vulture_anim_attack: who swings at whom */
+static void
+vimp_note_attack(int ax, int ay, int tx, int ty)
+{
+    vimp_last.ax = ax, vimp_last.ay = ay, vimp_last.tx = tx, vimp_last.ty = ty;
+    vimp_last.style = vimp_style_of(ax, ay);
+    vimp_last.t = SDL_GetTicks();
+}
+
+/* a unit screen vector from square (ax, ay) toward (tx, ty) */
+static void
+vimp_dir(int ax, int ay, int tx, int ty, float *dx, float *dy)
+{
+    int sx, sy;
+    double l;
+
+    vtw_proj(tx - ax, ty - ay, &sx, &sy);
+    l = sqrt((double) sx * sx + (double) sy * sy);
+    *dx = l > 0.5 ? (float) (sx / l) : 0.0f;
+    *dy = l > 0.5 ? (float) (sy / l) : 0.0f;
+}
+
+/* vfx_scan: a creature in sight just lost HP */
+static void
+vimp_hit(int x, int y, int dmg, int maxhp, bool hero)
+{
+    Uint32 now = SDL_GetTicks();
+    vimp_fx_t f;
+    vimp_rec_t r;
+    float dx = 0.0f, dy = 0.0f;
+    int style = VIMP_GENERIC, n, k;
+    bool known = false;
+    double big = maxhp > 0 ? (double) dmg / maxhp : 0.3;
+
+    if (!isok(x, y) || dmg <= 0)
+        return;
+    if (now - vimp_last.t < 1500 && vimp_last.tx == x && vimp_last.ty == y) {
+        style = vimp_last.style, known = true;
+        vimp_dir(vimp_last.ax, vimp_last.ay, x, y, &dx, &dy);
+        vimp_last.t = 0; /* one blow, one burst */
+    } else if (now - vfl_end_t < 800 && distmin(vfl_end_x, vfl_end_y, x, y) <= 1) {
+        style = vfl_style, dx = vfl_end_dx, dy = vfl_end_dy, known = true;
+        vfl_end_t = 0;
+    }
+    if (hero && !known) /* hunger, poison, a trap: no blow to show */
+        return;
+    if (big > 0.6)
+        big = 0.6;
+    f.x = x, f.y = y, f.style = style, f.dx = dx, f.dy = dy;
+    f.size = (float) (0.7 + big * 1.4);
+    f.t0 = now, f.dur = style == VIMP_BLUNT ? 300 : 240, f.whiff = false;
+    if (vimp_fx.size() < 24)
+        vimp_fx.push_back(f);
+    vl_flash(x, y, vimp_col[style][0] / 255.0f, vimp_col[style][1] / 255.0f, vimp_col[style][2] / 255.0f,
+             style >= VIMP_FIRE ? 0.9f : 0.55f, 1.8f, 220);
+    /* sparks, grit, flecks - sprayed away from the attacker */
+    n = 5 + (int) (big * 18.0);
+    for (k = 0; k < n; k++) {
+        double a = vsp_frand() * 6.2832, sp = 60 + vsp_frand() * 140;
+        double vx = cos(a) * sp * 0.6 + dx * sp, vy = sin(a) * sp * 0.3 + dy * sp * 0.5;
+
+        switch (style) {
+        case VIMP_SLASH:
+        case VIMP_PIERCE:
+        case VIMP_GENERIC: /* sparks */
+            vsp_spawn(x, y, dx * 6, dy * 3, 30, vx * 1.3, vy * 1.3, 40 + vsp_frand() * 90, -300, 2.4, 1.2, 0,
+                      200 + rand() % 220, 255, 230 + rand() % 25, 170 + rand() % 60, 0, 255);
+            break;
+        case VIMP_BLUNT: /* grit */
+            vsp_spawn(x, y, dx * 4, dy * 2, 18 + vsp_frand() * 10, vx * 0.5, vy * 0.5, 30 + vsp_frand() * 40,
+                      -260, 1.6, 1.4, 0, 300 + rand() % 250, 200, 185, 160, 5, 220);
+            break;
+        case VIMP_CLAW:
+        case VIMP_BITE: /* red flecks (the blood is vfx_hit's) */
+            vsp_spawn(x, y, dx * 4, dy * 2, 28, vx * 0.9, vy * 0.9, 30 + vsp_frand() * 60, -320, 1.5, 1.3, 0,
+                      260 + rand() % 200, 210, 40 + rand() % 40, 40, 5, 230);
+            break;
+        default: /* fire, cold, shock: the s198 particles of that kind */
+            vsp_emit_ray(x, y, style == VIMP_FIRE ? 1 : style == VIMP_COLD ? 2 : 5, 1, false);
+            break;
+        }
+    }
+    if (style == VIMP_BLUNT) { /* a small shockwave along the floor */
+        vsp_wave_t w;
+
+        w.x = x, w.y = y, w.t0 = now, w.dur = 300, w.r = 255, w.g = 240, w.b = 210;
+        w.rad = (float) (0.35 + big * 0.7);
+        if (vsp_waves.size() < 16)
+            vsp_waves.push_back(w);
+    }
+    /* the creature flinches from the blow */
+    r.x = x, r.y = y, r.dx = dx, r.dy = dy, r.amp = (float) (5.0 + big * 12.0);
+    r.t0 = now, r.dur = 170, r.dodge = false;
+    if (dx == 0.0f && dy == 0.0f) /* no direction known: a jolt upward */
+        r.dy = -1.0f, r.amp *= 0.5f;
+    if (vimp_recs.size() < 24)
+        vimp_recs.push_back(r);
+    vsp_live_t = now; /* frames keep coming */
+}
+
+/* vulture_anim_death: a creature in sight died - if a blow or a missile we
+   saw did it, that blow lands as hard as a big hit (deaths from poison,
+   traps, hunger show nothing) */
+static void
+vimp_kill(int x, int y, int maxhp)
+{
+    if (maxhp < 1)
+        maxhp = 1;
+    if (cansee(x, y))
+        vimp_hit(x, y, (maxhp + 1) / 2, maxhp, true);
+}
+
+/* vanim_xform: this frame's flinch or lean for the creature on (j, i) */
+static void
+vimp_recoil_xform(int j, int i, int *ox, int *oy, double *deg)
+{
+    Uint32 now = SDL_GetTicks();
+    size_t k;
+
+    for (k = 0; k < vimp_recs.size(); k++) {
+        const vimp_rec_t &r = vimp_recs[k];
+        double age = (double) (now - r.t0) / r.dur, e;
+
+        if (r.x != j || r.y != i || age >= 1.0)
+            continue;
+        /* out fast, back slower */
+        e = sin(3.14159265 * (age < 0.3 ? age / 0.6 : 0.5 + (age - 0.3) / 1.4));
+        if (r.dodge) { /* across the swing */
+            *ox += (int) (-r.dy * r.amp * e);
+            *oy += (int) (r.dx * r.amp * 0.5 * e);
+            *deg += 8.0 * e * (r.dx >= 0.0f ? 1.0 : -1.0);
+        } else {
+            *ox += (int) (r.dx * r.amp * e);
+            *oy += (int) (r.dy * r.amp * e);
+            *deg += 6.0 * e * (r.dx >= 0.0f ? 1.0 : -1.0);
+        }
+    }
+}
+
+/* a miss: a whiff past the target, who leans aside */
+static void
+vimp_whiff(void)
+{
+    Uint32 now = SDL_GetTicks();
+    vimp_fx_t f;
+    vimp_rec_t r;
+    float dx, dy;
+
+    if (now - vimp_last.t > 1500 || !isok(vimp_last.tx, vimp_last.ty) || !cansee(vimp_last.tx, vimp_last.ty))
+        return;
+    vimp_dir(vimp_last.ax, vimp_last.ay, vimp_last.tx, vimp_last.ty, &dx, &dy);
+    f.x = vimp_last.tx, f.y = vimp_last.ty, f.style = vimp_last.style, f.dx = dx, f.dy = dy;
+    f.size = 0.8f, f.t0 = now, f.dur = 230, f.whiff = true;
+    if (vimp_fx.size() < 24)
+        vimp_fx.push_back(f);
+    r.x = f.x, r.y = f.y, r.dx = dx, r.dy = dy, r.amp = 7.0f, r.t0 = now, r.dur = 230, r.dodge = true;
+    if (vimp_recs.size() < 24)
+        vimp_recs.push_back(r);
+    vimp_last.t = 0;
+    vsp_live_t = now;
+}
+
+/* vulture_putstr: the messages that mean a miss */
+void
+vulture_msg_fx(const char *s)
+{
+    if (!s || !levwin || !u.ux)
+        return;
+    if (strstr(s, "You miss") || strstr(s, " misses") || strstr(s, " miss it"))
+        vimp_whiff();
+}
+
+/* a thrown thing stopped against a wall beyond square (x, y) */
+static void
+vimp_chips(int x, int y, float dx, float dy, int mat)
+{
+    int k, n = mat == 1 ? 10 : 7;
+    double ox = dx * 26, oy = dy * 13; /* the square's far edge */
+
+    for (k = 0; k < n; k++) {
+        double a = vsp_frand() * 6.2832, sp = 40 + vsp_frand() * 120;
+        double vx = cos(a) * sp * 0.7 - dx * sp * 0.8, vy = sin(a) * sp * 0.35 - dy * sp * 0.4;
+
+        if (mat == 1) /* metal: sparks */
+            vsp_spawn(x, y, ox, oy, 26, vx * 1.4, vy * 1.4, 40 + vsp_frand() * 80, -300, 2.4, 1.2, 0,
+                      180 + rand() % 200, 255, 225 + rand() % 30, 150 + rand() % 70, 0, 255);
+        else if (mat == 2) /* wood: splinters */
+            vsp_spawn(x, y, ox, oy, 24, vx, vy, 30 + vsp_frand() * 60, -360, 1.2, 1.4, 0,
+                      350 + rand() % 250, 170, 120, 70, 5, 230);
+        else /* stone and the rest: chips */
+            vsp_spawn(x, y, ox, oy, 24, vx * 0.8, vy * 0.8, 30 + vsp_frand() * 60, -380, 1.2, 1.6, 0,
+                      350 + rand() % 250, 175, 165, 150, 5, 220);
+    }
+    vsp_spawn(x, y, ox, oy, 20, 0, 0, 8, 0, 0.6, 5, 9, 500, 150, 140, 125, 3, 70); /* a puff */
+    if (mat == 1)
+        vl_flash(x, y, 1.0f, 0.9f, 0.7f, 0.45f, 1.4f, 160);
+    vsp_live_t = SDL_GetTicks();
+}
+
+/* the core's tmp_at: a thrown / fired / kicked thing takes off (its glyph) */
+extern "C" void
+vulture_flight_begin(int glyph)
+{
+    vfl_pts.clear();
+    vfl_on = true;
+    vfl_style = VIMP_GENERIC, vfl_mat = 0;
+    if (glyph_is_object(glyph)) {
+        int otyp = glyph_to_obj(glyph);
+
+        if (otyp >= 0 && otyp < NUM_OBJECTS) {
+            const struct objclass *oc = &objects[otyp];
+            int mat = oc->oc_material;
+
+            vfl_mat = (mat == IRON || mat == METAL || mat == COPPER || mat == SILVER || mat == GOLD
+                       || mat == PLATINUM || mat == MITHRIL) ? 1
+                      : mat == WOOD ? 2 : (mat == MINERAL || mat == GEMSTONE) ? 3 : mat == GLASS ? 4 : 0;
+            if (oc->oc_class == WEAPON_CLASS)
+                vfl_style = (oc->oc_dir & PIERCE) ? VIMP_PIERCE : (oc->oc_dir & SLASH) ? VIMP_SLASH
+                                                                                        : VIMP_BLUNT;
+            else
+                vfl_style = VIMP_BLUNT; /* rocks, gems, anything thrown */
+        }
+    }
+}
+
+extern "C" void
+vulture_flight_step(int x, int y)
+{
+    vfl_pt_t p;
+
+    if (!vfl_on || !isok(x, y))
+        return;
+    p.x = x, p.y = y, p.t = SDL_GetTicks();
+    if (vfl_pts.size() < 64)
+        vfl_pts.push_back(p);
+    vsp_live_t = p.t;
+}
+
+extern "C" void
+vulture_flight_end(void)
+{
+    Uint32 now = SDL_GetTicks();
+    size_t n = vfl_pts.size();
+
+    vfl_on = false;
+    if (n == 0)
+        return;
+    vfl_end_t = now, vfl_end_x = vfl_pts[n - 1].x, vfl_end_y = vfl_pts[n - 1].y;
+    if (n >= 2) {
+        int ddx = vfl_end_x - vfl_pts[n - 2].x, ddy = vfl_end_y - vfl_pts[n - 2].y;
+        int wx = vfl_end_x + ddx, wy = vfl_end_y + ddy;
+
+        vimp_dir(vfl_pts[n - 2].x, vfl_pts[n - 2].y, vfl_end_x, vfl_end_y, &vfl_end_dx, &vfl_end_dy);
+        /* stopped by a wall, a closed door or a tree, in sight (glass breaks:
+           breakobj shows that) */
+        if (isok(wx, wy) && cansee(vfl_end_x, vfl_end_y) && !m_at(vfl_end_x, vfl_end_y) && vfl_mat != 4
+            && (IS_STWALL(levl[wx][wy].typ) || closed_door(wx, wy) || levl[wx][wy].typ == TREE))
+            vimp_chips(vfl_end_x, vfl_end_y, vfl_end_dx, vfl_end_dy, vfl_mat);
+    } else
+        vfl_end_dx = vfl_end_dy = 0.0f;
+    vsp_live_t = now;
+}
+
+/* breakobj, potionhit: something fragile breaks at (x, y) */
+extern "C" void
+vulture_shatter_fx(int x, int y, int otyp)
+{
+    Uint32 now = SDL_GetTicks();
+    const struct objclass *oc;
+    int k, col;
+    bool potion, egg, glass;
+
+    if (!levwin || !u.ux || !isok(x, y) || !cansee(x, y) || otyp < 0 || otyp >= NUM_OBJECTS)
+        return;
+    oc = &objects[otyp];
+    potion = oc->oc_class == POTION_CLASS, egg = otyp == EGG;
+    glass = potion || oc->oc_material == GLASS;
+    col = potion ? oc->oc_color : egg ? CLR_YELLOW : CLR_WHITE;
+    if (col < 0 || col > 15)
+        col = CLR_WHITE;
+    if (glass)
+        for (k = 0; k < 9; k++) { /* shards, glinting as they fall */
+            double a = vsp_frand() * 6.2832, sp = 40 + vsp_frand() * 120;
+
+            vsp_spawn(x, y, 0, 0, 22, cos(a) * sp, sin(a) * sp * 0.5, 40 + vsp_frand() * 90, -420, 0.6, 1.3,
+                      0, 500 + rand() % 400, 210, 235, 255, 4, 255);
+        }
+    if (potion || egg)
+        for (k = 0; k < 12; k++) { /* what was inside, in its colour */
+            double a = vsp_frand() * 6.2832, sp = 30 + vsp_frand() * 100;
+
+            vsp_spawn(x, y, 0, 0, 20, cos(a) * sp, sin(a) * sp * 0.5, 30 + vsp_frand() * 70, -380, 0.4,
+                      1.8 + vsp_frand(), 0, 500 + rand() % 300, vimp_nhrgb[col][0], vimp_nhrgb[col][1],
+                      vimp_nhrgb[col][2], 5, 230);
+        }
+    {
+        vsp_wave_t w;
+
+        w.x = x, w.y = y, w.t0 = now, w.dur = 320, w.rad = 0.5f;
+        w.r = vimp_nhrgb[col][0], w.g = vimp_nhrgb[col][1], w.b = vimp_nhrgb[col][2];
+        if (vsp_waves.size() < 16)
+            vsp_waves.push_back(w);
+    }
+    vsp_live_t = now;
+}
+
+/* the streak behind a flying thing */
+static void
+vfl_draw(Uint32 now)
+{
+    size_t n = vfl_pts.size(), k;
+    int sx0, sy0, sx1, sy1;
+    Uint8 r = 235, g = 240, b = 255;
+
+    if (n < 2) {
+        if (!vfl_on && now - vfl_end_t > 200)
+            vfl_pts.clear();
+        return;
+    }
+    if (!vfl_on && now - vfl_end_t > 200) {
+        vfl_pts.clear();
+        return;
+    }
+    if (vfl_style == VIMP_BLUNT)
+        r = 215, g = 195, b = 165;
+    else if (vfl_mat == 4)
+        r = 200, g = 230, b = 255;
+    for (k = n - 1; k > 0 && n - 1 - k < 3; k--) { /* the last legs, fading back */
+        double age = (double) (now - vfl_pts[k].t) / 280.0, fade;
+
+        if (age >= 1.0)
+            break;
+        fade = (1.0 - age) * (1.0 - (double) (n - 1 - k) / 3.0);
+        vsp_screen(vfl_pts[k].x, vfl_pts[k].y, &sx1, &sy1);
+        vsp_screen(vfl_pts[k - 1].x, vfl_pts[k - 1].y, &sx0, &sy0);
+        vsp_line(sx0, sy0 - 26, sx1, sy1 - 26, 4.0, r, g, b, (int) (55 * fade), true, 3.0);
+        vsp_line(sx0, sy0 - 26, sx1, sy1 - 26, 1.4, r, g, b, (int) (210 * fade), true, 2.0);
+    }
+}
+
+/* the impact flashes, and the flinches' upkeep */
+static void
+vimp_draw(Uint32 now, double t)
+{
+    size_t i, n = 0;
+
+    for (i = 0; i < vimp_recs.size(); i++)
+        if (now - vimp_recs[i].t0 < vimp_recs[i].dur)
+            vimp_recs[n++] = vimp_recs[i];
+    vimp_recs.resize(n);
+    n = 0;
+    for (i = 0; i < vimp_fx.size(); i++) {
+        vimp_fx_t f = vimp_fx[i];
+        double age = (double) (now - f.t0) / f.dur, fl, cx, cy, a, s = f.size;
+        float dx = f.dx, dy = f.dy, nx, ny;
+        const Uint8 *c = vimp_col[f.style];
+        int sx, sy, k;
+
+        if (age >= 1.0)
+            continue;
+        vimp_fx[n++] = f;
+        vsp_screen(f.x, f.y, &sx, &sy);
+        if (isok(f.x, f.y)) /* with the sprite, mid-step */
+            sx += vtw_ox[f.y][f.x], sy += vtw_oy[f.y][f.x];
+        cx = sx - dx * 8.0, cy = sy - 30.0 - dy * 4.0; /* chest height, the attacker's side */
+        if (dx == 0.0f && dy == 0.0f)
+            dx = 1.0f;
+        nx = -dy, ny = dx;
+        fl = 1.0 - age;
+        if (f.whiff) { /* a pale swoosh going past */
+            for (k = 0; k <= 12; k++) {
+                double u2 = (double) k / 12, ang = -1.0 + 2.0 * u2, p = age * 1.4 - u2 * 0.5;
+
+                if (p < 0.0 || p > 1.0)
+                    continue;
+                vsp_blob((int) (cx + nx * 22 * sin(ang) + dx * (22 * cos(ang) - 8)),
+                         (int) (cy + ny * 11 * sin(ang) + dy * (11 * cos(ang) - 4)), 2.5, 230, 235, 240,
+                         (int) (150 * sin(3.14159265 * p)), true);
+            }
+            continue;
+        }
+        if (age < 0.4) /* white-hot, at once */
+            vsp_blob((int) cx, (int) cy, 14 * s, 255, 255, 255, (int) (200 * (1.0 - age / 0.4)), true);
+        vsp_blob((int) cx, (int) cy, 24 * s, c[0], c[1], c[2], (int) (120 * fl), true);
+        switch (f.style) {
+        case VIMP_SLASH: { /* a bright arc sweeping across */
+            double sweep = age < 0.5 ? age / 0.5 : 1.0;
+
+            for (k = 0; k <= 16; k++) {
+                double u2 = (double) k / 16;
+                int al = (int) (255 * fl * (0.4 + 0.6 * sin(3.14159265 * u2)));
+
+                if (u2 > sweep)
+                    break;
+                a = -1.1 + 2.2 * u2;
+                vsp_blob((int) (cx + nx * 26 * s * sin(a) + dx * 10 * s * cos(a)),
+                         (int) (cy + ny * 13 * s * sin(a) + dy * 5 * s * cos(a) - 3 * s * cos(a)), 2.0 * s, 255,
+                         250, 235, al, true);
+                vsp_blob((int) (cx + nx * 26 * s * sin(a) + dx * 10 * s * cos(a)),
+                         (int) (cy + ny * 13 * s * sin(a) + dy * 5 * s * cos(a) - 3 * s * cos(a)), 5.0 * s,
+                         c[0], c[1], c[2], al / 3, true);
+            }
+            break;
+        }
+        case VIMP_PIERCE: /* a jab through, a star at its tip */
+            vsp_line(cx - dx * 18 * s, cy - dy * 9 * s, cx + dx * 18 * s, cy + dy * 9 * s, 1.6 * s, 255, 255,
+                     255, (int) (240 * fl), true, 1.5);
+            for (k = 0; k < 4; k++) {
+                a = k * 1.5708 + 0.785 + t * 3.0;
+                vsp_line(cx + dx * 14 * s, cy + dy * 7 * s, cx + dx * 14 * s + cos(a) * 9 * s,
+                         cy + dy * 7 * s + sin(a) * 9 * s, 1.0, c[0], c[1], c[2], (int) (200 * fl), true, 1.5);
+            }
+            break;
+        case VIMP_CLAW: /* three raking lines */
+            for (k = -1; k <= 1; k++) {
+                double o = k * 7 * s, sweep = age < 0.45 ? age / 0.45 : 1.0;
+                double x0 = cx + nx * o - (dx + nx) * 14 * s, y0 = cy + ny * o * 0.5 - 14 * s;
+                double x1 = cx + nx * o + (dx + nx) * 14 * s, y1 = cy + ny * o * 0.5 + 10 * s;
+
+                vsp_line(x0, y0, x0 + (x1 - x0) * sweep, y0 + (y1 - y0) * sweep, 1.6 * s, 255, 120, 100,
+                         (int) (230 * fl), true, 1.5);
+            }
+            break;
+        case VIMP_BITE: /* jaws snapping shut */
+            for (k = 0; k <= 10; k++) {
+                double a2 = 3.14159265 * k / 10, close = 1.0 - (age < 0.5 ? age / 0.5 : 1.0) * 0.7;
+
+                vsp_blob((int) (cx + cos(a2) * 13 * s), (int) (cy - sin(a2) * 8 * s * close - 2), 1.6, 255,
+                         225, 225, (int) (220 * fl), true);
+                vsp_blob((int) (cx + cos(a2) * 13 * s), (int) (cy + sin(a2) * 8 * s * close + 2), 1.6, 255,
+                         225, 225, (int) (220 * fl), true);
+            }
+            break;
+        default: /* a star burst: blunt, unknown, fire, cold, shock */
+            for (k = 0; k < 6; k++) {
+                double len = (10 + 14 * age) * s;
+
+                a = k * 1.0472 + vsp_hash(f.x, f.y, (int) f.t0) * 1.0;
+                vsp_line(cx + cos(a) * 4 * s, cy + sin(a) * 2 * s, cx + cos(a) * len, cy + sin(a) * len * 0.6,
+                         1.2 * s, c[0], c[1], c[2], (int) (220 * fl), true, 1.6);
+            }
+            break;
+        }
+    }
+    vimp_fx.resize(n);
+}
+
+/* probe: s202 - VULTURE_SELFTEST_IMPACT: real blows (do_attack, mattacku)
+   with a jackal beside you, a dagger flown into a wall through the core's
+   tmp_at, a potion shattering - each shot as it plays */
+static Uint32 vimp_probe_t = 0;
+static int vimp_probe_n = 0, vimp_probe_shots = 0, vimp_probe_sub = 0;
+
+static void
+vimp_probe_shot(const char *tag)
+{
+    const char *dir = getenv("VULTURE_SELFTEST");
+    char p[700];
+    SDL_Surface *o;
+    SDL_Rect a;
+    int hx, hy;
+
+    if (!dir || vimp_probe_shots >= 40 || !vulture_screen || vulture_screen->w < 960 || vulture_screen->h < 540)
+        return;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    vsp_screen(u.ux, u.uy, &hx, &hy);
+    a.w = 960, a.h = 540, a.x = hx - 480, a.y = hy - 310;
+    a.x = a.x < 0 ? 0 : a.x + a.w > vulture_screen->w ? vulture_screen->w - a.w : a.x;
+    a.y = a.y < 0 ? 0 : a.y + a.h > vulture_screen->h ? vulture_screen->h - a.h : a.y;
+    if (!(o = SDL_CreateRGBSurfaceWithFormat(0, a.w, a.h, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return;
+    snprintf(p, sizeof p, "%s\\impact%02d_%s_%02d.bmp", dir, vimp_probe_n, tag, vimp_probe_shots++);
+    if (vulture_frame_to_surface(o, &a))
+        SDL_SaveBMP(o, p);
+    SDL_FreeSurface(o);
+}
+
+static struct monst *
+vimp_probe_jackal(void)
+{
+    static const int ddx[8] = { 1, 1, 0, -1, -1, -1, 0, 1 }, ddy[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+    struct monst *m;
+    int k;
+
+    for (k = 0; k < 8; k++)
+        if ((m = m_at(u.ux + ddx[k], u.uy + ddy[k])) != 0 && !m->mtame && !m->mpeaceful)
+            return m;
+    for (k = 0; k < 8; k++) {
+        int x = u.ux + ddx[k], y = u.uy + ddy[k];
+
+        if (isok(x, y) && ACCESSIBLE(levl[x][y].typ) && !m_at(x, y))
+            return makemon(&mons[PM_JACKAL], x, y, NO_MM_FLAGS);
+    }
+    return NULL;
+}
+
+static void
+vimp_probe_tick(Uint32 now)
+{
+    static const int ddx[8] = { 1, 1, 0, -1, -1, -1, 0, 1 }, ddy[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+    struct monst *m;
+    int k;
+
+    if (vimp_probe_sub == 1) { /* the burst a moment on */
+        if (now - vimp_probe_t > 110) {
+            vimp_probe_shot("later");
+            vimp_probe_sub = 0, vimp_probe_t = now, vimp_probe_n++;
+        }
+        return;
+    }
+    if (now - vimp_probe_t < 900)
+        return;
+    u.uhp = u.uhpmax;
+    u.uhitinc = 20; /* the probe's blows land */
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "impact probe %d\n", vimp_probe_n);
+    switch (vimp_probe_n) {
+    case 0:
+    case 1:
+    case 2: /* you swing at a jackal: two it lives through, then the killing blow */
+        if ((m = vimp_probe_jackal()) != 0) {
+            m->mhpmax = 60, m->mhp = vimp_probe_n < 2 ? 60 : 1;
+            (void) do_attack(m);
+        }
+        break;
+    case 3:
+    case 4: /* one bites back, knowing where you stand */
+        if ((m = vimp_probe_jackal()) != 0) {
+            m->mux = u.ux, m->muy = u.uy, m->msleeping = 0, m->mcanmove = 1;
+            (void) mattacku(m);
+        }
+        break;
+    case 5: { /* a dagger flown into the wall the farthest way */
+        int best = 0, bl = 0, l, x, y;
+
+        for (k = 0; k < 8; k++) {
+            for (l = 0, x = u.ux + ddx[k], y = u.uy + ddy[k];
+                 isok(x, y) && ACCESSIBLE(levl[x][y].typ) && !m_at(x, y) && l < 10; l++)
+                x += ddx[k], y += ddy[k];
+            if (l > bl)
+                bl = l, best = k;
+        }
+        tmp_at(DISP_FLASH, objnum_to_glyph(DAGGER));
+        for (l = 1; l <= bl; l++) {
+            tmp_at(u.ux + ddx[best] * l, u.uy + ddy[best] * l);
+            nh_delay_output();
+        }
+        tmp_at(DISP_END, 0);
+        break;
+    }
+    case 6: /* a potion breaks beside you */
+        for (k = 0; k < 8; k++)
+            if (isok(u.ux + ddx[k], u.uy + ddy[k]) && ACCESSIBLE(levl[u.ux + ddx[k]][u.uy + ddy[k]].typ)) {
+                vulture_shatter_fx(u.ux + ddx[k], u.uy + ddy[k], POT_SICKNESS);
+                break;
+            }
+        break;
+    default:
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "impact probe: done, %d shots\n", vimp_probe_shots);
+        vimp_probe_t = 0;
+        return;
+    }
+    flush_screen(1);
+    vimp_probe_shot("now");
+    vimp_probe_sub = 1, vimp_probe_t = SDL_GetTicks();
 }
 
 /* the overlay pass, after vfx_draw */
@@ -4136,6 +4825,8 @@ vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
         vsp_on_count = 0;
     vsp_draw_waves(now);
     vsp_draw_parts(now, t, dt);
+    vfl_draw(now);    /* s202 */
+    vimp_draw(now, t); /* s202 */
 }
 
 /* probe: s198 - VULTURE_SELFTEST_SPELL fires each ray type, then each
@@ -4606,6 +5297,8 @@ vulture_idle_bob(bool at_map)
     }
     if (vsp_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s198 */
         vsp_probe_tick(now);
+    if (vimp_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s202 */
+        vimp_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -7841,6 +8534,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_SPELL")) { /* probe: s198 rays and explosions */
             vsp_probe_t = SDL_GetTicks() - 1500, vsp_probe_n = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_IMPACT")) { /* probe: s202 blows, a flight, a shatter */
+            vimp_probe_t = SDL_GetTicks(), vimp_probe_n = 0, vimp_probe_sub = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_ITEM")) { /* probe: s136 pulse + glint */
