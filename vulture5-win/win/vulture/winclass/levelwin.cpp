@@ -627,6 +627,8 @@ vtw_flipped(int tile_id, SDL_Surface *s)
    stretch, breathing and lean instead of jaggy nearest pixels), writes into
    one reused buffer, and does the pixel maths inline (no SDL_GetRGBA /
    SDL_MapRGBA per pixel). */
+static int vtx_tint = -1; /* s193: >= 0: the sprite drawn in this colour (0xRRGGBB), its alpha kept */
+
 static void
 vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
          bool red, int alpha)
@@ -641,7 +643,7 @@ vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
 
     if (!img)
         return;
-    if (sx == 1.0 && sy == 1.0 && deg == 0.0 && alpha >= 255) {
+    if (sx == 1.0 && sy == 1.0 && deg == 0.0 && alpha >= 255 && vtx_tint < 0) {
         if (red)
             SDL_SetSurfaceColorMod(img, 255, 70, 70);
         vulture_put_img(dx, dy, img);
@@ -763,6 +765,8 @@ vtx_blit(SDL_Surface *img, int dx, int dy, double sx, double sy, double deg,
                         G = G * 3 / 10;
                         B = B * 3 / 10;
                     }
+                    if (vtx_tint >= 0) /* s193 */
+                        R = (vtx_tint >> 16) & 255, G = (vtx_tint >> 8) & 255, B = vtx_tint & 255;
                     if (A > 255)
                         A = 255;
                     drow[x] = ((Uint32) A << 24) | ((Uint32) (R > 255 ? 255 : R) << 16)
@@ -3301,6 +3305,9 @@ vbob_offset(int j, int i)
     struct monst *m = m_at(j, i);
     double t, ph;
 
+    if (u_at(j, i)) /* s193: levitating or flying, you float a hand's breadth up */
+        return (Levitation || Flying) && !u.usteed
+                   ? (int) (-9.0 - 3.0 * sin(SDL_GetTicks() / 1000.0 * 2.2)) : 0;
     if (!m || DEADMONSTER(m) || !canspotmon(m))
         return 0;
     t = SDL_GetTicks() / 1000.0;
@@ -3575,6 +3582,40 @@ static Uint32 vpause_probe_t = 0; /* s145 probe: shoot the pause menu */
    war against the light: in the start room, in a corridor, in a dark room */
 static Uint32 vfog_probe_t = 0;
 static int vfog_probe_n = 0, vfog_sx = 0, vfog_sy = 0;
+/* probe: s193 - VULTURE_SELFTEST_COND gives the hero condition after
+   condition and shoots each (cond_*.bmp) */
+static Uint32 vcond_probe_t = 0;
+static int vcond_probe_n = 0;
+
+static void
+vcond_probe_set(int n)
+{
+    switch (n) {
+    case 0:
+        make_stunned(300L, FALSE);
+        break;
+    case 1:
+        make_stunned(0L, FALSE);
+        make_confused(300L, FALSE);
+        make_sick(300L, "probe", FALSE, SICK_VOMITABLE);
+        break;
+    case 2:
+        make_confused(0L, FALSE);
+        make_sick(0L, (char *) 0, FALSE, SICK_ALL);
+        make_hallucinated(300L, FALSE, 0L);
+        break;
+    case 3:
+        make_hallucinated(0L, FALSE, 0L);
+        HLevitation = (HLevitation & ~TIMEOUT) | 300L;
+        break;
+    case 4:
+        HLevitation &= ~TIMEOUT;
+        HInvis |= FROMOUTSIDE;
+        newsym(u.ux, u.uy);
+        break;
+    }
+    flush_screen(1);
+}
 
 static bool
 vfog_probe_move(int n)
@@ -3635,6 +3676,20 @@ vulture_idle_bob(bool at_map)
         }
     }
 
+    if (vcond_probe_t && now - vcond_probe_t > 900 && getenv("VULTURE_SELFTEST")) { /* probe: s193 */
+        static const char *const nm[5] = { "stun", "confused_sick", "halluc", "float", "invis" };
+        char pp[700];
+
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(pp, sizeof pp, "%s\\cond_%s.bmp", getenv("VULTURE_SELFTEST"), nm[vcond_probe_n]);
+        vulture_save_frame_bmp(pp);
+        vcond_probe_t = 0;
+        if (++vcond_probe_n < 5) {
+            vcond_probe_set(vcond_probe_n);
+            vcond_probe_t = SDL_GetTicks();
+        }
+    }
     if (vfog_probe_t && now - vfog_probe_t > 900 && getenv("VULTURE_SELFTEST")) { /* probe: s187 */
         /* s192: "room_later" is the same view a little later (the mist drifts) */
         static const char *const nm[4] = { "room", "room_later", "corridor", "dark" };
@@ -6622,8 +6677,8 @@ vselftest(void)
 
     if (!dir || !*dir || stage > 4 || !levwin || !u.ux)
         return;
-    if (stage > 0 && getenv("VULTURE_SELFTEST_FOG")) /* probe: s187 only its own shots */
-        return;
+    if (stage > 0 && (getenv("VULTURE_SELFTEST_FOG") || getenv("VULTURE_SELFTEST_COND")))
+        return; /* probe: s187, s193 - only their own shots */
     if (!t0)
         t0 = SDL_GetTicks();
     if (SDL_GetTicks() - t0 < 1500 + 700u * stage)
@@ -6637,6 +6692,11 @@ vselftest(void)
                 || getenv("VULTURE_SELFTEST_LIT");
         if (getenv("VULTURE_SELFTEST_FLAT")) /* s185: lighting without the normal maps */
             vl_on = true, vl_relief_set(false);
+        if (getenv("VULTURE_SELFTEST_COND")) { /* probe: s193 */
+            vcond_probe_n = 0;
+            vcond_probe_set(0);
+            vcond_probe_t = SDL_GetTicks();
+        }
         if (getenv("VULTURE_SELFTEST_FOG")) { /* probe: s187 */
             vfog_sx = u.ux, vfog_sy = u.uy, vfog_probe_n = 0;
             do_mapping();
@@ -11443,6 +11503,167 @@ vcast_pass(mapdata *md, int cx, int cy, int vx, int vy, int map_tr_y, int diff, 
         }
 }
 
+/*
+ * IMPLEMENTATION_LOG s193: your conditions, on you.  What the status line
+ * already says, shown on the hero too: stunned or confused, you sway (as a
+ * dazed monster does, s162) and stars (stunned) or swirls (confused) circle
+ * your head; blind, dark smoke curls about it; deadly countdowns pulse a
+ * colour over you (turning to stone grey, to slime yellow-green, ill or
+ * food-poisoned green, strangled red); hallucinating, you shimmer through
+ * the colours; stressed or worse under your load, you sweat; levitating or
+ * flying, you float (vbob_offset); invisible and not seeing invisible, you
+ * are drawn faint.  Hero knowledge only - each of these is on the status
+ * line.  Drawn over the lit map (the overlay), posed as the monster pass
+ * drew you (vhp).
+ */
+static struct {
+    bool ok;
+    int tile, x, y, face;
+    double sx, sy, deg;
+} vhp; /* s193: how the hero was drawn this frame */
+
+/* s193: the little sprites: 0 a star, 1 a swirl dot, 2 a puff of smoke,
+   3 a drop of sweat (made once) */
+static SDL_Surface *
+vcond_sprite(int kind)
+{
+    static SDL_Surface *s[4];
+    static const Uint32 col[4] = { 0xFFE65A, 0xBE8CFF, 0x19191F, 0x8CC8FF };
+    int w = kind == 2 ? 18 : kind == 3 ? 5 : 9, h = kind == 3 ? 8 : w, x, y;
+
+    if (s[kind] || kind < 0 || kind > 3)
+        return kind < 0 || kind > 3 ? NULL : s[kind];
+    if (!(s[kind] = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return NULL;
+    SDL_LockSurface(s[kind]);
+    for (y = 0; y < h; y++) {
+        Uint32 *row = (Uint32 *) ((Uint8 *) s[kind]->pixels + y * s[kind]->pitch);
+
+        for (x = 0; x < w; x++) {
+            double dx = (x + 0.5 - w / 2.0) / (w / 2.0), dy = (y + 0.5 - h / 2.0) / (h / 2.0);
+            double r = sqrt(dx * dx + dy * dy), a = 0.0;
+
+            if (kind == 0) { /* a four-pointed star with a bright heart */
+                double ax = fabs(dx), ay = fabs(dy);
+
+                a = (ax < 0.22 ? 1.0 - ay : 0.0) + (ay < 0.22 ? 1.0 - ax : 0.0)
+                    + (r < 0.45 ? 0.6 * (1.0 - r / 0.45) : 0.0);
+            } else if (kind == 1) {
+                a = r < 1.0 ? (1.0 - r) * (1.0 - r) * 1.6 : 0.0;
+            } else if (kind == 2) {
+                a = r < 1.0 ? 0.6 * pow(1.0 - r, 1.4) : 0.0;
+            } else { /* a drop: round below, pointed above */
+                double rr = sqrt(dx * dx + (dy > 0 ? dy * dy : dy * dy * 0.35));
+
+                a = rr < 1.0 ? (1.0 - rr) * 1.4 : 0.0;
+            }
+            a = a < 0.0 ? 0.0 : a > 1.0 ? 1.0 : a;
+            row[x] = ((Uint32) (a * 255) << 24) | col[kind];
+        }
+    }
+    SDL_UnlockSurface(s[kind]);
+    SDL_SetSurfaceBlendMode(s[kind], SDL_BLENDMODE_BLEND);
+    return s[kind];
+}
+
+static void
+vcond_put(int kind, double x, double y, int alpha)
+{
+    SDL_Surface *s = vcond_sprite(kind);
+
+    if (!s || alpha <= 0)
+        return;
+    SDL_SetSurfaceAlphaMod(s, (Uint8) (alpha > 255 ? 255 : alpha));
+    vulture_put_img((int) floor(x - s->w / 2.0), (int) floor(y - s->h / 2.0), s);
+}
+
+/* where a tile's art starts (its first fairly opaque row), from its anchor */
+static int
+vcond_top(int tile_id)
+{
+    static std::map<int, int> cache;
+    vulture_tile *t = vulture_get_tile(tile_id);
+    SDL_Surface *c;
+    int row = 0, x, y;
+
+    if (!t || !t->graphic)
+        return -60;
+    if (cache.count(tile_id))
+        return cache[tile_id];
+    if ((c = SDL_ConvertSurfaceFormat(t->graphic, SDL_PIXELFORMAT_ARGB8888, 0)) != NULL) {
+        SDL_LockSurface(c);
+        for (y = 0, row = -1; y < c->h && row < 0; y++) {
+            const Uint32 *p = (const Uint32 *) ((Uint8 *) c->pixels + y * c->pitch);
+
+            for (x = 0; x < c->w; x++)
+                if ((p[x] >> 24) > 60) {
+                    row = y;
+                    break;
+                }
+        }
+        SDL_UnlockSurface(c);
+        SDL_FreeSurface(c);
+    }
+    cache[tile_id] = t->ymod + (row < 0 ? 0 : row);
+    return cache[tile_id];
+}
+
+static void
+vcond_draw(void)
+{
+    double t = SDL_GetTicks() / 1000.0, pulse = 0.5 + 0.5 * sin(t * 4.0), hx, hy;
+    int tint = -1, ta = 0, k;
+
+    if (!vhp.ok || u.uswallow || Underwater)
+        return;
+    /* a colour pulsing over you: the deadly ones first */
+    if (Stoned)
+        tint = 0x9A9A9A, ta = (int) (70 + 80 * pulse);
+    else if (Slimed)
+        tint = 0x8CC828, ta = (int) (60 + 80 * pulse);
+    else if (Strangled)
+        tint = 0xD22828, ta = (int) (60 + 90 * pulse);
+    else if (Sick)
+        tint = 0x50C83C, ta = (int) (50 + 70 * pulse);
+    else if (Hallucination) { /* through the colours */
+        double h6 = fmod(t * 0.3, 1.0) * 6.0, f = h6 - floor(h6);
+        int seg = (int) h6, r, g, b, up = (int) (255 * f), dn = 255 - up;
+
+        r = seg == 0 || seg == 5 ? 255 : seg == 1 ? dn : seg == 4 ? up : 0;
+        g = seg == 1 || seg == 2 ? 255 : seg == 0 ? up : seg == 3 ? dn : 0;
+        b = seg == 3 || seg == 4 ? 255 : seg == 2 ? up : seg == 5 ? dn : 0;
+        tint = (r << 16) | (g << 8) | b, ta = 75;
+    }
+    if (tint >= 0) {
+        vtx_tint = tint;
+        vtw_put_tile_x(vhp.x, vhp.y, vhp.tile, vhp.face, vhp.sx, vhp.sy, vhp.deg, false, ta);
+        vtx_tint = -1;
+    }
+    hx = vhp.x, hy = vhp.y + vcond_top(vhp.tile) + 5 + vbob_offset(u.ux, u.uy);
+    for (k = 0; k < 3; k++) { /* things circling your head: behind it dimmer */
+        double a = t * 3.2 + k * 2.0944, sn = sin(a);
+
+        if (Stunned)
+            vcond_put(0, hx + cos(a) * 15.0, hy + sn * 5.0, sn < 0 ? 120 : 235);
+        else if (Confusion) {
+            double a2 = -t * 2.4 + k * 2.0944, rr = 12.0 + 4.0 * sin(t * 5.0 + k);
+
+            vcond_put(1, hx + cos(a2) * rr, hy + sin(a2) * rr * 0.4, sin(a2) < 0 ? 110 : 220);
+        }
+        if (Blind) {
+            double a3 = t * 0.9 + k * 2.0944;
+
+            vcond_put(2, hx + cos(a3) * 13.0, hy + 4.0 + sin(a3) * 6.0, 170);
+        }
+    }
+    if (near_capacity() >= MOD_ENCUMBER) /* stressed or worse: sweat */
+        for (k = 0; k < 2; k++) {
+            double ph = fmod(t * 1.25 + k * 0.5, 1.0);
+
+            vcond_put(3, hx + (k ? 9.0 : -9.0), hy + 6.0 + ph * 14.0, (int) (210 * (1.0 - ph)));
+        }
+}
+
 bool
 levelwin::draw()
 {
@@ -11694,6 +11915,7 @@ levelwin::draw()
                 vulture_put_tile(x, y, maptile_floor_edge[i][j].dir[dir_idx]);
         }
     }
+    vhp.ok = false; /* s193 */
     if (vl_fog && vfx_shadows) { /* s191: shadows cast by the lights, on the floor */
         SDL_Rect cr = { (Sint16) this->abs_x, (Sint16) this->abs_y, (Uint16) this->w,
                         (Uint16) this->h };
@@ -11765,6 +11987,10 @@ levelwin::draw()
                 vanim_draw_object(j, i, x, y, map_obj);
 
                 /* 5. Monsters */
+                /* s193: invisible and not seeing it, the game shows nothing
+                   where you stand - you know where you are: drawn faint */
+                if (map_mon == V_TILE_NONE && u_at(j, i) && Invis && !canspotself())
+                    map_mon = MONSTER_TO_VTILE(u.umonnum);
                 if ((cur_tile = vulture_get_tile(map_mon)) != NULL) {
                     /* s75: slide between squares, face the way it went */
                     int tx = x + vtw_ox[i][j],
@@ -11812,12 +12038,26 @@ levelwin::draw()
 
                                 deg += (wm2->mstun ? 9.0 : 6.0) * sin(tt2 * (wm2->mstun ? 5.0 : 3.3) + j);
                                 tx += (int) (2.0 * sin(tt2 * 2.7 + i));
+                            } else if (u_at(j, i) && (Stunned || Confusion)) { /* s193: you too */
+                                double tt2 = SDL_GetTicks() / 1000.0;
+
+                                deg += (Stunned ? 9.0 : 6.0) * sin(tt2 * (Stunned ? 5.0 : 3.3) + j);
+                                tx += (int) (2.0 * sin(tt2 * 2.7 + i));
                             }
                         }
                     }
                     vanim_xform(j, i, &tx, &ty, &xs, &ys, &deg, &red);
-                    vtw_put_tile_x(tx, ty, map_mon, vtw_face[i][j], xs, ys,
-                                   deg, red, 255);
+                    {
+                        int ha = 255;
+
+                        if (u_at(j, i)) { /* s193: how you were drawn, for vcond_draw */
+                            if (Invis && !See_invisible)
+                                ha = 150; /* invisible: faint (110 was too faint to read) */
+                            vhp.ok = true, vhp.tile = map_mon, vhp.x = tx, vhp.y = ty;
+                            vhp.face = vtw_face[i][j], vhp.sx = xs, vhp.sy = ys, vhp.deg = deg;
+                        }
+                        vtw_put_tile_x(tx, ty, map_mon, vtw_face[i][j], xs, ys, deg, red, ha);
+                    }
                     if (iflags.hilite_pet
                         && map_data->get_glyph(MAP_PET, j, i))
                         vulture_put_img(
@@ -11874,6 +12114,7 @@ levelwin::draw()
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
     Uint32 vpf_d = SDL_GetTicks(); /* probe */
     vhalo_draw(map_centre_x, map_centre_y, view_x, view_y); /* s171 */
+    vcond_draw(); /* s193: your conditions, on you */
     vambient_draw(this->abs_x, this->abs_y, this->w, this->h); /* s160 */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
     vpath_draw(map_centre_x, map_centre_y, view_x, view_y); /* s125 */

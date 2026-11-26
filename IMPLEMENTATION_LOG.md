@@ -3973,6 +3973,32 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   "mist=", on by default; with lighting).  Probe: VULTURE_SELFTEST_FOG now
   also shoots fog_room_later (the same view 0.9 s on - the mist has moved).
 
+### 193. Your conditions, on you
+
+- The user: show conditions on the character, not only in the status line.
+  What the status line already says (hero knowledge only), on the hero:
+  - stunned or confused: you sway like a dazed monster (s162's formula), and
+    yellow stars (stunned) or violet swirls (confused) circle your head
+    (behind it dimmer);
+  - blind: dark smoke curls about your head;
+  - deadly countdowns pulse a colour over you - turning to stone grey, to
+    slime yellow-green, strangled red, ill or food-poisoned green (in that
+    order of precedence); hallucinating: you shimmer through the colours;
+  - stressed or worse under your load: drops of sweat;
+  - levitating or flying (not riding): you float a hand's breadth up,
+    bobbing (vbob_offset; the contact shadow stays on the floor);
+  - invisible and not seeing invisible: the game shows nothing where you
+    stand, so you are drawn there faint (your own form, 60%).
+- How: the monster pass records how it drew you (vhp: tile, place, facing,
+  scale, lean); vcond_draw, over the lit map, draws a colour-tinted copy of
+  you in that pose (the sprite transformer's new `vtx_tint`: the colour
+  replaces the sprite's, its alpha kept) and the little procedural sprites
+  (star, swirl dot, smoke puff, sweat drop) around your head - the art's
+  first opaque row found once per tile (vcond_top).
+- Probe: VULTURE_SELFTEST_COND gives the hero stun; confusion + illness;
+  hallucination; levitation; invisibility - one after another, shooting
+  each (cond_*.bmp).  All five read in the shots.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
