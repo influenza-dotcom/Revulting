@@ -3928,6 +3928,30 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   ~1).  The same lit frame on the GPU and in software differs by a mean of
   0.18 per channel.
 
+### 191. Shadows cast by the lights
+
+- The user: shadows from your light.  Only the round contact blob (s158)
+  sat under things.  Now every creature in sight (you too) and every big
+  object (an object tile 44 px tall or more: boulders, statues) lays its
+  silhouette on the floor, away from the strongest light that reaches it
+  with a clear path (the light layer's point lights, vl_pls - your torch,
+  lamps, glowing creatures, fires), skipping a light on its own square (your
+  torch never shadows you).  Length: distance / (light's height x 1.2),
+  0.3-1.6 of the sprite's height, laid along the iso floor (2:1); darkness:
+  0.75 x (that light's share of the light where it stands x 2.5, capped) x
+  (its strength x 5, capped), fading to 45% at the tip.  Drawn after the
+  floor pass and before anything stands on it, so things in front cover it;
+  posed like vtw_put_tile_x (glide, facing).  An invisible hero who can't
+  see invisible casts none.
+- GPU map: one textured quad per silhouette (SDL_RenderGeometry, black with
+  per-corner alpha - `vulture_gpumap_shadow`); software: the same affine map
+  rasterized (inverse-mapped per pixel).  Lighting on only; the Shadows
+  switch in Visual effects (was "Contact shadows") covers both kinds.
+- Probes: VULTURE_SELFTEST_LIGHT now also saves selftest_shadow.bmp and
+  selftest_noshadow.bmp (the same frame, shadows on/off); "cast:" log lines
+  give each shadow's light, weight and darkness once a second.  Both paths
+  darken the expected silhouettes (software: 3483 px by more than 20).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

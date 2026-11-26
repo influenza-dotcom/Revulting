@@ -6914,6 +6914,16 @@ vselftest(void)
             snprintf(fp2, sizeof fp2, "%s\\selftest_flat.bmp", dir);
             vulture_save_frame_bmp(fp2);
             vl_relief_set(true);
+            vfx_shadows = false; /* probe: s191 the same frame without shadows */
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            snprintf(fp2, sizeof fp2, "%s\\selftest_noshadow.bmp", dir);
+            vulture_save_frame_bmp(fp2);
+            vfx_shadows = true;
+            levwin->force_redraw();
+            ROOTWIN->draw_windows();
+            snprintf(fp2, sizeof fp2, "%s\\selftest_shadow.bmp", dir);
+            vulture_save_frame_bmp(fp2);
         }
         if (getenv("VULTURE_SELFTEST_MARK")) { /* probe: s148 markers on wall / boulder / floor */
             char fp3[700];
@@ -9261,7 +9271,7 @@ vfx_menu(void)
         anything any;
         menu_item *sel = NULL;
         char lb[6][80];
-        const char *nm[6] = { "Normal-mapped lighting", "Contact shadows", "Atmosphere particles",
+        const char *nm[6] = { "Normal-mapped lighting", "Shadows (cast by lights too)", "Atmosphere particles",
                               "Dust puffs when walking", "Camera jolts from heavy impacts",
                               "Rising words (SNEAK ATTACK, LEVEL UP...)" };
         bool on[6];
@@ -10981,6 +10991,214 @@ vzoom_step(int dir)
     vzoom = vzoom_steps[vzoom_idx];
 }
 
+/*
+ * IMPLEMENTATION_LOG s191: shadows cast by the lights.  Every creature in
+ * sight (you too) and every big object (boulders, statues) lays its
+ * silhouette on the floor, stretching away from the strongest light that
+ * reaches it with a clear path - your torch, a lamp, a fire - longer the
+ * farther it stands from the light, darker the more of the light where it
+ * stands is that light's, fading towards the tip.  A light's own carrier
+ * casts none from it (your torch never shadows you).  Drawn after the floor
+ * and before anything standing on it, so creatures in front cover it.  Only
+ * while lighting is on (its lights, vl_pls); the Shadows switch covers it.
+ * The GPU map draws the silhouette as one textured quad (SDL_RenderGeometry);
+ * in software it is rasterized the same way.
+ */
+#define VCS_MAX 0.75f /* the darkest a cast shadow gets */
+
+/* one silhouette - img drawn at (dx, dy), its feet at (fx, fy) - laid on the
+   floor: a sprite point u right of and v above the feet lands at
+   feet + u * w + v * h; alpha a0 at the feet, fading to 45% at the top */
+static void
+vcast_one(SDL_Surface *img, int dx, int dy, float fx, float fy, const float *w, const float *h,
+          float a0, const SDL_Rect *clip)
+{
+    float vtop = fy - (float) dy, us[4], vs[4], qx[4], qy[4];
+    int k;
+
+    if (vtop < 4.0f || a0 <= 0.0f)
+        return;
+    us[0] = us[3] = (float) dx - fx, us[1] = us[2] = us[0] + (float) img->w;
+    vs[0] = vs[1] = vtop, vs[2] = vs[3] = vtop - (float) img->h;
+    for (k = 0; k < 4; k++)
+        qx[k] = fx + us[k] * w[0] + vs[k] * h[0], qy[k] = fy + us[k] * w[1] + vs[k] * h[1];
+    if (vulture_gpumap_on) {
+        float q[8];
+        Uint8 a4[4];
+
+        for (k = 0; k < 4; k++) {
+            float f = vs[k] / vtop, a;
+
+            f = f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;
+            a = a0 * (1.0f - 0.55f * f);
+            q[2 * k] = qx[k], q[2 * k + 1] = qy[k];
+            a4[k] = (Uint8) (255.0f * (a < 0.0f ? 0.0f : a > 1.0f ? 1.0f : a));
+        }
+        (void) vulture_gpumap_shadow(img, q, a4);
+        return;
+    }
+    {
+        SDL_Surface *s = vulture_screen;
+        float det = w[0] * h[1] - w[1] * h[0], i00, i01, i10, i11;
+        int x0, y0, x1, y1, px, py, rs, gs, bs, ash;
+        Uint32 mask;
+
+        if (fabsf(det) < 1e-4f || !s || s->format->BytesPerPixel != 4
+            || img->format->BytesPerPixel != 4 || !img->format->Amask)
+            return;
+        i00 = h[1] / det, i01 = -h[0] / det, i10 = -w[1] / det, i11 = w[0] / det;
+        x0 = (int) floorf(min(min(qx[0], qx[1]), min(qx[2], qx[3])));
+        x1 = (int) ceilf(max(max(qx[0], qx[1]), max(qx[2], qx[3])));
+        y0 = (int) floorf(min(min(qy[0], qy[1]), min(qy[2], qy[3])));
+        y1 = (int) ceilf(max(max(qy[0], qy[1]), max(qy[2], qy[3])));
+        x0 = max(x0, (int) clip->x), y0 = max(y0, (int) clip->y);
+        x1 = min(x1, (int) (clip->x + clip->w)), y1 = min(y1, (int) (clip->y + clip->h));
+        x0 = max(x0, 0), y0 = max(y0, 0), x1 = min(x1, s->w), y1 = min(y1, s->h);
+        if (x1 <= x0 || y1 <= y0)
+            return;
+        rs = s->format->Rshift, gs = s->format->Gshift, bs = s->format->Bshift;
+        mask = ~(((Uint32) 255 << rs) | ((Uint32) 255 << gs) | ((Uint32) 255 << bs));
+        ash = img->format->Ashift;
+        if (SDL_MUSTLOCK(s))
+            SDL_LockSurface(s);
+        SDL_LockSurface(img);
+        for (py = y0; py < y1; py++) {
+            Uint32 *row = (Uint32 *) ((Uint8 *) s->pixels + (size_t) py * s->pitch);
+
+            for (px = x0; px < x1; px++) {
+                float ox = (float) px + 0.5f - fx, oy = (float) py + 0.5f - fy;
+                float u = i00 * ox + i01 * oy, v = i10 * ox + i11 * oy, a;
+                int sx = (int) floorf(fx + u - (float) dx), sy = (int) floorf(fy - v - (float) dy);
+                int ia, m;
+                Uint32 p;
+
+                if (v < 0.0f || sx < 0 || sy < 0 || sx >= img->w || sy >= img->h)
+                    continue;
+                ia = (int) ((((Uint32 *) ((Uint8 *) img->pixels + (size_t) sy * img->pitch))[sx] >> ash)
+                            & 255);
+                if (!ia)
+                    continue;
+                a = (float) ia / 255.0f * a0 * (1.0f - 0.55f * (v > vtop ? 1.0f : v / vtop));
+                m = (int) (256.0f * (1.0f - a));
+                p = row[px];
+                row[px] = (p & mask) | ((((p >> rs) & 255) * (Uint32) m >> 8) << rs)
+                          | ((((p >> gs) & 255) * (Uint32) m >> 8) << gs)
+                          | ((((p >> bs) & 255) * (Uint32) m >> 8) << bs);
+            }
+        }
+        SDL_UnlockSurface(img);
+        if (SDL_MUSTLOCK(s))
+            SDL_UnlockSurface(s);
+    }
+}
+
+/* the silhouette's axes for a light at (lx, ly) on the floor, hanging lift
+   px above it: the shadow runs away from the light along the floor (the
+   iso floor is squashed 2:1), longer the farther the light */
+static void
+vcast_draw(SDL_Surface *img, int dx, int dy, float fx, float fy, float lx, float ly, float lift,
+           float a0, const SDL_Rect *clip)
+{
+    float ex = fx - lx, ey = (fy - ly) * 2.0f, dist = sqrtf(ex * ex + ey * ey), ux, uy, kk;
+    float w[2], h[2];
+
+    if (dist < 6.0f || !img)
+        return;
+    ux = ex / dist, uy = ey / dist;
+    kk = dist / ((lift > 10.0f ? lift : 10.0f) * 1.2f);
+    kk = kk < 0.3f ? 0.3f : kk > 1.6f ? 1.6f : kk;
+    h[0] = ux * kk, h[1] = uy * kk * 0.5f;
+    w[0] = -uy, w[1] = ux * 0.5f;
+    vcast_one(img, dx, dy, fx, fy, w, h, a0, clip);
+}
+
+/* s191: every cast shadow on the visible map (after the floor pass) */
+static void
+vcast_pass(mapdata *md, int cx, int cy, int vx, int vy, int map_tr_y, int diff, int sum,
+           const SDL_Rect *clip)
+{
+    int ti, tj, rot_dj, rot_di;
+
+    static Uint32 vcs_log = 0; /* probe: s191 */
+    bool plog = getenv("VULTURE_SELFTEST") && SDL_GetTicks() - vcs_log > 1000;
+
+    if (plog) {
+        vcs_log = SDL_GetTicks();
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "cast: %d lights\n", (int) vl_pls.size());
+    }
+    if (vl_pls.empty() || !md)
+        return;
+    for (ti = -map_tr_y; ti <= map_tr_y; ti++)
+        for (tj = diff + ti; tj + ti <= sum; tj++) {
+            int j, i, mon, obj, x, y, k, best = -1, lsx, lsy;
+            float bw = 0.0f, a0;
+
+            v_rot(tj, ti, vulture_view_rot, &rot_dj, &rot_di);
+            j = vx + rot_dj, i = vy + rot_di;
+            if (j < 1 || j >= COLNO || i < 0 || i >= ROWNO)
+                continue;
+            if ((!cansee(j, i) && !u_at(j, i)) || vl_S[i][j] < 0.04f)
+                continue;
+            mon = md->get_glyph(MAP_MON, j, i), obj = md->get_glyph(MAP_OBJ, j, i);
+            if (mon == V_TILE_NONE && obj == V_TILE_NONE)
+                continue;
+            for (k = 0; k < (int) vl_pls.size(); k++) { /* the strongest light with a clear path */
+                const vl_pl_t &p = vl_pls[k];
+                float d = sqrtf((float) ((p.x - j) * (p.x - j) + (p.y - i) * (p.y - i)));
+                float kk = 1.0f - d / (p.rad + 1.0f), w;
+
+                if (d < 0.5f || kk <= 0.0f) /* its own light, or out of reach */
+                    continue;
+                w = p.inten * kk * kk;
+                if (w > bw && clear_path(p.x, p.y, j, i))
+                    bw = w, best = k;
+            }
+            if (best < 0)
+                continue;
+            a0 = bw / (vl_L[i][j] > 0.1f ? vl_L[i][j] : 0.1f) * 2.5f;
+            a0 = VCS_MAX * (a0 > 1.0f ? 1.0f : a0) * (bw * 5.0f > 1.0f ? 1.0f : bw * 5.0f);
+            if (plog) /* probe: s191 */
+                vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                                  "cast: (%d,%d) mon %d obj %d light %d at (%d,%d) w %.2f L %.2f a0 %.2f gpu %d\n",
+                                  j, i, mon != V_TILE_NONE, obj != V_TILE_NONE, best, vl_pls[best].x,
+                                  vl_pls[best].y, bw, vl_L[i][j], a0, (int) vulture_gpumap_on);
+            if (a0 < 0.04f)
+                continue;
+            {
+                const vl_pl_t &p = vl_pls[best];
+
+                if (p.mover)
+                    vfx_mover_screen(p.x, p.y, cx, cy, vx, vy, &lsx, &lsy);
+                else
+                    vfx_square_screen(p.x, p.y, cx, cy, vx, vy, &lsx, &lsy);
+                x = cx + V_MAP_XMOD * (tj - ti), y = cy + V_MAP_YMOD * (tj + ti);
+                if (mon != V_TILE_NONE && !(u_at(j, i) && Invis && !See_invisible)) {
+                    vulture_tile *t = vulture_get_tile(mon);
+
+                    if (t && t->graphic) { /* posed as vtw_put_tile_x poses it */
+                        int tx = x + vtw_ox[i][j], ty = y + vtw_oy[i][j];
+                        int art = vtw_art_facing(mon, t->graphic), face = vtw_face[i][j];
+                        bool flip = face != 0 && ((art == 0 && face < 0) || (art != 0 && art != face));
+                        SDL_Surface *img = t->graphic, *f;
+                        int dx = tx + t->xmod;
+
+                        if (flip && (f = vtw_flipped(mon, t->graphic)) != NULL)
+                            img = f, dx = tx - t->xmod - t->graphic->w + 1;
+                        vcast_draw(img, dx, ty + t->ymod, (float) tx, (float) ty + 2.0f,
+                                   (float) lsx, (float) lsy, p.lift, a0, clip);
+                    }
+                }
+                if (obj != V_TILE_NONE) { /* boulders, statues: the big ones only */
+                    vulture_tile *t = vulture_get_tile(obj);
+
+                    if (t && t->graphic && t->graphic->h >= 44)
+                        vcast_draw(t->graphic, x + t->xmod, y + t->ymod, (float) x, (float) y + 2.0f,
+                                   (float) lsx, (float) lsy, p.lift, a0, clip);
+                }
+            }
+        }
+}
+
 bool
 levelwin::draw()
 {
@@ -11231,6 +11449,15 @@ levelwin::draw()
             for (dir_idx = 0; dir_idx < 12; dir_idx++)
                 vulture_put_tile(x, y, maptile_floor_edge[i][j].dir[dir_idx]);
         }
+    }
+    if (vl_fog && vfx_shadows) { /* s191: shadows cast by the lights, on the floor */
+        SDL_Rect cr = { (Sint16) this->abs_x, (Sint16) this->abs_y, (Uint16) this->w,
+                        (Uint16) this->h };
+        bool cap = vulture_normal_capture;
+
+        vulture_normal_capture = false;
+        vcast_pass(map_data, map_centre_x, map_centre_y, view_x, view_y, map_tr_y, diff, sum, &cr);
+        vulture_normal_capture = cap;
     }
 
     for (__i = -map_tr_y; __i <= map_tr_y; __i++) {

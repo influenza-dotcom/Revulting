@@ -1111,6 +1111,31 @@ void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, double sy
 	SDL_RenderCopyExF(vulture_gpu, t, NULL, &d, deg, &c, SDL_FLIP_NONE);
 }
 
+/* s191: a sprite's silhouette laid on the map layer as a cast shadow: quad -
+   the screen corners of the image's top-left, top-right, bottom-right and
+   bottom-left; a4 - their alphas (black, faded by these) */
+bool vulture_gpumap_shadow(SDL_Surface *s, const float *quad, const Uint8 *a4)
+{
+	static const int idx[6] = { 0, 1, 2, 0, 2, 3 };
+	SDL_Vertex v[4];
+	SDL_Texture *t;
+	int k;
+
+	if (!vulture_gpumap_on || !s || !(t = vgm_texture(s)))
+		return false;
+	for (k = 0; k < 4; k++) {
+		v[k].position.x = quad[2 * k], v[k].position.y = quad[2 * k + 1];
+		v[k].color.r = v[k].color.g = v[k].color.b = 0, v[k].color.a = a4[k];
+		v[k].tex_coord.x = (k == 1 || k == 2) ? 1.0f : 0.0f;
+		v[k].tex_coord.y = k >= 2 ? 1.0f : 0.0f;
+	}
+	SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+	SDL_SetTextureColorMod(t, 255, 255, 255);
+	SDL_SetTextureAlphaMod(t, 255);
+	SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+	return SDL_RenderGeometry(vulture_gpu, t, v, 4, idx, 6) == 0;
+}
+
 /* s183: vzoom_apply's rectangles (render space) for the map layer; NULL: none */
 void vulture_gpumap_set_zoom(const SDL_Rect *src, const SDL_Rect *dst, int k, bool exact)
 {
