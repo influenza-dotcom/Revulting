@@ -9814,14 +9814,14 @@ vl_rockish(mapdata *md, int x, int y) /* wall or rock, as known */
 }
 #define VL_LIT 0.70f     /* a lit room in sight (s152: 0.80) */
 #define VL_DARK 0.26f    /* an unlit square in sight - next to you (0.38) */
-#define VL_MEM 0.26f     /* remembered: the fog of war (0.50 on a x0.68 tile) */
-#define VL_MEMDARK 0.16f /* a remembered dark room's floor (0.50 on a x0.31 tile) */
+#define VL_MEM 0.19f     /* remembered: the fog of war (0.50 on a x0.68 tile; s188: 0.26) */
+#define VL_MEMDARK 0.12f /* a remembered dark room's floor (0.50 on a x0.31 tile; s188: 0.16) */
 #define VL_DMAX 0.94f    /* the darkness where no light reaches (0.80) */
 #define VL_TINT 0.45f    /* how strongly a coloured light colours (0.35) */
 #define VL_GLOW 0.30f    /* light past full brightness glows in its colour */
-#define VL_FOG_R 0.035f  /* the fog of war's shadow: a cold dark blue */
-#define VL_FOG_G 0.050f
-#define VL_FOG_B 0.100f
+#define VL_FOG_R 0.028f  /* the fog of war's shadow: a cold dark blue (s188: 0.035 */
+#define VL_FOG_G 0.040f  /* 0.050 0.100 - the user: a bit darker) */
+#define VL_FOG_B 0.080f
 static SDL_Surface *vl_low = NULL, *vl_full = NULL;
 struct vl_flash_t {
     int x, y;

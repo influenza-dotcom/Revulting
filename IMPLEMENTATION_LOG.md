@@ -3864,6 +3864,15 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   0.2 per channel; the light stage stays at a 1 ms median (3 ms p90).
   Unlit play is unchanged.
 
+### 188. The fog of war a bit darker
+
+- The user: make the fog a bit darker.  Remembered squares' light 0.26 ->
+  0.19 (a remembered dark room's floor 0.16 -> 0.12), and the fog's cold
+  shadow colour dimmer (0.035 0.050 0.100 -> 0.028 0.040 0.080), so the haze
+  lifts dark pixels less.  Measured (VULTURE_SELFTEST_FOG, lit): remembered
+  corridor floor ~24 (was ~30), still readable; the void's borrowed light for
+  walls follows.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
