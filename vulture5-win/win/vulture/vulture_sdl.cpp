@@ -950,12 +950,18 @@ static void vgm_diff(SDL_Surface *s, const SDL_Rect *r, std::vector<SDL_Rect> &o
 		return;
 	}
 	for (by = c.y; by < c.y + c.h; by += BH) {
-		int bh = c.y + c.h - by < BH ? c.y + c.h - by : BH, run0 = -1, run1 = -1;
+		int bh = c.y + c.h - by < BH ? c.y + c.h - by : BH, run0 = -1, run1 = -1, bw;
 
-		for (bx = c.x; bx <= c.x + c.w; bx += BW) {
+		/* s197: each step is the block's own width, so the one after the last
+		   block lands on the end - the pass that sends a run still open.  A
+		   step of 64 jumped past the end whenever the width wasn't a multiple
+		   of 64 (a menu, a tooltip - any refresh but the whole 1920 screen),
+		   and a run reaching the right edge, all of a menu just drawn, never
+		   went up: the screen stayed as it was until a full present. */
+		for (bx = c.x; ; bx += bw) {
 			bool last = bx >= c.x + c.w, changed = false;
-			int bw = last ? 0 : (c.x + c.w - bx < BW ? c.x + c.w - bx : BW);
 
+			bw = last ? 0 : (c.x + c.w - bx < BW ? c.x + c.w - bx : BW);
 			for (y = by; !last && y < by + bh && !changed; y++)
 				changed = memcmp((Uint8 *) s->pixels + (size_t) y * s->pitch + (size_t) bx * 4,
 					&vgm_shadow[(size_t) y * s->w + bx], (size_t) bw * 4) != 0;
@@ -971,6 +977,8 @@ static void vgm_diff(SDL_Surface *s, const SDL_Rect *r, std::vector<SDL_Rect> &o
 				out.push_back(SDL_Rect { run0, by, run1 - run0, bh });
 				run0 = -1;
 			}
+			if (last)
+				break;
 		}
 	}
 }
@@ -1146,6 +1154,23 @@ static void vgpu_present(const SDL_Rect *r)
 			r ? r->w : s->w, r ? r->h : s->h, (unsigned) ((pc1 - pc0) * 1000000 / pf),
 			(unsigned) ((pc2 - pc1) * 1000000 / pf), (unsigned) ((pc3 - pc2) * 1000000 / pf),
 			vgm_diff_on == 1 ? vgm_diff_up : (unsigned) ((r ? r->w : s->w) * (r ? r->h : s->h)));
+	}
+	if (vgm_diff_on == 1 && getenv("VULTURE_SELFTEST_DIFFUP") && s->format->BytesPerPixel == 4
+		&& vgm_shadow_w == s->w && vgm_shadow_h == s->h) { /* probe: s197 */
+		SDL_Rect c = r ? *r : SDL_Rect { 0, 0, s->w, s->h };
+		unsigned miss = 0;
+		int x, y;
+
+		if (c.x < 0) c.w += c.x, c.x = 0;
+		if (c.y < 0) c.h += c.y, c.y = 0;
+		if (c.x + c.w > s->w) c.w = s->w - c.x;
+		if (c.y + c.h > s->h) c.h = s->h - c.y;
+		for (y = c.y; y < c.y + c.h; y++)
+			for (x = c.x; x < c.x + c.w; x++)
+				miss += ((Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch))[x]
+					!= vgm_shadow[(size_t) y * s->w + x];
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+			"diffup check: %dx%d at %d,%d - %u px of it not on the GPU\n", c.w, c.h, c.x, c.y, miss);
 	}
 }
 

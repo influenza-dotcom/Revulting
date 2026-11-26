@@ -6936,6 +6936,10 @@ vselftest(void)
         break;
     }
     case 1:
+        if (getenv("VULTURE_SELFTEST_MENUKEY")) { /* probe: s197 a menu opened by its key */
+            vprobe_push_key(SDLK_i);
+            break;
+        }
         if (getenv("VULTURE_SELFTEST_ITEM")) { /* probe: s136 pulse + glint */
             coord cc;
             vulture_search_fx();

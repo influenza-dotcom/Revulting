@@ -4072,6 +4072,42 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Probes: scratchpad window_watch.ps1 (hidden window; game windows seen,
   when, and the log line at each change); PAN still 1 move of (300, 0).
 
+### 197. Menus reach the screen again
+
+- The user, after s196: "bug persists, if i press any key that opens a menu
+  the screen gets frozen".  s196 fixed a real window remake, but not this.
+- Cause: s194's diff upload.  vgm_diff walks each 16-row band in 64-px
+  blocks and sends a run of changed blocks when an unchanged block - or the
+  pass after the last block - closes it.  The column loop stepped by 64 and
+  ran while bx <= the right edge, so it only landed on that closing pass when
+  the width was a multiple of 64: the whole 1920 screen, but hardly ever a
+  menu.  A menu just drawn changes every block of its rectangle, so each band
+  was one run reaching the right edge, and none of it went up.  A menu opened
+  from the prompt is presented by its own region refresh and nothing else
+  (the map is idle under it), so the screen stayed as it was; alt-tabbing
+  back sends FOCUS_GAINED -> vulture_refresh(), a 1920-wide present, and the
+  menu appeared.  OpenGL only (lighting on, the default): Direct3D sends the
+  whole rectangle and never compares.
+- Fix: each step is the block's own width, so the one after the last block
+  lands exactly on the end, and the loop leaves after that pass.
+- Tested on its own: scratchpad diffh/harness.cpp cuts vgm_diff out of
+  vulture_sdl.cpp and draws 4000 rectangles over a 1920x1080 frame (whole
+  menus, scattered pixels, every 10th a full present).  Before: 3478 presents
+  left pixels unsent (188 M px), every one a width not a multiple of 64.
+  After: none, and the copy matches what the fake texture got.
+- Tested in the game: probe VULTURE_SELFTEST_MENUKEY presses i at the prompt
+  (a real key event); VULTURE_SELFTEST_DIFFUP checks after each OpenGL present
+  that every pixel of its rectangle is on the GPU (vgm_shadow matches the
+  frame there).  Old loop (a side build): the inventory, 652x734, sent 0 px,
+  474102 px of it not on the GPU, and no present after it; tooltips (69x21)
+  were lost the same way.  Fixed: it sent all 478568 px; 74 presents checked,
+  none missing anything.
+- Why the probes missed it: their shots read the frame on the CPU
+  (vulture_save_frame_bmp), never what went to the GPU, and a menu opened by a
+  probe inside the map's idle tick keeps the idle frames' full presents
+  coming, which carry it up.  DIFFUP checks the GPU side; MENUKEY opens a
+  menu the way a key does.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
