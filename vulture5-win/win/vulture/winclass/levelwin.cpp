@@ -606,6 +606,7 @@ vtw_flipped(int tile_id, SDL_Surface *s)
     }
     if (SDL_GetSurfaceBlendMode(s, &bm) == 0)
         SDL_SetSurfaceBlendMode(f, bm);
+    vulture_gpu_hd_derive(f, s, true, 256, 256); /* s201: its HD art, mirrored */
     if (SDL_GetColorKey(s, &key) == 0)
         SDL_SetColorKey(f, SDL_TRUE, key);
     if (SDL_GetSurfaceAlphaMod(s, &am) == 0)
@@ -4288,6 +4289,7 @@ static void vgs_probe(int stage, const char *dir); /* s145 probe */
 static void vcontrols_page(void); /* s175 */
 static void vkeys_probe(const char *dir); /* s195 probe */
 static void vpn_probe(const char *dir);   /* s199 probe */
+void vzoom_probe_set(int idx);            /* s201 probe */
 static SDL_Rect vbtn_rect[4];
 
 /* probe: s166 - VULTURE_SELFTEST_SOAK: play by itself, through real input.
@@ -7587,6 +7589,8 @@ vselftest(void)
             vl_on = true, vl_relief_set(false);
         if (getenv("VULTURE_SELFTEST_KEYS")) /* probe: s195 */
             vkeys_probe(dir);
+        if (getenv("VULTURE_SELFTEST_ZOOM")) /* probe: s201 */
+            vzoom_probe_set(atoi(getenv("VULTURE_SELFTEST_ZOOM")));
         if (getenv("VULTURE_SELFTEST_COND")) { /* probe: s193 */
             vcond_probe_n = 0;
             vcond_probe_set(0);
@@ -12908,6 +12912,37 @@ static const double vzoom_steps[] = { 1.0, 1.5, 2.0, 3.0 };
 static int vzoom_idx = 0;
 static SDL_Surface *vzoom_buf = NULL, *vzoom_big = NULL;
 
+/* s201: vzoom_apply's rectangles, ahead of the map pass - the 1x region src
+   that will fill dst (render space) */
+static bool
+vzoom_rects(int ax, int ay, int w, int h, SDL_Rect *src, SDL_Rect *dst)
+{
+    int k;
+
+    if (vzoom <= 1.0 || w < 16 || h < 16)
+        return false;
+    k = (int) ceil(vzoom - 1e-6);
+    if (fabs(vzoom - k) < 1e-6) { /* as vzoom_apply's exact branch */
+        src->w = w / k, src->h = h / k;
+        src->x = ax + (w - src->w) / 2, src->y = ay + (h - src->h) / 2;
+        dst->w = src->w * k, dst->h = src->h * k;
+        dst->x = ax + (w - dst->w) / 2, dst->y = ay + (h - dst->h) / 2;
+    } else {
+        src->w = (int) (w / vzoom), src->h = (int) (h / vzoom);
+        src->x = ax + (w - src->w) / 2, src->y = ay + (h - src->h) / 2;
+        dst->x = ax, dst->y = ay, dst->w = w, dst->h = h;
+    }
+    return true;
+}
+
+/* probe: s201 - VULTURE_SELFTEST_ZOOM=n starts at zoom step n */
+void
+vzoom_probe_set(int idx)
+{
+    if (idx >= 0 && idx < (int) (sizeof vzoom_steps / sizeof vzoom_steps[0]))
+        vzoom_idx = idx, vzoom = vzoom_steps[idx];
+}
+
 static void
 vzoom_apply(int ax, int ay, int w, int h)
 {
@@ -13514,6 +13549,15 @@ levelwin::draw()
 
         cr.x = clip_tl_x, cr.y = clip_tl_y;
         cr.w = clip_br_x + 1 - clip_tl_x, cr.h = clip_br_y + 1 - clip_tl_y;
+        { /* s201: zoomed in with HD art - the map layer is drawn at the zoom */
+            SDL_Rect zs, zd;
+
+            if (vulture_gpumap_hd_ok()
+                && vzoom_rects(this->abs_x, this->abs_y, this->w, this->h, &zs, &zd))
+                vulture_gpumap_set_view(&zs, &zd);
+            else
+                vulture_gpumap_set_view(NULL, NULL);
+        }
         vgm = vulture_gpumap_begin(&cr);
     }
     if (vgm)

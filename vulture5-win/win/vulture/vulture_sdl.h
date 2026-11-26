@@ -116,6 +116,12 @@ extern void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, do
 extern void vulture_gpumap_set_zoom(const SDL_Rect *src, const SDL_Rect *dst, int k,
                                     bool exact);
 extern void vulture_gpu_forget(SDL_Surface *s);
+/* s201: sharper art when zoomed in (tiles_hd/) */
+extern void vulture_gpu_hd_register(SDL_Surface *s, const char *file_1x, double alpha);
+extern void vulture_gpu_hd_derive(SDL_Surface *copy, SDL_Surface *orig, bool flip, int rgb,
+                                  int alpha);
+extern void vulture_gpumap_set_view(const SDL_Rect *src, const SDL_Rect *dst);
+extern bool vulture_gpumap_hd_ok(void);
 /* the frame as it would be shown (map layer + overlay), copied into out
  * (ARGB8888) from `area` of the render surface; plain copy without a GPU map */
 extern bool vulture_frame_to_surface(SDL_Surface *out, const SDL_Rect *area);

@@ -428,6 +428,36 @@ struct vgm_ent {
 static std::unordered_map<SDL_Surface *, vgm_ent> vgm_cache;
 
 /*
+ * IMPLEMENTATION_LOG s201: sharper art when zoomed in.  Zoom drew the map at
+ * 1x and blew the picture up - nearest at 2x and 3x, so every sprite turned
+ * into blocks.  With tiles_hd/ (every sprite at double resolution, made by
+ * toolchain/make_hd_tiles.py) the map layer is drawn AT the zoom instead:
+ * levelwin sets the view each frame (vulture_gpumap_set_view: the 1x region
+ * that will fill the window, and where it goes), and every map draw - blits,
+ * posed sprites, cast shadows, normal maps - goes through vgm_vx / vgm_vy,
+ * from the sprite's HD art where it has some (linear filtering otherwise).
+ * The textures stay screen-sized, the lighting shader maps its pixels back
+ * to the 1x map (u_view, u_vsc), and the compose step copies the map 1:1.
+ * The screen shows the same region as before, so the mouse, the overlay and
+ * the HUD are untouched - only sharper.
+ */
+struct vgm_hdkey {   /* where a surface's HD art comes from */
+	std::string path;
+	bool flip;       /* mirrored */
+	int rgb;         /* colour scale, of 256 (a shaded copy) */
+	int alpha;       /* alpha scale, of 256 (see-through walls, the invisible hero) */
+};
+static std::unordered_map<SDL_Surface *, vgm_hdkey> vgm_hd_src;
+static std::unordered_map<std::string, SDL_Texture *> vgm_hd_cache; /* by vgm_hd_name */
+static std::unordered_map<std::string, bool> vgm_hd_none;           /* art that isn't there */
+static int vgm_hd_state = -1;     /* tiles_hd/: -1 not looked yet, 0 absent, 1 there */
+static bool vgm_view = false;     /* this frame's map is drawn at the zoom */
+static bool vgm_tex_view = false; /* the map layer holds a map drawn so */
+static float vgm_vsx = 1.0f, vgm_vsy = 1.0f, vgm_vlx = 0.0f, vgm_vly = 0.0f;
+static float vgm_vpx = 0.0f, vgm_vpy = 0.0f;
+extern SDL_Surface *vulture_load_surface(char *srcbuf, unsigned int buflen); /* vulture_gfl.h */
+
+/*
  * IMPLEMENTATION_LOG s185: dynamic lighting on the GPU.
  *
  * SDL2's renderer has no shaders, but its OpenGL backend lends its textures
@@ -501,7 +531,7 @@ static int vgl_state = -1; /* -1 untried, 0 can't, 1 ready */
 static vgl_uint vgl_prog = 0;
 enum { VGL_U_MAP, VGL_U_NRM, VGL_U_LIGHT, VGL_U_DIRS, VGL_U_SIZE, VGL_U_LG, VGL_U_LGS, VGL_U_DG,
        VGL_U_DGS, VGL_U_AREA, VGL_U_PL, VGL_U_PLI, VGL_U_RKA, VGL_U_RKB, VGL_U_NOISE, VGL_U_FOG,
-       VGL_U_MIST, VGL_U_MCOL, VGL_U_N };
+       VGL_U_MIST, VGL_U_MCOL, VGL_U_VIEW, VGL_U_VSC, VGL_U_N };
 static vgl_int vgl_loc[VGL_U_N];
 static SDL_Texture *vgm_nrm = NULL;   /* the normal layer */
 static SDL_Texture *vgm_lit = NULL;   /* the lit map */
@@ -553,10 +583,12 @@ uniform sampler2D u_noise; /* s192: the mist's noise (repeating) */
 uniform sampler2D u_fog;   /* s192: the fog of war, beside the light grid */
 uniform vec4 u_mist;  /* the map's anchor x, y, time, thickness */
 uniform vec4 u_mcol;  /* the mist's colour (0..255) */
+uniform vec4 u_view;  /* s201: a zoomed map - its origin on screen x, y and on the 1x map x, y */
+uniform vec4 u_vsc;   /* s201: 1 / the zoom, x and y */
 void main()
 {
     vec2 tc = gl_TexCoord[0].xy;
-    vec2 px = tc * u_size.xy;
+    vec2 px = u_view.zw + (tc * u_size.xy - u_view.xy) * u_vsc.xy; /* s201: on the 1x map */
     vec4 c = texture2D(u_map, tc * u_size.zw);
     vec3 rgb = c.rgb * 255.0;
 
@@ -667,6 +699,15 @@ static void vgm_drop(bool destroy)
 			SDL_DestroyTexture(vgm_rgb);
 	}
 	vgm_cache.clear();
+	{ /* s201: the HD textures too (the surfaces' registry stays) */
+		std::unordered_map<std::string, SDL_Texture *>::iterator hi;
+
+		if (destroy)
+			for (hi = vgm_hd_cache.begin(); hi != vgm_hd_cache.end(); ++hi)
+				SDL_DestroyTexture(hi->second);
+		vgm_hd_cache.clear();
+		vgm_hd_none.clear();
+	}
 	vgm_tex = vgm_out = vgm_big = vgm_rgb = NULL;
 	vgm_valid = false;
 	vgm_blend = -1;
@@ -761,6 +802,172 @@ static SDL_Texture *vgm_texture(SDL_Surface *s)
 		vgm_cache[s] = e;
 	}
 	return t;
+}
+
+/* s201: the view - a 1x map point on the zoomed map layer */
+static inline float vgm_vx(float x)
+{
+	return vgm_vpx + (x - vgm_vlx) * vgm_vsx;
+}
+
+static inline float vgm_vy(float y)
+{
+	return vgm_vpy + (y - vgm_vly) * vgm_vsy;
+}
+
+static std::string vgm_hd_name(const vgm_hdkey &k)
+{
+	char b[48];
+
+	snprintf(b, sizeof b, "|%d|%d|%d", (int) k.flip, k.rgb, k.alpha);
+	return k.path + b;
+}
+
+/* s201: a map surface's HD texture, or NULL (no HD art: draw the 1x one).
+   Kept by its file and variant, so a tile the cache freed and loaded again
+   finds it still made. */
+static SDL_Texture *vgm_hd_texture(SDL_Surface *s)
+{
+	std::unordered_map<SDL_Surface *, vgm_hdkey>::iterator si = vgm_hd_src.find(s);
+	std::unordered_map<std::string, SDL_Texture *>::iterator ci;
+	std::string name;
+	SDL_Surface *raw = NULL, *c;
+	SDL_Texture *t;
+	FILE *fp;
+	long n;
+	int x, y;
+
+	if (si == vgm_hd_src.end())
+		return NULL;
+	name = vgm_hd_name(si->second);
+	ci = vgm_hd_cache.find(name);
+	if (ci != vgm_hd_cache.end())
+		return ci->second;
+	if (vgm_hd_none.count(name))
+		return NULL;
+	if (vgm_hd_cache.size() > 3000) { /* a ceiling, never reached by one game */
+		for (ci = vgm_hd_cache.begin(); ci != vgm_hd_cache.end(); ++ci)
+			SDL_DestroyTexture(ci->second);
+		vgm_hd_cache.clear();
+	}
+	if ((fp = fopen(si->second.path.c_str(), "rb")) != NULL) {
+		fseek(fp, 0, SEEK_END);
+		n = ftell(fp);
+		rewind(fp);
+		if (n > 0) {
+			char *data = new char[n];
+
+			if (fread(data, (size_t) n, 1, fp) == 1)
+				raw = vulture_load_surface(data, (unsigned int) n);
+			delete[] data;
+		}
+		fclose(fp);
+	}
+	c = raw ? SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_ARGB8888, 0) : NULL;
+	if (raw)
+		SDL_FreeSurface(raw);
+	if (!c || c->w != s->w * 2 || c->h != s->h * 2) { /* missing, or not this sprite's double */
+		if (c)
+			SDL_FreeSurface(c);
+		vgm_hd_none[name] = true;
+		return NULL;
+	}
+	if (SDL_LockSurface(c) == 0) {
+		const vgm_hdkey &k = si->second;
+
+		for (y = 0; y < c->h; y++) {
+			Uint32 *row = (Uint32 *) ((Uint8 *) c->pixels + (size_t) y * c->pitch);
+
+			if (k.flip)
+				for (x = 0; x < c->w / 2; x++) {
+					Uint32 tmp = row[x];
+
+					row[x] = row[c->w - 1 - x], row[c->w - 1 - x] = tmp;
+				}
+			if (k.rgb != 256 || k.alpha != 256)
+				for (x = 0; x < c->w; x++) {
+					Uint32 p = row[x];
+					Uint32 A = ((p >> 24) * (Uint32) k.alpha) >> 8;
+					Uint32 R = (((p >> 16) & 255) * (Uint32) k.rgb) >> 8;
+					Uint32 G = (((p >> 8) & 255) * (Uint32) k.rgb) >> 8;
+					Uint32 B = ((p & 255) * (Uint32) k.rgb) >> 8;
+
+					row[x] = (A > 255 ? 255 : A) << 24 | (R > 255 ? 255 : R) << 16
+						| (G > 255 ? 255 : G) << 8 | (B > 255 ? 255 : B);
+				}
+		}
+		vgm_dilate(c);
+		SDL_UnlockSurface(c);
+	}
+	t = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, c->w, c->h);
+	if (t)
+		SDL_UpdateTexture(t, NULL, c->pixels, c->pitch);
+	SDL_FreeSurface(c);
+	if (t)
+		vgm_hd_cache[name] = t;
+	else
+		vgm_hd_none[name] = true;
+	return t;
+}
+
+/* s201: vulture_load_tile - a tile's surface and the file it came from;
+   alpha: the alpha scale already applied to it (see-through walls) */
+void vulture_gpu_hd_register(SDL_Surface *s, const char *file_1x, double alpha)
+{
+	std::string f = file_1x ? file_1x : "";
+	size_t p = f.rfind("tiles/");
+	vgm_hdkey k;
+
+	if (p == std::string::npos)
+		p = f.rfind("tiles\\");
+	if (!s || p == std::string::npos)
+		return;
+	k.path = f.substr(0, p) + "tiles_hd/" + f.substr(p + 6);
+	k.flip = false, k.rgb = 256, k.alpha = (int) (alpha * 256.0 + 0.5);
+	vgm_hd_src[s] = k;
+	if (vgm_hd_state < 0) { /* is the HD art installed at all? */
+		FILE *fp = fopen(k.path.c_str(), "rb");
+
+		vgm_hd_state = fp ? 1 : 0;
+		if (fp)
+			fclose(fp);
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "hd art: %s\n",
+			vgm_hd_state ? "tiles_hd found - a zoomed map is drawn sharp"
+			             : "no tiles_hd - zoom stays pixel-crisp");
+	}
+}
+
+/* s201: a copy made from a registered surface - mirrored, darkened (rgb of
+   256), faded (alpha of 256) - uses its art the same way */
+void vulture_gpu_hd_derive(SDL_Surface *copy, SDL_Surface *orig, bool flip, int rgb, int alpha)
+{
+	std::unordered_map<SDL_Surface *, vgm_hdkey>::iterator it = vgm_hd_src.find(orig);
+	vgm_hdkey k;
+
+	if (!copy || it == vgm_hd_src.end())
+		return;
+	k = it->second;
+	k.flip = k.flip != flip;
+	k.rgb = k.rgb * rgb / 256;
+	k.alpha = k.alpha * alpha / 256;
+	vgm_hd_src[copy] = k;
+}
+
+bool vulture_gpumap_hd_ok(void)
+{
+	return vgm_hd_state == 1 && !getenv("VULTURE_NO_HD");
+}
+
+/* s201: levelwin, before the map pass: the 1x region `src` will fill `dst`
+   on screen (NULL: not zoomed, or no HD art - the old blow-up) */
+void vulture_gpumap_set_view(const SDL_Rect *src, const SDL_Rect *dst)
+{
+	vgm_view = src && dst && src->w > 0 && src->h > 0 && dst->w > 0 && dst->h > 0;
+	if (vgm_view) {
+		vgm_vsx = (float) dst->w / src->w, vgm_vsy = (float) dst->h / src->h;
+		vgm_vlx = (float) src->x, vgm_vly = (float) src->y;
+		vgm_vpx = (float) dst->x, vgm_vpy = (float) dst->y;
+	}
 }
 
 /*
@@ -1071,7 +1278,7 @@ static void vgm_compose(void)
 	SDL_SetTextureColorMod(mapt, 255, 255, 255);
 	SDL_SetTextureAlphaMod(mapt, 255);
 	SDL_SetTextureScaleMode(mapt, SDL_ScaleModeNearest);
-	if (!vgm_zoom) {
+	if (!vgm_zoom || vgm_tex_view) { /* s201: a map drawn at the zoom goes on 1:1 */
 		SDL_RenderCopy(vulture_gpu, mapt, NULL, NULL);
 	} else if (vgm_zexact || vgm_zk <= 1) {
 		SDL_RenderCopy(vulture_gpu, mapt, &vgm_zsrc, &vgm_zdst);
@@ -1245,12 +1452,26 @@ bool vulture_gpumap_begin(const SDL_Rect *clip)
 		return false;
 	}
 	all.x = 0, all.y = 0, all.w = vulture_screen->w, all.h = vulture_screen->h;
-	SDL_RenderSetClipRect(vulture_gpu, clip ? clip : &all);
-	SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_NONE);
-	SDL_SetRenderDrawColor(vulture_gpu, 0, 0, 0, 255);
-	SDL_RenderFillRect(vulture_gpu, clip ? clip : &all);
+	{
+		SDL_Rect c = clip ? *clip : all;
+
+		vgm_tex_view = vgm_view; /* s201 */
+		if (vgm_view) { /* the redrawn region, as the zoomed map has it */
+			int x0 = (int) floorf(vgm_vx((float) c.x)), y0 = (int) floorf(vgm_vy((float) c.y));
+			int x1 = (int) ceilf(vgm_vx((float) (c.x + c.w)));
+			int y1 = (int) ceilf(vgm_vy((float) (c.y + c.h)));
+
+			x0 = x0 < 0 ? 0 : x0, y0 = y0 < 0 ? 0 : y0;
+			x1 = x1 > all.w ? all.w : x1, y1 = y1 > all.h ? all.h : y1;
+			c.x = x0, c.y = y0, c.w = x1 > x0 ? x1 - x0 : 0, c.h = y1 > y0 ? y1 - y0 : 0;
+		}
+		SDL_RenderSetClipRect(vulture_gpu, &c);
+		SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_NONE);
+		SDL_SetRenderDrawColor(vulture_gpu, 0, 0, 0, 255);
+		SDL_RenderFillRect(vulture_gpu, &c);
+		vgm_clip = c; /* s185 */
+	}
 	vulture_gpumap_on = true;
-	vgm_clip = clip ? *clip : all; /* s185 */
 	vgm_nlist.clear();
 	vgm_lit_valid = false;
 	return true;
@@ -1275,6 +1496,7 @@ void vulture_gpumap_abandon(void)
 	vgm_valid = false;
 	vgm_zoom = false;
 	vgm_lit_valid = false; /* s185 */
+	vgm_tex_view = false;  /* s201 */
 }
 
 bool vulture_gpumap_valid(void)
@@ -1300,6 +1522,30 @@ void vulture_gpumap_blit(SDL_Surface *s, const SDL_Rect *srcrect, int x, int y)
 	SDL_SetTextureColorMod(t, r, g, b);
 	SDL_SetTextureAlphaMod(t, a);
 	SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
+	if (vgm_view) { /* s201: drawn at the zoom, from the HD art if there is some */
+		SDL_Texture *ht = vgm_hd_texture(s);
+		SDL_FRect fd;
+		SDL_Rect sr;
+		const SDL_Rect *sp = srcrect;
+
+		if (ht) {
+			SDL_SetTextureBlendMode(ht, bm);
+			SDL_SetTextureColorMod(ht, r, g, b);
+			SDL_SetTextureAlphaMod(ht, a);
+			t = ht;
+			if (srcrect) {
+				sr.x = srcrect->x * 2, sr.y = srcrect->y * 2;
+				sr.w = srcrect->w * 2, sr.h = srcrect->h * 2;
+				sp = &sr;
+			}
+		}
+		SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+		fd.x = vgm_vx((float) x), fd.y = vgm_vy((float) y);
+		fd.w = (float) (srcrect ? srcrect->w : s->w) * vgm_vsx;
+		fd.h = (float) (srcrect ? srcrect->h : s->h) * vgm_vsy;
+		SDL_RenderCopyF(vulture_gpu, t, sp, &fd);
+		return;
+	}
 	d.x = x, d.y = y;
 	d.w = srcrect ? srcrect->w : s->w, d.h = srcrect ? srcrect->h : s->h;
 	SDL_RenderCopy(vulture_gpu, t, srcrect, &d);
@@ -1321,6 +1567,14 @@ void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, double sy
 	d.x = (float) (dx + s->w * 0.5 * (1.0 - sx));
 	d.y = (float) (dy + s->h * (1.0 - sy));
 	c.x = d.w * 0.5f, c.y = d.h;
+	if (vgm_view) { /* s201 */
+		SDL_Texture *ht = vgm_hd_texture(s);
+
+		if (ht)
+			t = ht;
+		d.x = vgm_vx(d.x), d.y = vgm_vy(d.y), d.w *= vgm_vsx, d.h *= vgm_vsy;
+		c.x = d.w * 0.5f, c.y = d.h;
+	}
 	SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
 	SDL_SetTextureColorMod(t, 255, red ? 77 : 255, red ? 77 : 255);
 	SDL_SetTextureAlphaMod(t, (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
@@ -1341,10 +1595,17 @@ bool vulture_gpumap_shadow(SDL_Surface *s, const float *quad, const Uint8 *a4)
 	if (!vulture_gpumap_on || !s || !(t = vgm_texture(s)))
 		return false;
 	for (k = 0; k < 4; k++) {
-		v[k].position.x = quad[2 * k], v[k].position.y = quad[2 * k + 1];
+		v[k].position.x = vgm_view ? vgm_vx(quad[2 * k]) : quad[2 * k]; /* s201 */
+		v[k].position.y = vgm_view ? vgm_vy(quad[2 * k + 1]) : quad[2 * k + 1];
 		v[k].color.r = v[k].color.g = v[k].color.b = 0, v[k].color.a = a4[k];
 		v[k].tex_coord.x = (k == 1 || k == 2) ? 1.0f : 0.0f;
 		v[k].tex_coord.y = k >= 2 ? 1.0f : 0.0f;
+	}
+	if (vgm_view) { /* s201 */
+		SDL_Texture *ht = vgm_hd_texture(s);
+
+		if (ht)
+			t = ht;
 	}
 	SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
 	SDL_SetTextureColorMod(t, 255, 255, 255);
@@ -1368,6 +1629,9 @@ void vulture_gpumap_set_zoom(const SDL_Rect *src, const SDL_Rect *dst, int k, bo
 void vulture_gpu_forget(SDL_Surface *s)
 {
 	std::unordered_map<SDL_Surface *, vgm_ent>::iterator it;
+
+	if (s) /* s201: the address may come back as another surface */
+		vgm_hd_src.erase(s);
 
 	if (!s || vgm_cache.empty())
 		return;
@@ -1485,7 +1749,7 @@ bool vulture_gpulit_ok(void)
 	vgl_int ok = 0;
 	static const char *const un[VGL_U_N] = { "u_map", "u_nrm", "u_light", "u_dirs", "u_size",
 		"u_lg", "u_lgs", "u_dg", "u_dgs", "u_area", "u_pl[0]", "u_pli", "u_rka", "u_rkb",
-		"u_noise", "u_fog", "u_mist", "u_mcol" };
+		"u_noise", "u_fog", "u_mist", "u_mcol", "u_view", "u_vsc" };
 	int k;
 
 	if (vgl_state >= 0)
@@ -1728,7 +1992,14 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			SDL_GetSurfaceBlendMode(r.s, &bm);
 			SDL_SetTextureBlendMode(t, bm);
 			SDL_SetTextureColorMod(t, 255, 255, 255);
-			if (!r.ex) {
+			if (!r.ex && vgm_tex_view) { /* s201: at the zoom, as the map pass drew it */
+				SDL_FRect d = { vgm_vx((float) r.x), vgm_vy((float) r.y), r.s->w * vgm_vsx,
+				                r.s->h * vgm_vsy };
+
+				SDL_SetTextureAlphaMod(t, 255);
+				SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+				SDL_RenderCopyF(vulture_gpu, t, NULL, &d);
+			} else if (!r.ex) {
 				SDL_Rect d = { r.x, r.y, r.s->w, r.s->h };
 
 				SDL_SetTextureAlphaMod(t, 255);
@@ -1742,6 +2013,10 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 				d.x = (float) (r.x + r.s->w * 0.5 * (1.0 - r.sx));
 				d.y = (float) (r.y + r.s->h * (1.0 - r.sy));
 				c.x = d.w * 0.5f, c.y = d.h;
+				if (vgm_tex_view) { /* s201 */
+					d.x = vgm_vx(d.x), d.y = vgm_vy(d.y), d.w *= vgm_vsx, d.h *= vgm_vsy;
+					c.x = d.w * 0.5f, c.y = d.h;
+				}
 				SDL_SetTextureAlphaMod(t, (Uint8) (r.alpha < 0 ? 0 : r.alpha > 255 ? 255 : r.alpha));
 				SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
 				SDL_RenderCopyExF(vulture_gpu, t, NULL, &d, r.deg, &c, SDL_FLIP_NONE);
@@ -1826,6 +2101,13 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 		vgl.Uniform4f(vgl_loc[VGL_U_MIST], vgl_mistp[0], vgl_mistp[1], vgl_mistp[2],
 			mist ? vgl_mistp[3] : 0.0f);
 		vgl.Uniform4f(vgl_loc[VGL_U_MCOL], vgl_mistp[4], vgl_mistp[5], vgl_mistp[6], 0.0f);
+		if (vgm_tex_view) { /* s201: the map was drawn at the zoom */
+			vgl.Uniform4f(vgl_loc[VGL_U_VIEW], vgm_vpx, vgm_vpy, vgm_vlx, vgm_vly);
+			vgl.Uniform4f(vgl_loc[VGL_U_VSC], 1.0f / vgm_vsx, 1.0f / vgm_vsy, 0.0f, 0.0f);
+		} else {
+			vgl.Uniform4f(vgl_loc[VGL_U_VIEW], 0.0f, 0.0f, 0.0f, 0.0f);
+			vgl.Uniform4f(vgl_loc[VGL_U_VSC], 1.0f, 1.0f, 0.0f, 0.0f);
+		}
 		vgl.Disable(VGL_BLEND);
 		vgl.Disable(VGL_SCISSOR_TEST);
 		vgl.Begin(VGL_QUADS);

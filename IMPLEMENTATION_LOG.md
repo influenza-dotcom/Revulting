@@ -4238,6 +4238,54 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   the calling PowerShell, so a second probe in the same call inherited the
   first one's (and LIT never cleared) - it clears them all first now.
 
+### 201. Sharp sprites when zoomed in
+
+- Step 3 of the user's 4-2-1-3.  Zoom (1.5x / 2x / 3x, mouse wheel) drew the
+  map at 1x and blew the picture up - nearest neighbour at 2x and 3x - so the
+  2006 sprites turned into blocks; at 1x the dungeon is a small strip on a
+  1080p screen.
+- The art: gamedata/tiles_hd/ - every sprite (2459) at double resolution,
+  made by toolchain/make_hd_tiles.py with Real-ESRGAN (realesrgan-ncnn-vulkan
+  v0.2.5.0, the general x4plus model, run on the GPU; downloaded with the
+  user's OK into deliverables/downloads/realesrgan) at 4x, brought to exactly
+  2x with Lanczos, alpha kept and the original's empty margin kept empty.
+  x4plus beat the anime and animevideov3 models on Vulture's pre-rendered 3D
+  art: it smooths the jaggies and the old dithering without flattening.
+- TRAP: one realesrgan-ncnn-vulkan process goes bad after ~20 images here -
+  every later output stripes and noise (the first full run: 2418 of 2458
+  ruined; any thread count, any tile size).  The script runs batches of 16,
+  each a fresh process, and checks every output (shrunk back to 1x it must
+  match the original where opaque: ~8-16 levels off when good, 40-230 when
+  ruined); failures are redone alone, and anything still bad would fall back
+  to a Lanczos 2x (22 sprites did).
+- The engine (vulture_sdl.cpp s201): zoomed in with tiles_hd present, the GPU
+  map layer is drawn AT the zoom - levelwin sets the view before the map
+  pass (vulture_gpumap_set_view: the 1x region vzoom_apply would blow up,
+  and where it lands), and every map draw - blits, posed sprites, cast
+  shadows, the normal-map layer - goes through vgm_vx / vgm_vy, from the
+  sprite's HD texture (linear filtering for anything without one).  The map
+  textures stay screen-sized; the lighting shader maps each pixel back to
+  the 1x map (u_view, u_vsc) so the light grid, point lights and mist line
+  up; the compose step copies the map 1:1.  The screen shows exactly the
+  region it did before, so mouse picking, the overlay effects (still
+  blown up by vzoom_apply) and the HUD are unchanged.
+  - HD art per surface: vulture_load_tile registers each tile's surface with
+    its file (and the see-through walls' alpha); vtw_flipped, the shaded
+    copies and the invisible hero register as mirrored / darkened / faded
+    variants of it.  HD textures are cached by file + variant, so a tile the
+    tile cache freed and reloaded finds its texture still made.
+  - Without tiles_hd, with lighting in software (the map goes through
+    vulture_screen) or with VULTURE_NO_HD, zoom is the old pixel blow-up.
+- Terrain tiles (floor., wall., edge.) keep the original's HARD alpha,
+  doubled: their soft upscaled edges left a hairline seam between
+  neighbouring floor diamonds (seen at 2x on a carpet).
+- Probe VULTURE_SELFTEST_ZOOM=n starts at zoom step n (0 1x, 1 1.5x, 2 2x,
+  3 3x); VULTURE_NO_HD turns the HD path off for a before/after.
+- COST: making the art ran the user's GPU/CPU flat out for ~40 minutes in
+  all (the batches restart the upscaler each time); the user asked for no
+  more of it.  The art is done and committed - do NOT run make_hd_tiles.py
+  again on this machine.  At 1x zoom nothing in tiles_hd is ever loaded.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

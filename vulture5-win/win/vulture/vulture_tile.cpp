@@ -602,6 +602,9 @@ vulture_tile * vulture_load_tile(int tile_id)
 
 	if (TILE_IS_WALL(tile_id))
 		vulture_set_tile_alpha(newtile, vulture_opts.wall_opacity);
+	/* s201: where its double-resolution art is */
+	vulture_gpu_hd_register(newtile->graphic, vulture_gametiles[tile_id].filename.c_str(),
+	                        TILE_IS_WALL(tile_id) ? vulture_opts.wall_opacity : 1.0);
 
 	return newtile;
 }
@@ -640,6 +643,7 @@ static inline vulture_tile * vulture_shade_tile(vulture_tile *orig, int shadelev
 			/* pixels[idx + 3] (alpha) unchanged */
 		}
 	}
+	vulture_gpu_hd_derive(tile->graphic, orig->graphic, false, scale, 256); /* s201 */
 
 	return tile;
 }
@@ -758,6 +762,8 @@ static vulture_tile *vulture_make_alpha_player_tile(int monnum, double op_scale)
 		tile->ymod = montile->ymod;
 
 		vulture_set_tile_alpha(tile, op_scale);
+		vulture_gpu_hd_derive(tile->graphic, montile->graphic, false, 256,
+		                      (int) (op_scale * 256.0 + 0.5)); /* s201 */
 
 		tilenum = monnum;
 	}
