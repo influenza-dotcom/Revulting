@@ -3891,6 +3891,43 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   same frame flat vs normal-mapped) differs by a mean of ~2.4 per channel
   over the map, the stone relief plainly visible.
 
+### 190. Normal maps lit by the lights themselves
+
+- The user: improve the normal maps.  What was weak: one light direction per
+  8 px cell, taken from the slope of the light field, under a strong
+  top-left key (0.36 of the light level) - so in a lit room the relief was
+  the same emboss everywhere and barely moved with your light; light
+  sources shaded themselves (the old crevice term darkened a fire vortex's
+  edges at full strength); walls' normals faced the viewer, so a wall took
+  light the same from either side.
+- Now (vl_nmap and vgl_fs, the same arithmetic in floats): every vl_add
+  records a point light (vl_pls: square, radius, intensity, colour, how far
+  above the square it hangs and its height towards you - the hero's at head
+  height, lamps and glowing creatures at hand height, following a glide).
+  vl_pl_project puts the strongest 24 that reach the map on the screen each
+  frame (vl_plf, 12 floats each - the GPU pass's uniform array) and marks
+  per relief cell which can reach it (vr_lm, for the CPU loop).  Per pixel:
+  for each light, the direction from the pixel to it and its falloff weight;
+  the shading is relative to flat ground (the light layer does brightness):
+  n.xy . l.xy plus 0.4 of the "facing away from its height" term, averaged
+  over the lights by weight and scaled by the light that really arrives
+  (the cell's source light from vl_S - walls and the fog of war already cut
+  it); a Blinn-Phong glint (n.h^16 above flat ground's) in the light's
+  colour; a soft key (0.22 of the light level).  Constants in one place
+  (vl_rk), handed to the shader.  Relief grid per cell is now the key's
+  weight and the source light (vr_kw, vr_sw); the dirs texture carries them.
+- Normal maps (toolchain/make_normal_maps.py, regenerated for the 134
+  affected tiles, copied into the game folder): half walls' faces turn the
+  way they face on the screen (_n/_s down-left, _w/_e down-right), so they
+  catch light from that side; things that give off light (explosions, lava
+  floors, fire / energy / ice / steam vortices, the spheres, the fire
+  elemental) get flat normals, so the relief leaves them as drawn.
+- Measured (hidden window, the s143 light scene): the GPU path's light stage
+  stays at a 1 ms median; the relief costs ~0.75 ms of GPU time at 1080p
+  (swap 6.1 ms vs 5.4 with it off); the software path's relief ~4-5 ms (was
+  ~1).  The same lit frame on the GPU and in software differs by a mean of
+  0.18 per channel.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

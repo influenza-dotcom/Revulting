@@ -4,6 +4,7 @@
                              no idea why but it won't compile otherwise */
 
 #include <thread> /* s167: before NetHack's min/max macros */
+#include <algorithm> /* s190: std::sort, likewise */
 extern "C" {
 #include "hack.h"
 }
@@ -9833,6 +9834,17 @@ struct vl_flash_t {
 };
 static std::vector<vl_flash_t> vl_flashes;
 
+/* s190: this layer's point lights, for the relief: vl_nmap (and the GPU
+   pass) light each pixel's normal from the lights around it */
+struct vl_pl_t {
+    int x, y; /* the square */
+    float rad, inten, r, g, b;
+    float lift, z; /* drawn this far above the square's centre; its height towards you */
+    bool mover;    /* a creature's: follows its glide */
+};
+static std::vector<vl_pl_t> vl_pls;
+#define VL_PL_MAX 24 /* the strongest this many - the GPU pass's array (vgl_fs) */
+
 static void
 vl_flash(int x, int y, float r, float g, float b, float inten, float rad, Uint32 dur)
 {
@@ -9845,9 +9857,19 @@ vl_flash(int x, int y, float r, float g, float b, float inten, float rad, Uint32
 }
 
 static void
-vl_add(int cx, int cy, double radius, double inten, double r, double g, double b)
+vl_add(int cx, int cy, double radius, double inten, double r, double g, double b,
+       float lift = 14.0f, float z = 44.0f, bool mover = false)
 {
     int x, y, R = (int) radius + 1;
+
+    if (inten > 0.02 && isok(cx, cy)) { /* s190: the relief's point lights */
+        vl_pl_t p;
+
+        p.x = cx, p.y = cy, p.rad = (float) radius, p.inten = (float) inten;
+        p.r = (float) r, p.g = (float) g, p.b = (float) b;
+        p.lift = lift, p.z = z, p.mover = mover;
+        vl_pls.push_back(p);
+    }
 
     for (y = cy - R; y <= cy + R; y++)
         for (x = cx - R; x <= cx + R; x++) {
@@ -9914,6 +9936,7 @@ vl_compute(mapdata *md)
     Uint32 now = SDL_GetTicks();
     size_t i, n = 0;
 
+    vl_pls.clear(); /* s190 */
     for (y = 0; y < ROWNO; y++)
         for (x = 1; x < COLNO; x++) {
             float base;
@@ -9952,10 +9975,11 @@ vl_compute(mapdata *md)
         /* flames flicker: two sines out of step plus a little jitter */
         fl = 0.86 + 0.08 * sin(t * 9.0 + ls->x * 1.7 + ls->y * 2.3)
              + 0.05 * sin(t * 23.0 + ls->x) + 0.02 * ((rand() % 100) / 100.0);
-        if (ls->type == LS_OBJECT)
-            vl_add(ls->x, ls->y, ls->range + 0.8, 0.85 * fl, 1.0, 0.72, 0.42);
+        if (ls->type == LS_OBJECT) /* s190: at hand height (a carried one follows you) */
+            vl_add(ls->x, ls->y, ls->range + 0.8, 0.85 * fl, 1.0, 0.72, 0.42, 34.0f, 52.0f,
+                   u_at(ls->x, ls->y));
         else
-            vl_add(ls->x, ls->y, ls->range + 0.8, 0.75 * fl, 1.0, 0.9, 0.65);
+            vl_add(ls->x, ls->y, ls->range + 0.8, 0.75 * fl, 1.0, 0.9, 0.65, 34.0f, 52.0f, true);
     }
     for (y = 0; y < ROWNO; y++)
         for (x = 1; x < COLNO; x++) {
@@ -10037,11 +10061,12 @@ vl_compute(mapdata *md)
             if (fire)
                 vl_add(gm2->mx, gm2->my, 2.6,
                        0.45 + 0.1 * sin(t * 11.0 + gm2->m_id) + 0.04 * ((rand() % 100) / 100.0),
-                       1.0, 0.55, 0.2);
+                       1.0, 0.55, 0.2, 34.0f, 52.0f, true); /* s190: raised, following it */
             else if (elec)
-                vl_add(gm2->mx, gm2->my, 2.4, (rand() % 6) ? 0.35 : 0.75, 0.7, 0.8, 1.0);
+                vl_add(gm2->mx, gm2->my, 2.4, (rand() % 6) ? 0.35 : 0.75, 0.7, 0.8, 1.0, 34.0f,
+                       52.0f, true);
             else if (cold)
-                vl_add(gm2->mx, gm2->my, 2.0, 0.28, 0.6, 0.85, 1.0);
+                vl_add(gm2->mx, gm2->my, 2.0, 0.28, 0.6, 0.85, 1.0, 34.0f, 52.0f, true);
         }
     }
     if (u.ux)
@@ -10049,8 +10074,9 @@ vl_compute(mapdata *md)
         double fl = 0.94 + 0.04 * sin(t * 7.0) + 0.02 * sin(t * 17.0);
 
         /* s187: bigger and warmer (1.6 / 0.30 and 3.6 / 0.32) */
-        vl_add(u.ux, u.uy, 1.8, 0.34, 1.0, 0.93, 0.82); /* you can always see yourself */
-        vl_add(u.ux, u.uy, 4.6, 0.46 * fl, 1.0, 0.78, 0.50);
+        /* s190: held up - a torch at head height, a little in front of you */
+        vl_add(u.ux, u.uy, 1.8, 0.34, 1.0, 0.93, 0.82, 58.0f, 72.0f, true); /* you can always see yourself */
+        vl_add(u.ux, u.uy, 4.6, 0.46 * fl, 1.0, 0.78, 0.50, 58.0f, 72.0f, true);
     }
     for (i = 0; i < vl_flashes.size(); i++) {
         vl_flash_t &f = vl_flashes[i];
@@ -10133,8 +10159,11 @@ vl_sample(double mx, double my, float *L, float *r, float *g, float *b, float *F
  * layer; F9 cycles full / flat / off.
  */
 static bool vl_relief_on = true;
-static std::vector<short> vr_dx, vr_dy; /* light direction x strength, per cell */
-static std::vector<short> vr_lv;        /* s149: light level 0..256, per cell */
+/* s190: per cell (x256), the soft key's weight and the light that arrives
+   from sources; vr_lm: per cell, a bit for each point light that can reach
+   it (vl_plf holds the lights) */
+static std::vector<short> vr_kw, vr_sw;
+static std::vector<Uint32> vr_lm;
 static int vr_lw = 0, vr_lh = 0;
 static Uint32 vr_last_ms = 0; /* probe: cost of the last pass */
 
@@ -10195,14 +10224,40 @@ vpar_rows(int y0, int y1, Fn fn)
     }
 }
 
-/* s149: light each pixel from its normal-map normal (vulture_normal_buf),
-   facing the light direction of its coarse cell */
+/*
+ * IMPLEMENTATION_LOG s190: normal-mapped light from the lights themselves.
+ * Each pixel's normal (vulture_normal_buf) is lit by the point lights that
+ * reach it: the direction to each light from the pixel (a torch or lamp is
+ * raised - up the screen and towards you), weighted by its falloff, the sum
+ * scaled by the light that really arrives there (the cell's source light,
+ * which walls and the fog of war already cut).  A soft key from the top
+ * left, by the cell's light level, keeps lit rooms from going flat.  It is
+ * shading relative to flat ground - the light layer does the brightness: a
+ * face turned to a light brightens, one turned away darkens, and a face
+ * square to the light and your eye glints in the light's colour.  Was one
+ * direction per 8 px cell from the light field's slope, under a strong key,
+ * so the relief barely moved with the light.  vgl_fs does the same in floats.
+ */
+static std::vector<float> vl_plf; /* 12 floats a light: see vl_pl_project */
+static int vl_npl = 0;
+static const float vl_rk[8] = {
+    -0.45f, -0.60f, 0.66f, /* the key: from the top left, above */
+    0.40f,                 /* how much facing away from a light's height counts (crevices) */
+    1.20f,                 /* the relief's strength */
+    0.30f,                 /* the glint's */
+    0.0f, 0.0f
+};
+#define VL_KEYW 0.22f /* the key's weight per unit of light level */
+
 static void
 vl_nmap(int x0, int y0, int x1, int y1, int gx0, int gy0, int FS)
 {
     SDL_Surface *s = vulture_screen, *nb = vulture_normal_buf;
     int x, y, rs = s->format->Rshift, gs = s->format->Gshift, bs = s->format->Bshift;
     Uint32 mask = ~(((Uint32) 255 << rs) | ((Uint32) 255 << gs) | ((Uint32) 255 << bs));
+    const float ixm = 1.0f / V_MAP_XMOD, iym = 1.0f / V_MAP_YMOD;
+    const float *pl = vl_plf.empty() ? NULL : &vl_plf[0];
+    const float kx = vl_rk[0], ky = vl_rk[1], kz = vl_rk[2], tz = vl_rk[3];
 
     for (y = y0; y < y1; y++) {
         int cj = (y - gy0) / FS, ci, ca, cb;
@@ -10214,9 +10269,11 @@ vl_nmap(int x0, int y0, int x1, int y1, int gx0, int gy0, int FS)
         nrow = (Uint32 *) ((Uint8 *) nb->pixels + (size_t) y * nb->pitch);
         ca = vr_cmin[cj], cb = vr_cmax[cj];
         for (ci = ca; ci <= cb; ci++) {
-            int k = cj * vr_lw + ci, dx = vr_dx[k], dy = vr_dy[k], lv = vr_lv[k], xs, xe;
+            int k = cj * vr_lw + ci, xs, xe;
+            float kw = vr_kw[k] / 256.0f, sw = vr_sw[k] / 256.0f;
+            Uint32 lm = (pl && sw > 0.0f && (size_t) k < vr_lm.size()) ? vr_lm[k] : 0;
 
-            if (!dx && !dy)
+            if (!vr_kw[k] && !vr_sw[k])
                 continue;
             xs = gx0 + ci * FS, xe = xs + FS;
             if (xs < x0)
@@ -10224,35 +10281,65 @@ vl_nmap(int x0, int y0, int x1, int y1, int gx0, int gy0, int FS)
             if (xe > x1)
                 xe = x1;
             for (x = xs; x < xe; x++) {
-                Uint32 pn = nrow[x], p;
-                int a = (int) (pn >> 24), nx, ny, nz, d, r, g, b2, m, sp = 0;
+                Uint32 pn = nrow[x], p = row[x], bits = lm;
+                int a = (int) (pn >> 24), r, g, b2;
+                float nx, ny, nz, d, sr = 0.0f, sg = 0.0f, sb = 0.0f, m;
 
-                if (a < 24)
-                    continue;
-                nx = (int) ((pn >> 16) & 255) - 128;
-                ny = (int) ((pn >> 8) & 255) - 128;
-                nz = (int) (pn & 255) - 128;
-                /* lit where the normal faces the light: n . L */
-                d = ((nx * dx + ny * dy) * 3) >> 9; /* s152: 1.5x */
-                /* crevices, near a real light: faces tilted away take a
-                   little less of it */
-                d -= ((127 - nz) * lv) >> 9;
-                /* a soft glint where a nearby light hits a face squarely */
-                if (d > 30 && lv > 64)
-                    sp = ((d - 30) * (d - 30) * lv) >> 16;
-                d = d * a >> 8;
-                if (!d && !sp)
-                    continue;
-                if (d > 80)
-                    d = 80;
-                else if (d < -80)
-                    d = -80;
-                if (sp > 32)
-                    sp = 32;
-                p = row[x], m = 256 + d;
-                r = ((int) (((p >> rs) & 255) * m) >> 8) + sp;
-                g = ((int) (((p >> gs) & 255) * m) >> 8) + sp;
-                b2 = ((int) (((p >> bs) & 255) * m) >> 8) + sp * 3 / 4;
+                if (a < 24 || !(p & ~mask))
+                    continue; /* no normal here; black stays black */
+                nx = (float) ((int) ((pn >> 16) & 255) - 128) / 127.0f;
+                ny = (float) ((int) ((pn >> 8) & 255) - 128) / 127.0f;
+                nz = (float) ((int) (pn & 255) - 128) / 127.0f;
+                d = kw * (nx * kx + ny * ky + tz * (nz - 1.0f) * kz);
+                if (bits) {
+                    float rel = 0.0f, ws = 0.0f;
+
+                    while (bits) {
+                        const float *P = pl + 12 * __builtin_ctz(bits);
+                        float dx = P[0] - (float) x, dy = P[1] - (float) y;
+                        float ma = (dx * ixm + dy * iym) * 0.5f, mb = (dy * iym - dx * ixm) * 0.5f;
+                        float kk = 1.0f - sqrtf(ma * ma + mb * mb) / P[4];
+
+                        bits &= bits - 1;
+                        if (kk > 0.0f) {
+                            float w = P[5] * kk * kk, ly = P[2] - (float) y;
+                            float inv = 1.0f / sqrtf(dx * dx + ly * ly + P[3] * P[3]);
+                            float lx = dx * inv, lz = P[3] * inv, hz, hi, sp;
+
+                            ly *= inv;
+                            rel += w * (nx * lx + ny * ly + tz * (nz - 1.0f) * lz);
+                            hz = lz + 1.0f; /* the half vector, towards your eye */
+                            hi = 1.0f / sqrtf(lx * lx + ly * ly + hz * hz);
+                            sp = (nx * lx + ny * ly + nz * hz) * hi;
+                            if (sp > 0.0f) {
+                                float f = hz * hi, s16 = sp * sp, f16 = f * f;
+
+                                s16 *= s16, s16 *= s16, s16 *= s16;
+                                f16 *= f16, f16 *= f16, f16 *= f16;
+                                if (s16 > f16) { /* squarer to it than flat ground */
+                                    s16 = (s16 - f16) * w;
+                                    sr += s16 * P[6], sg += s16 * P[7], sb += s16 * P[8];
+                                }
+                            }
+                            ws += w;
+                        }
+                    }
+                    if (ws > 0.0f) {
+                        float q = sw / ws;
+
+                        d += rel * q;
+                        sr *= q, sg *= q, sb *= q;
+                    }
+                }
+                d *= vl_rk[4] * (float) a / 255.0f;
+                d = d > 0.55f ? 0.55f : d < -0.5f ? -0.5f : d;
+                m = vl_rk[5] * (float) a;
+                sr = sr * m > 40.0f ? 40.0f : sr * m;
+                sg = sg * m > 40.0f ? 40.0f : sg * m;
+                sb = sb * m > 40.0f ? 40.0f : sb * m;
+                r = (int) ((float) ((p >> rs) & 255) * (1.0f + d) + sr);
+                g = (int) ((float) ((p >> gs) & 255) * (1.0f + d) + sg);
+                b2 = (int) ((float) ((p >> bs) & 255) * (1.0f + d) + sb);
                 if (r > 255) r = 255;
                 if (g > 255) g = 255;
                 if (b2 > 255) b2 = 255;
@@ -10363,7 +10450,7 @@ vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
         memcpy(&ob[sl][xa], rc + xa, sizeof(Uint32) * (size_t) (xb - xa));
         ob_y[sl] = y, ob_a[sl] = xa, ob_b[sl] = xb;
         for (ci = ca; ci <= cb; ci++) { /* a cell's run of pixels at a time */
-            int k = cj * vr_lw + ci, dx = vr_dx[k], dy = vr_dy[k], xs, xe;
+            int k = cj * vr_lw + ci, dx = -vr_kw[k] * 6 / 10, dy = -vr_kw[k] * 8 / 10, xs, xe;
 
             if (!dx && !dy)
                 continue;
@@ -10406,56 +10493,97 @@ vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
     vr_last_ms = SDL_GetTicks() - t0;
 }
 
-/* the light's direction and strength per coarse cell, from the sampled
-   light levels Lg (lw x lh): towards brighter, stronger where it falls off
-   faster (near a source), plus a faint top-left key where it's lit */
+/* s190: per coarse cell, how much of the soft key and how much light from
+   real sources reach it (Lg: all the light, Sg: the sources' alone - walls
+   and the fog of war have already cut it) */
 static void
 vl_relief_dirs(const std::vector<float> &Lg, const std::vector<float> &Sg, int lw, int lh)
 {
     int i, j;
 
     vr_lw = lw, vr_lh = lh;
-    vr_dx.assign((size_t) lw * lh, 0);
-    vr_dy.assign((size_t) lw * lh, 0);
-    vr_lv.assign((size_t) lw * lh, 0); /* s149 */
+    vr_kw.assign((size_t) lw * lh, 0);
+    vr_sw.assign((size_t) lw * lh, 0);
     vr_cmin.assign((size_t) lh, -1);
     vr_cmax.assign((size_t) lh, -1);
     for (j = 1; j < lh - 1; j++)
         for (i = 1; i < lw - 1; i++) {
-            float L = Lg[(size_t) j * lw + i], gx, gy, mag, st, key;
+            size_t k = (size_t) j * lw + i;
+            float L = Lg[k], S = Sg[k];
 
             if (L < 0.08f)
                 continue; /* too dark to show any relief */
-            /* s187: from the sources' light alone - the step down into the
-               fog of war (or out of a lit room) isn't a lamp */
-            gx = Sg[(size_t) j * lw + i + 1] - Sg[(size_t) j * lw + i - 1];
-            gy = Sg[(size_t) (j + 1) * lw + i] - Sg[(size_t) (j - 1) * lw + i];
-            mag = sqrtf(gx * gx + gy * gy);
-            st = mag * 7.0f; /* near a lamp: full strength (s147: 8 px cells) */
-            if (st > 1.0f)
-                st = 1.0f;
-            /* s149b: remembered ground (L 0.5, not in sight) and anything
-               not near a real light gets no relief - lighting it drew a
-               bright grid over every unseen square */
-            if (L < 0.6f && st < 0.15f)
+            /* s149b: remembered ground away from any real light gets none -
+               lighting it drew a bright grid over every unseen square */
+            if (L < 0.6f && S < 0.04f)
                 continue;
-            if (L < 1.0f)
-                st *= 0.4f + 0.6f * L;
-            key = 0.36f * (L > 1.0f ? 1.0f : L); /* s149b: 0.45 too much; s152: 0.30 too little */
-            {
-                float ux = mag > 1e-5f ? gx / mag : 0, uy = mag > 1e-5f ? gy / mag : 0;
-                float lx = ux * st - 0.6f * key, ly = uy * st - 0.8f * key;
-
-                vr_dx[(size_t) j * lw + i] = (short) (lx * 256.0f);
-                vr_dy[(size_t) j * lw + i] = (short) (ly * 256.0f);
-                /* lv now carries how much of it is a real nearby light
-                   (glints and crevices follow that, not the room's key) */
-                vr_lv[(size_t) j * lw + i] = (short) (256.0f * st);
-                if (vr_cmin[j] < 0)
-                    vr_cmin[j] = i;
-                vr_cmax[j] = i;
-            }
+            vr_kw[k] = (short) (256.0f * VL_KEYW * (L > 1.0f ? 1.0f : L));
+            vr_sw[k] = (short) (256.0f * (S > 2.0f ? 2.0f : S));
+            if (!vr_kw[k] && !vr_sw[k])
+                continue;
+            if (vr_cmin[j] < 0)
+                vr_cmin[j] = i;
+            vr_cmax[j] = i;
         }
+}
+
+/* s190: this frame's point lights on the screen, 12 floats each: x, y (the
+   square's centre - the falloff's), y of the light itself (raised), its
+   height towards you, radius + 1 in squares, intensity, r, g, b, three
+   spare - the VL_PL_MAX strongest that reach the map; and per relief cell
+   (origin gx0, gy0) a bit for each light that can reach it */
+static void
+vl_pl_project(int cx, int cy, int vx, int vy, int mx, int my, int mw, int mh, int gx0, int gy0,
+              int FS)
+{
+    struct cand {
+        float key, v[12];
+    };
+    std::vector<cand> c;
+    size_t i;
+    int k;
+
+    vl_plf.clear(), vl_npl = 0;
+    vr_lm.assign((size_t) vr_lw * vr_lh, 0);
+    for (i = 0; i < vl_pls.size(); i++) {
+        const vl_pl_t &p = vl_pls[i];
+        float ex = V_MAP_XMOD * 1.42f * (p.rad + 1.0f), ey = V_MAP_YMOD * 1.42f * (p.rad + 1.0f);
+        int sx, sy;
+        cand q;
+
+        if (p.mover)
+            vfx_mover_screen(p.x, p.y, cx, cy, vx, vy, &sx, &sy);
+        else
+            vfx_square_screen(p.x, p.y, cx, cy, vx, vy, &sx, &sy);
+        if (sx + ex < mx || sx - ex > mx + mw || sy + ey < my || sy - ey > my + mh)
+            continue;
+        q.key = p.inten * (p.rad + 1.0f);
+        q.v[0] = (float) sx, q.v[1] = (float) sy, q.v[2] = (float) sy - p.lift, q.v[3] = p.z;
+        q.v[4] = p.rad + 1.0f, q.v[5] = p.inten, q.v[6] = p.r, q.v[7] = p.g;
+        q.v[8] = p.b, q.v[9] = q.v[10] = q.v[11] = 0.0f;
+        c.push_back(q);
+    }
+    std::sort(c.begin(), c.end(), [](const cand &a, const cand &b) { return a.key > b.key; });
+    if (c.size() > VL_PL_MAX)
+        c.resize(VL_PL_MAX);
+    for (k = 0; k < (int) c.size(); k++) {
+        /* the falloff's reach on the screen: a circle of radius + 1 squares
+           is an ellipse up to sqrt 2 squares' width across */
+        float ex = V_MAP_XMOD * 1.42f * c[k].v[4], ey = V_MAP_YMOD * 1.42f * c[k].v[4];
+        int ci0 = (int) floorf((c[k].v[0] - ex - gx0) / FS) - 1;
+        int ci1 = (int) floorf((c[k].v[0] + ex - gx0) / FS) + 1;
+        int cj0 = (int) floorf((c[k].v[1] - ey - gy0) / FS) - 1;
+        int cj1 = (int) floorf((c[k].v[1] + ey - gy0) / FS) + 1;
+        int ci, cj;
+
+        vl_plf.insert(vl_plf.end(), c[k].v, c[k].v + 12);
+        ci0 = ci0 < 0 ? 0 : ci0, cj0 = cj0 < 0 ? 0 : cj0;
+        ci1 = ci1 > vr_lw - 1 ? vr_lw - 1 : ci1, cj1 = cj1 > vr_lh - 1 ? vr_lh - 1 : cj1;
+        for (cj = cj0; cj <= cj1; cj++)
+            for (ci = ci0; ci <= ci1; ci++)
+                vr_lm[(size_t) cj * vr_lw + ci] |= 1u << k;
+    }
+    vl_npl = (int) c.size();
 }
 
 /* s152: blend only the part of the (margin-padded) light layer that covers
@@ -10631,13 +10759,15 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         && abs(sox) < M && abs(soy) < M
         && (vtw_animating || now - c_when < (vl_magic ? 50u : 120u)) && vl_flashes.empty()) {
         dst.x = ax - M + sox, dst.y = ay - M + soy;
+        vl_pl_project(cx, cy, vx, vy, max0, may0, mw0, mh0, c_gx0 + sox, c_gy0 + soy, FS); /* s190 */
         if (vl_gpu_frame) { /* s185: the same grids and origins, lit by the GPU */
             SDL_Rect ar = { max0, may0, mw0, mh0 };
 
-            vulture_gpulit_frame(vl_low, dst.x, dst.y, FS, vr_dx.empty() ? NULL : &vr_dx[0],
-                                 vr_dy.empty() ? NULL : &vr_dy[0], vr_lv.empty() ? NULL : &vr_lv[0],
-                                 vr_lw, vr_lh, c_gx0 + sox, c_gy0 + soy,
-                                 vl_relief_on && vnm_ok, false, &ar);
+            vulture_gpulit_frame(vl_low, dst.x, dst.y, FS, vr_kw.empty() ? NULL : &vr_kw[0],
+                                 vr_sw.empty() ? NULL : &vr_sw[0], vr_lw, vr_lh, c_gx0 + sox,
+                                 c_gy0 + soy, vl_plf.empty() ? NULL : &vl_plf[0], vl_npl, vl_rk,
+                                 1.0f / V_MAP_XMOD, 1.0f / V_MAP_YMOD, vl_relief_on && vnm_ok,
+                                 false, &ar);
             return;
         }
         vl_relief(max0, may0, mw0, mh0, c_gx0 + sox, c_gy0 + soy, FS); /* s186 */
@@ -10723,12 +10853,15 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     Uint32 vt_s = SDL_GetTicks(); /* probe: s147 (no stretch since s153) */
     vl_relief_dirs(Lg, Sg, lw, lh); /* s145, s187 */
     c_gx0 = ax - FS / 2, c_gy0 = ay - FS / 2; /* cell i covers ax+i*FS +- FS/2 */
+    vl_pl_project(cx, cy, vx, vy, max0, may0, mw0, mh0, c_gx0, c_gy0, FS); /* s190 */
     if (vl_gpu_frame) { /* s185: rebuilt grids - the GPU uploads and lights */
         SDL_Rect ar = { max0, may0, mw0, mh0 };
 
-        vulture_gpulit_frame(vl_low, ax, ay, FS, vr_dx.empty() ? NULL : &vr_dx[0],
-                             vr_dy.empty() ? NULL : &vr_dy[0], vr_lv.empty() ? NULL : &vr_lv[0],
-                             vr_lw, vr_lh, c_gx0, c_gy0, vl_relief_on && vnm_ok, true, &ar);
+        vulture_gpulit_frame(vl_low, ax, ay, FS, vr_kw.empty() ? NULL : &vr_kw[0],
+                             vr_sw.empty() ? NULL : &vr_sw[0], vr_lw, vr_lh, c_gx0, c_gy0,
+                             vl_plf.empty() ? NULL : &vl_plf[0], vl_npl, vl_rk,
+                             1.0f / V_MAP_XMOD, 1.0f / V_MAP_YMOD, vl_relief_on && vnm_ok, true,
+                             &ar);
         return;
     }
     vl_relief(max0, may0, mw0, mh0, c_gx0, c_gy0, FS);

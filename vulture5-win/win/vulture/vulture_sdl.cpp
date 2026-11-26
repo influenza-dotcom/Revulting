@@ -475,6 +475,7 @@ static struct {
 	vgl_int (VGL_API *GetUniformLocation)(vgl_uint, const vgl_char *);
 	void (VGL_API *Uniform1i)(vgl_int, vgl_int);
 	void (VGL_API *Uniform4f)(vgl_int, vgl_float, vgl_float, vgl_float, vgl_float);
+	void (VGL_API *Uniform4fv)(vgl_int, vgl_sizei, const vgl_float *); /* s190 */
 	void (VGL_API *ActiveTexture)(vgl_enum);
 	void (VGL_API *GetIntegerv)(vgl_enum, vgl_int *);
 	void (VGL_API *PushAttrib)(vgl_bitfield);
@@ -489,7 +490,7 @@ static struct {
 static int vgl_state = -1; /* -1 untried, 0 can't, 1 ready */
 static vgl_uint vgl_prog = 0;
 enum { VGL_U_MAP, VGL_U_NRM, VGL_U_LIGHT, VGL_U_DIRS, VGL_U_SIZE, VGL_U_LG, VGL_U_LGS, VGL_U_DG,
-       VGL_U_DGS, VGL_U_AREA, VGL_U_N };
+       VGL_U_DGS, VGL_U_AREA, VGL_U_PL, VGL_U_PLI, VGL_U_RKA, VGL_U_RKB, VGL_U_N };
 static vgl_int vgl_loc[VGL_U_N];
 static SDL_Texture *vgm_nrm = NULL;   /* the normal layer */
 static SDL_Texture *vgm_lit = NULL;   /* the lit map */
@@ -526,6 +527,11 @@ uniform vec4 u_lgs;   /* light grid: columns, rows, texcoord scale */
 uniform vec4 u_dg;    /* direction grid: origin x, y, cell size, relief on */
 uniform vec4 u_dgs;   /* direction grid: columns, rows, texcoord scale */
 uniform vec4 u_area;  /* the map's rectangle: x0, y0, x1, y1 */
+uniform vec4 u_pl[72]; /* s190: 24 point lights, 3 each: (x, y, y raised, height),
+                          (radius + 1, intensity, r, g), (b, -, -, -) */
+uniform vec4 u_pli;   /* 1 / V_MAP_XMOD, 1 / V_MAP_YMOD, how many lights, - */
+uniform vec4 u_rka;   /* the key's direction, how much facing away from a height counts */
+uniform vec4 u_rkb;   /* the relief's strength, the glint's */
 void main()
 {
     vec2 tc = gl_TexCoord[0].xy;
@@ -537,9 +543,9 @@ void main()
         gl_FragColor = c;
         return;
     }
-    if (u_dg.w > 0.5) {
-        vec4 n = texture2D(u_nrm, tc * u_size.zw);
-        float a = n.a * 255.0;
+    if (u_dg.w > 0.5 && rgb.r + rgb.g + rgb.b > 0.5) { /* s190: vl_nmap */
+        vec4 nn = texture2D(u_nrm, tc * u_size.zw);
+        float a = nn.a * 255.0;
 
         if (a >= 24.0) {
             vec2 cell = floor((px - u_dg.xy) / u_dg.z);
@@ -548,21 +554,51 @@ void main()
                 vec4 dd = texture2D(u_dirs, (cell + 0.5) / u_dgs.xy * u_dgs.zw);
 
                 if (dd.a > 0.5) {
-                    float dx = (dd.r * 255.0 - 128.0) * 4.0;
-                    float dy = (dd.g * 255.0 - 128.0) * 4.0;
-                    float lv = dd.b * 256.0;
-                    float nx = n.r * 255.0 - 128.0;
-                    float ny = n.g * 255.0 - 128.0;
-                    float nz = n.b * 255.0 - 128.0;
-                    float d = (nx * dx + ny * dy) * 3.0 / 512.0;
-                    float sp = 0.0;
+                    float kw = dd.r, sw = dd.g * 2.0;
+                    vec3 n = (nn.rgb * 255.0 - 128.0) / 127.0;
+                    float d = kw * (n.x * u_rka.x + n.y * u_rka.y + u_rka.w * (n.z - 1.0) * u_rka.z);
+                    vec3 spc = vec3(0.0);
 
-                    d -= (127.0 - nz) * lv / 512.0;
-                    if (d > 30.0 && lv > 64.0)
-                        sp = (d - 30.0) * (d - 30.0) * lv / 65536.0;
-                    d = clamp(d * a / 256.0, -80.0, 80.0);
-                    sp = min(sp, 32.0);
-                    rgb = min(rgb * (256.0 + d) / 256.0 + vec3(sp, sp, sp * 0.75), 255.0);
+                    if (sw > 0.0) {
+                        float rel = 0.0, ws = 0.0;
+
+                        for (int i = 0; i < 24; i++) {
+                            if (float(i) >= u_pli.z)
+                                break;
+                            vec4 A = u_pl[3 * i];
+                            vec4 B = u_pl[3 * i + 1];
+                            vec4 C = u_pl[3 * i + 2];
+                            float dx = A.x - px.x, dy = A.y - px.y;
+                            float ma = (dx * u_pli.x + dy * u_pli.y) * 0.5;
+                            float mb = (dy * u_pli.y - dx * u_pli.x) * 0.5;
+                            float kk = 1.0 - sqrt(ma * ma + mb * mb) / B.x;
+
+                            if (kk > 0.0) {
+                                float w = B.y * kk * kk;
+                                vec3 l = normalize(vec3(dx, A.z - px.y, A.w));
+                                vec3 h = normalize(l + vec3(0.0, 0.0, 1.0));
+                                float sp = dot(n, h);
+
+                                rel += w * (n.x * l.x + n.y * l.y + u_rka.w * (n.z - 1.0) * l.z);
+                                if (sp > 0.0) {
+                                    float s16 = sp * sp, f16 = h.z * h.z;
+
+                                    s16 *= s16; s16 *= s16; s16 *= s16;
+                                    f16 *= f16; f16 *= f16; f16 *= f16;
+                                    if (s16 > f16)
+                                        spc += (s16 - f16) * w * vec3(B.z, B.w, C.x);
+                                }
+                                ws += w;
+                            }
+                        }
+                        if (ws > 0.0) {
+                            d += rel * sw / ws;
+                            spc *= sw / ws;
+                        }
+                    }
+                    d = clamp(d * u_rkb.x * a / 255.0, -0.5, 0.55);
+                    spc = min(spc * (u_rkb.y * a), vec3(40.0));
+                    rgb = min(rgb * (1.0 + d) + spc, 255.0);
                 }
             }
         }
@@ -1206,7 +1242,7 @@ bool vulture_gpulit_ok(void)
 	vgl_uint vs, fsh;
 	vgl_int ok = 0;
 	static const char *const un[VGL_U_N] = { "u_map", "u_nrm", "u_light", "u_dirs", "u_size",
-		"u_lg", "u_lgs", "u_dg", "u_dgs", "u_area" };
+		"u_lg", "u_lgs", "u_dg", "u_dgs", "u_area", "u_pl[0]", "u_pli", "u_rka", "u_rkb" };
 	int k;
 
 	if (vgl_state >= 0)
@@ -1229,7 +1265,8 @@ bool vulture_gpulit_ok(void)
 	VGL_GET(CreateShader) VGL_GET(ShaderSource) VGL_GET(CompileShader) VGL_GET(GetShaderiv)
 	VGL_GET(GetShaderInfoLog) VGL_GET(CreateProgram) VGL_GET(AttachShader) VGL_GET(LinkProgram)
 	VGL_GET(GetProgramiv) VGL_GET(GetProgramInfoLog) VGL_GET(UseProgram)
-	VGL_GET(GetUniformLocation) VGL_GET(Uniform1i) VGL_GET(Uniform4f) VGL_GET(ActiveTexture)
+	VGL_GET(GetUniformLocation) VGL_GET(Uniform1i) VGL_GET(Uniform4f) VGL_GET(Uniform4fv)
+	VGL_GET(ActiveTexture)
 	VGL_GET(GetIntegerv) VGL_GET(PushAttrib) VGL_GET(PopAttrib) VGL_GET(Disable)
 	VGL_GET(TexParameteri) VGL_GET(Begin) VGL_GET(End) VGL_GET(TexCoord2f) VGL_GET(Vertex2f)
 #undef VGL_GET
@@ -1332,9 +1369,10 @@ static int vgl_texture(SDL_Texture **t, int w, int h, int access)
  * (dw x dh cells from gx0, gy0), relief on or off, `fresh` when the grids
  * were rebuilt (upload them), `area` the map's rectangle.
  */
-void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const short *dx,
-                          const short *dy, const short *lv, int dw, int dh, int gx0, int gy0,
-                          bool relief, bool fresh, const SDL_Rect *area)
+void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const short *kw,
+                          const short *sw, int dw, int dh, int gx0, int gy0, const float *pl,
+                          int npl, const float *rk, float ixm, float iym, bool relief, bool fresh,
+                          const SDL_Rect *area)
 {
 	int W, Hh, mk;
 	float tw = 1.0f, th = 1.0f, ltw = 1.0f, lth = 1.0f, dtw = 1.0f, dth = 1.0f;
@@ -1346,7 +1384,7 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 	W = vulture_screen->w, Hh = vulture_screen->h;
 	if (!vgl_texture(&vgm_lit, W, Hh, SDL_TEXTUREACCESS_TARGET))
 		return;
-	if (!dx || !dy || !lv || dw <= 0 || dh <= 0)
+	if (!kw || !sw || !rk || dw <= 0 || dh <= 0)
 		relief = false;
 	if (relief && !vgl_texture(&vgm_nrm, W, Hh, SDL_TEXTUREACCESS_TARGET))
 		relief = false;
@@ -1361,7 +1399,7 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 		if (SDL_MUSTLOCK(low))
 			SDL_UnlockSurface(low);
 	}
-	/* the per-cell light: R, G direction (/4, +128), B strength, A on */
+	/* s190: per cell: R the key's weight, G the light from sources / 2, A on */
 	if (relief) {
 		mk = vgl_texture(&vgl_dirs, dw, dh, SDL_TEXTUREACCESS_STREAMING);
 		if (!mk)
@@ -1370,13 +1408,12 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			std::vector<Uint32> px((size_t) dw * dh);
 
 			for (i = 0; i < px.size(); i++) {
-				int r = dx[i] / 4 + 128, g = dy[i] / 4 + 128, b = lv[i] * 255 / 256;
+				int r = kw[i] * 255 / 256, g = sw[i] * 255 / 512;
 
 				r = r < 0 ? 0 : r > 255 ? 255 : r;
 				g = g < 0 ? 0 : g > 255 ? 255 : g;
-				b = b < 0 ? 0 : b > 255 ? 255 : b;
-				px[i] = ((dx[i] || dy[i]) ? 0xFF000000u : 0u) | ((Uint32) r << 16)
-					| ((Uint32) g << 8) | (Uint32) b;
+				px[i] = ((kw[i] || sw[i]) ? 0xFF000000u : 0u) | ((Uint32) r << 16)
+					| ((Uint32) g << 8);
 			}
 			SDL_UpdateTexture(vgl_dirs, NULL, &px[0], dw * 4);
 		}
@@ -1464,6 +1501,16 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 		vgl.Uniform4f(vgl_loc[VGL_U_DGS], (float) (dw > 0 ? dw : 1), (float) (dh > 0 ? dh : 1), dtw, dth);
 		vgl.Uniform4f(vgl_loc[VGL_U_AREA], (float) area->x, (float) area->y,
 			(float) (area->x + area->w), (float) (area->y + area->h));
+		/* s190: the point lights and the relief's constants */
+		if (npl > 24)
+			npl = 24;
+		vgl.Uniform4f(vgl_loc[VGL_U_PLI], ixm, iym, (float) (pl ? npl : 0), 0.0f);
+		if (pl && npl > 0)
+			vgl.Uniform4fv(vgl_loc[VGL_U_PL], npl * 3, pl);
+		if (rk) {
+			vgl.Uniform4f(vgl_loc[VGL_U_RKA], rk[0], rk[1], rk[2], rk[3]);
+			vgl.Uniform4f(vgl_loc[VGL_U_RKB], rk[4], rk[5], rk[6], rk[7]);
+		}
 		vgl.Disable(VGL_BLEND);
 		vgl.Disable(VGL_SCISSOR_TEST);
 		vgl.Begin(VGL_QUADS);

@@ -31,6 +31,16 @@ SKIP = ('cursor.',)  # UI only
 # overlays drawn over the floor (unseen squares, the hover highlight, the
 # void beyond the map): no normal at all, so they are never lit
 UNLIT = ('misc.floor_not_visible', 'misc.floor_highlight', 'misc.off_map')
+# s190: things that give off light light themselves - a flat normal, so the
+# relief (shading relative to flat ground) leaves them as drawn
+EMISSIVE = ('explosion.', 'floor.floor_lava', 'monster.pm_fire_vortex',
+            'monster.pm_energy_vortex', 'monster.pm_ice_vortex', 'monster.pm_steam_vortex',
+            'monster.pm_flaming_sphere', 'monster.pm_freezing_sphere',
+            'monster.pm_shocking_sphere', 'monster.pm_fire_elemental')
+# s190: a half wall's face turns the way it faces on the screen, so it takes
+# light from that side: the _n and _s pieces face down-left, _w and _e
+# down-right (the full-height walls are black silhouettes)
+WALL_TILT = (0.55, 0.35)
 
 
 def height_of(rgba, fam):
@@ -79,6 +89,13 @@ def make(src, dst):
     rgba = np.asarray(img, dtype=np.float64)
     h, a = height_of(rgba, fam)
     n = normals_of(h, a, fam['strength'], flat_edges=fam is not SPRITE)
+    if name.startswith('wall.') and '_h_' in name and name[-5] in 'nsew':
+        tx = -WALL_TILT[0] if name[-5] in 'ns' else WALL_TILT[0]
+        n = n + np.array([tx, WALL_TILT[1], 0.0])
+        n /= np.linalg.norm(n, axis=-1, keepdims=True)
+        n[a <= 0.02] = (0.0, 0.0, 1.0)
+    if name.startswith(EMISSIVE):
+        n[...] = (0.0, 0.0, 1.0)
     out = np.empty(rgba.shape, dtype=np.uint8)
     out[..., :3] = np.clip((n + 1.0) * 0.5 * 255.0 + 0.5, 0, 255).astype(np.uint8)
     out[..., 3] = 0 if name.startswith(UNLIT) else rgba[..., 3].astype(np.uint8)

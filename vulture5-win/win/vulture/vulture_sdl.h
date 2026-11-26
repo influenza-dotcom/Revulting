@@ -128,8 +128,12 @@ extern void vulture_gpu_use_gl(bool on); /* OpenGL while lit, SDL's default othe
 extern void vulture_gpumap_normal(SDL_Surface *s, int x, int y);
 extern void vulture_gpumap_normal_ex(SDL_Surface *s, int dx, int dy, double sx, double sy,
                                      double deg, int alpha);
-extern void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const short *dx,
-                                 const short *dy, const short *lv, int dw, int dh, int gx0,
-                                 int gy0, bool relief, bool fresh, const SDL_Rect *area);
+/* s190: kw / sw per relief cell (x256), pl: npl point lights, 12 floats each,
+   rk: the relief's constants (levelwin.cpp's vl_rk), ixm / iym: 1 / V_MAP_XMOD,
+   1 / V_MAP_YMOD */
+extern void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const short *kw,
+                                 const short *sw, int dw, int dh, int gx0, int gy0,
+                                 const float *pl, int npl, const float *rk, float ixm, float iym,
+                                 bool relief, bool fresh, const SDL_Rect *area);
 
 #endif
