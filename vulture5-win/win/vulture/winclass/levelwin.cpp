@@ -3346,11 +3346,13 @@ vulture_idle_wait_ms(bool at_map)
    the input loop while the map waits for a command) */
 static void vselftest(void); /* s126 probe */
 
-/* s182: dynamic lighting starts OFF - the user asked for unlit by default
-   (the light passes are the biggest CPU cost in a frame).  F9 and the
-   Visual effects menu turn it on; the choice is kept in effects.txt
-   ("lighting="). */
-static bool vl_on = false;
+/* s182: dynamic lighting started OFF - the user asked for unlit by default
+   (the light passes were the biggest CPU cost in a frame).  s189: ON again,
+   normal-mapped - the user: normal maps on by default (they only show
+   with dynamic lighting), and since s185 it runs on the GPU.  F9 and the
+   Visual effects menu switch it; the choice is kept in effects.txt
+   ("lighting="), so a saved "off" stays off. */
+static bool vl_on = true;
 static bool vl_gpu_frame = false; /* s185: this frame's map is lit on the GPU */
 static point vck_from = { -1, -1 }, vck_to = { -1, -1 }; /* s145 probe */
 
@@ -6625,11 +6627,11 @@ vselftest(void)
         return;
     if (stage == 0) {
         vrt_probe_moves0 = svm.moves; /* probe: s140 */
-        /* s182: lighting is off by default now; the light probes (and
-           VULTURE_SELFTEST_LIT=1 for any run) switch it on */
-        if (getenv("VULTURE_SELFTEST_LIGHT") || getenv("VULTURE_SELFTEST_PORTAL")
-            || getenv("VULTURE_SELFTEST_LIT"))
-            vl_on = true;
+        /* s182: the probes run unlit unless a light probe (or
+           VULTURE_SELFTEST_LIT=1 for any run) asks - s189: kept so now that
+           the game starts lit */
+        vl_on = getenv("VULTURE_SELFTEST_LIGHT") || getenv("VULTURE_SELFTEST_PORTAL")
+                || getenv("VULTURE_SELFTEST_LIT");
         if (getenv("VULTURE_SELFTEST_FLAT")) /* s185: lighting without the normal maps */
             vl_on = true, vl_relief_set(false);
         if (getenv("VULTURE_SELFTEST_FOG")) { /* probe: s187 */
@@ -9181,7 +9183,7 @@ vulture_auto_step(void *result)
 /* ---- s161: Visual effects - every new effect can be switched off ----
    Kept per Windows user in effects.txt. */
 
-/* vl_on (s182, lighting off by default) is defined near vselftest */
+/* vl_on (s182; s189: lighting on by default) is defined near vselftest */
 static void vl_relief_set(bool on);
 static bool vl_relief_get(void);
 
@@ -9275,7 +9277,7 @@ vfx_menu(void)
             vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, (char) ('a' + k), 0,
                              on[k] ? ATR_BOLD : ATR_NONE, NO_COLOR, lb[k], MENU_ITEMFLAGS_NONE);
         }
-        { /* s182: dynamic lighting, off by default */
+        { /* s182: dynamic lighting (s189: on by default) */
             static char ll[96];
 
             snprintf(ll, sizeof ll, "Dynamic lighting  -  %s  (F9 cycles it too)",
@@ -9285,7 +9287,7 @@ vfx_menu(void)
             vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'l', 0,
                              vl_on ? ATR_BOLD : ATR_NONE, NO_COLOR, ll, MENU_ITEMFLAGS_NONE);
         }
-        { /* s183: the map drawn on the GPU (needs GPU presentation, lighting off) */
+        { /* s183: the map drawn on the GPU (needs GPU presentation; lit too since s185) */
             extern SDL_Renderer *vulture_gpu;
             static char ml[120];
 
@@ -9332,11 +9334,12 @@ vfx_menu(void)
                 levwin->force_redraw();
             continue;
         }
-        if (pick == 8) { /* s182: off -> flat -> full -> off */
+        if (pick == 8) { /* s182; s189: off -> full -> flat -> off, as F9 -
+                            turning it on brings the normal maps */
             if (!vl_on)
-                vl_on = true, vl_relief_set(false);
-            else if (!vl_relief_get())
-                vl_relief_set(true);
+                vl_on = true, vl_relief_set(true);
+            else if (vl_relief_get())
+                vl_relief_set(false);
             else
                 vl_on = false;
             vfxm_save();

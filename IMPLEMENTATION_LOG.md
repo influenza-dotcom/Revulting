@@ -3873,6 +3873,24 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   corridor floor ~24 (was ~30), still readable; the void's borrowed light for
   walls follows.
 
+### 189. Normal-mapped lighting on by default
+
+- The user: normal maps on by default.  The normal maps (s145/s149 relief)
+  only show with dynamic lighting, which s182 had turned off by default for
+  speed (the light passes were the biggest CPU cost; since s185 they run on
+  the GPU).  So `vl_on` starts true again, normal-mapped (the "normalmaps"
+  setting already defaulted on).  A saved choice in effects.txt still wins
+  ("lighting=0" stays off) - and only builds since s182 (today, unreleased)
+  write that line, so released players get the new default.
+- The Visual effects switch now goes off -> full -> flat -> off, as F9 does:
+  turning lighting on brings the normal maps (it went to flat first).
+- The probes keep their meaning: unlit unless a light probe or
+  VULTURE_SELFTEST_LIT=1 asks (stage 0 now sets vl_on either way).
+- Checked (hidden window, fresh profile): the first map frame remakes the
+  renderer for lighting and lights on the GPU; the s149 compare shot (the
+  same frame flat vs normal-mapped) differs by a mean of ~2.4 per channel
+  over the map, the stone relief plainly visible.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
