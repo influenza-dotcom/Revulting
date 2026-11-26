@@ -3999,6 +3999,26 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   hallucination; levitation; invisibility - one after another, shooting
   each (cond_*.bmp).  All five read in the shots.
 
+### 194. Only the changed parts of the overlay go up
+
+- The user: smoother frames with lighting on.  A map frame clears the
+  overlay (vulture_screen) and draws it again, so every present uploaded all
+  of it - 8 MB at 1080p, 2.6 ms a frame on the OpenGL renderer that
+  lighting uses - though most of it (the clear map area, the HUD) comes out
+  the same each frame.
+- On OpenGL the overlay as last uploaded is kept (vgm_shadow); vgm_diff
+  compares the frame with it in 64 x 16 blocks within the invalidated
+  rectangle, and only runs of changed blocks are uploaded (to the overlay
+  texture and, for the two-pass composite, its twin) and copied into the
+  copy.  A new texture, size or renderer uploads everything once.  Direct3D
+  (unlit) uploads a whole frame faster than comparing it, so it keeps doing
+  that; VULTURE_NO_DIFFUP=1 turns the comparing off.
+- Measured (hidden window, 1080p, the s143 light scene, lit on the GPU):
+  upload median 2.6 ms -> 1.3 ms (p90 1.7), typically 3.5% of the frame sent
+  (71680 px); the whole present 8.9 ms -> 5.4 ms (the swap waits less too).
+  The present log line now says how many pixels went up.  The same lit frame
+  on the GPU and in software still differs by a mean of 0.2 per channel.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -409,6 +409,12 @@ static bool vgm_zoom = false, vgm_zexact = true;
 static SDL_Rect vgm_zsrc, vgm_zdst;
 static int vgm_zk = 1;
 static int vgm_disabled = 0;         /* this renderer can't (no render targets) */
+/* s194: the overlay as last uploaded (OpenGL) - see vgm_diff */
+static std::vector<Uint32> vgm_shadow;
+static int vgm_shadow_w = 0, vgm_shadow_h = 0;
+static SDL_Texture *vgm_shadow_tex = NULL; /* the texture the copy matches */
+static int vgm_diff_on = -1;               /* -1 unknown, 0 whole uploads, 1 compare */
+static unsigned vgm_diff_up = 0;           /* probe: pixels uploaded by the last present */
 
 struct vgm_ent {
 	SDL_Texture *t;
@@ -679,6 +685,7 @@ static void vgm_drop(bool destroy)
 	vgl_fogfresh = true;
 	vgm_lit_valid = false;
 	vgl_state = -1, vgl_prog = 0; /* a new renderer is a new GL context */
+	vgm_diff_on = -1, vgm_shadow_tex = NULL; /* s194: decided again, everything uploaded again */
 }
 
 /* transparent pixels take a neighbour's colour (alpha stays 0), so a sprite
@@ -859,11 +866,119 @@ static bool vgm_live(void)
 	return vulture_gpu && vulture_gpu_tex && vgm_valid && vgm_tex && vgm_out;
 }
 
+/*
+ * IMPLEMENTATION_LOG s194: only the changed parts of the overlay go up.  A
+ * map frame clears the overlay and draws it again, so every present sent all
+ * 8 MB of it (1080p) - 2.6 ms a frame on the OpenGL renderer (lighting on),
+ * though most of it - the clear map area, the HUD - comes out the same.  On
+ * OpenGL the overlay as last uploaded is kept (vgm_shadow) and the frame is
+ * compared with it in 64 x 16 blocks: runs of changed blocks are uploaded
+ * (and copied into the copy), the rest is left.  Direct3D uploads the whole
+ * frame faster than comparing it, so it keeps doing that.
+ */
+
+/* the changed rectangles of r (render space; NULL = all) - the copy updated */
+static void vgm_diff(SDL_Surface *s, const SDL_Rect *r, std::vector<SDL_Rect> &out)
+{
+	const int BW = 64, BH = 16;
+	SDL_Rect c;
+	int bx, by, y;
+
+	out.clear();
+	if (r && (r->w <= 0 || r->h <= 0))
+		return;
+	c = r ? *r : SDL_Rect { 0, 0, s->w, s->h };
+	if (c.x < 0) c.w += c.x, c.x = 0;
+	if (c.y < 0) c.h += c.y, c.y = 0;
+	if (c.x + c.w > s->w) c.w = s->w - c.x;
+	if (c.y + c.h > s->h) c.h = s->h - c.y;
+	if (c.w <= 0 || c.h <= 0)
+		return;
+	if (vgm_shadow_w != s->w || vgm_shadow_h != s->h || vgm_shadow_tex != vulture_gpu_tex) {
+		/* a new texture or size: everything goes up, and is remembered */
+		vgm_shadow.assign((size_t) s->w * s->h, 0u);
+		for (y = 0; y < s->h; y++)
+			memcpy(&vgm_shadow[(size_t) y * s->w], (Uint8 *) s->pixels + (size_t) y * s->pitch,
+				(size_t) s->w * 4);
+		vgm_shadow_w = s->w, vgm_shadow_h = s->h, vgm_shadow_tex = vulture_gpu_tex;
+		out.push_back(SDL_Rect { 0, 0, s->w, s->h });
+		return;
+	}
+	for (by = c.y; by < c.y + c.h; by += BH) {
+		int bh = c.y + c.h - by < BH ? c.y + c.h - by : BH, run0 = -1, run1 = -1;
+
+		for (bx = c.x; bx <= c.x + c.w; bx += BW) {
+			bool last = bx >= c.x + c.w, changed = false;
+			int bw = last ? 0 : (c.x + c.w - bx < BW ? c.x + c.w - bx : BW);
+
+			for (y = by; !last && y < by + bh && !changed; y++)
+				changed = memcmp((Uint8 *) s->pixels + (size_t) y * s->pitch + (size_t) bx * 4,
+					&vgm_shadow[(size_t) y * s->w + bx], (size_t) bw * 4) != 0;
+			if (changed) {
+				if (run0 < 0)
+					run0 = bx;
+				run1 = bx + bw;
+			} else if (run0 >= 0) { /* a run ends: upload it, remember it */
+				for (y = by; y < by + bh; y++)
+					memcpy(&vgm_shadow[(size_t) y * s->w + run0],
+						(Uint8 *) s->pixels + (size_t) y * s->pitch + (size_t) run0 * 4,
+						(size_t) (run1 - run0) * 4);
+				out.push_back(SDL_Rect { run0, by, run1 - run0, bh });
+				run0 = -1;
+			}
+		}
+	}
+}
+
 /* s183: the overlay (and, for the two-pass composite, its no-alpha twin) */
 static void vgm_upload_overlay(const SDL_Rect *r)
 {
 	SDL_Surface *s = vulture_screen;
 
+	if (vgm_diff_on < 0) { /* s194: compare frames on OpenGL only */
+		SDL_RendererInfo ri;
+
+		vgm_diff_on = SDL_GetRendererInfo(vulture_gpu, &ri) == 0 && !strcmp(ri.name, "opengl")
+			&& !getenv("VULTURE_NO_DIFFUP") ? 1 : 0;
+	}
+	if (vgm_diff_on == 1 && s && s->format->BytesPerPixel == 4) {
+		std::vector<SDL_Rect> rs;
+		size_t k;
+
+		if (SDL_MUSTLOCK(s))
+			SDL_LockSurface(s);
+		vgm_diff(s, r, rs);
+		if (SDL_MUSTLOCK(s))
+			SDL_UnlockSurface(s);
+		vgm_diff_up = 0;
+		for (k = 0; k < rs.size(); k++) {
+			vgm_upload(vulture_gpu_tex, s, &rs[k]);
+			vgm_diff_up += (unsigned) (rs[k].w * rs[k].h);
+		}
+		if (!vgm_live() || vgm_blend == 1)
+			return;
+		if (vgm_rgb) {
+			int tw = 0, th = 0;
+
+			SDL_QueryTexture(vgm_rgb, NULL, NULL, &tw, &th);
+			if (tw != s->w || th != s->h) {
+				SDL_DestroyTexture(vgm_rgb);
+				vgm_rgb = NULL;
+			}
+		}
+		if (!vgm_rgb) {
+			vgm_rgb = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_RGB888,
+				SDL_TEXTUREACCESS_STREAMING, s->w, s->h);
+			vgm_rgb_fresh = true;
+		}
+		if (vgm_rgb_fresh) {
+			vgm_upload(vgm_rgb, s, NULL);
+			vgm_rgb_fresh = false;
+		} else
+			for (k = 0; k < rs.size(); k++)
+				vgm_upload(vgm_rgb, s, &rs[k]);
+		return;
+	}
 	vgm_upload(vulture_gpu_tex, s, r);
 	if (!vgm_live() || vgm_blend == 1)
 		return;
@@ -981,10 +1096,11 @@ static void vgpu_present(const SDL_Rect *r)
 		Uint64 pc3 = SDL_GetPerformanceCounter(), pf = SDL_GetPerformanceFrequency();
 
 		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
-			"present %u us (%s, %dx%d) upload %u draw %u swap %u\n",
+			"present %u us (%s, %dx%d) upload %u draw %u swap %u sent %u px\n",
 			(unsigned) ((pc3 - pc0) * 1000000 / pf), vgm_live() ? "gpumap" : "software",
 			r ? r->w : s->w, r ? r->h : s->h, (unsigned) ((pc1 - pc0) * 1000000 / pf),
-			(unsigned) ((pc2 - pc1) * 1000000 / pf), (unsigned) ((pc3 - pc2) * 1000000 / pf));
+			(unsigned) ((pc2 - pc1) * 1000000 / pf), (unsigned) ((pc3 - pc2) * 1000000 / pf),
+			vgm_diff_on == 1 ? vgm_diff_up : (unsigned) ((r ? r->w : s->w) * (r ? r->h : s->h)));
 	}
 }
 
