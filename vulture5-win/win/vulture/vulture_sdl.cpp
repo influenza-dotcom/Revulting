@@ -344,6 +344,7 @@ SDL_Renderer *vulture_gpu = NULL;
 static SDL_Texture *vulture_gpu_tex = NULL;
 static SDL_Window *vulture_gpu_win = NULL;
 static int vulture_gpu_failed = 0;
+static bool vgpu_gl_wanted = false; /* s185: OpenGL while the map is lit */
 
 /*
  * IMPLEMENTATION_LOG s183: the map layer drawn by the GPU.
@@ -389,6 +390,166 @@ struct vgm_ent {
 };
 static std::unordered_map<SDL_Surface *, vgm_ent> vgm_cache;
 
+/*
+ * IMPLEMENTATION_LOG s185: dynamic lighting on the GPU.
+ *
+ * SDL2's renderer has no shaders, but its OpenGL backend lends its textures
+ * to OpenGL (SDL_GL_BindTexture), so with the OpenGL renderer one GLSL pass
+ * does what vl_nmap (normal-mapped relief) and vl_apply (the light layer)
+ * did on the CPU, pixel for pixel the same arithmetic: the map layer, a
+ * normal layer (the normal-map tiles, recorded during the map pass and
+ * replayed into vgm_nrm), the light grid (darkness + tint, sampled
+ * bilinearly) and the per-cell light directions (sampled per cell) go in;
+ * the lit map comes out in vgm_lit, which the composite then shows instead
+ * of vgm_tex.  Raw GL runs between SDL's own commands: the renderer is
+ * flushed first and every bit of state is pushed and popped around the pass.
+ * Without the OpenGL renderer or a working shader, lighting stays on the CPU.
+ */
+#ifdef _WIN32
+#define VGL_API __stdcall
+#else
+#define VGL_API
+#endif
+typedef unsigned int vgl_enum;
+typedef unsigned int vgl_uint;
+typedef int vgl_int;
+typedef int vgl_sizei;
+typedef char vgl_char;
+typedef float vgl_float;
+typedef unsigned int vgl_bitfield;
+#define VGL_FRAGMENT_SHADER 0x8B30
+#define VGL_VERTEX_SHADER 0x8B31
+#define VGL_COMPILE_STATUS 0x8B81
+#define VGL_LINK_STATUS 0x8B82
+#define VGL_CURRENT_PROGRAM 0x8B8D
+#define VGL_TEXTURE0 0x84C0
+#define VGL_TEXTURE_2D 0x0DE1
+#define VGL_TEXTURE_MAG_FILTER 0x2800
+#define VGL_TEXTURE_MIN_FILTER 0x2801
+#define VGL_NEAREST 0x2600
+#define VGL_LINEAR 0x2601
+#define VGL_QUADS 0x0007
+#define VGL_BLEND 0x0BE2
+#define VGL_SCISSOR_TEST 0x0C11
+#define VGL_ALL_ATTRIB_BITS 0x000FFFFF
+
+static struct {
+	vgl_uint (VGL_API *CreateShader)(vgl_enum);
+	void (VGL_API *ShaderSource)(vgl_uint, vgl_sizei, const vgl_char *const *, const vgl_int *);
+	void (VGL_API *CompileShader)(vgl_uint);
+	void (VGL_API *GetShaderiv)(vgl_uint, vgl_enum, vgl_int *);
+	void (VGL_API *GetShaderInfoLog)(vgl_uint, vgl_sizei, vgl_sizei *, vgl_char *);
+	vgl_uint (VGL_API *CreateProgram)(void);
+	void (VGL_API *AttachShader)(vgl_uint, vgl_uint);
+	void (VGL_API *LinkProgram)(vgl_uint);
+	void (VGL_API *GetProgramiv)(vgl_uint, vgl_enum, vgl_int *);
+	void (VGL_API *GetProgramInfoLog)(vgl_uint, vgl_sizei, vgl_sizei *, vgl_char *);
+	void (VGL_API *UseProgram)(vgl_uint);
+	vgl_int (VGL_API *GetUniformLocation)(vgl_uint, const vgl_char *);
+	void (VGL_API *Uniform1i)(vgl_int, vgl_int);
+	void (VGL_API *Uniform4f)(vgl_int, vgl_float, vgl_float, vgl_float, vgl_float);
+	void (VGL_API *ActiveTexture)(vgl_enum);
+	void (VGL_API *GetIntegerv)(vgl_enum, vgl_int *);
+	void (VGL_API *PushAttrib)(vgl_bitfield);
+	void (VGL_API *PopAttrib)(void);
+	void (VGL_API *Disable)(vgl_enum);
+	void (VGL_API *TexParameteri)(vgl_enum, vgl_enum, vgl_int);
+	void (VGL_API *Begin)(vgl_enum);
+	void (VGL_API *End)(void);
+	void (VGL_API *TexCoord2f)(vgl_float, vgl_float);
+	void (VGL_API *Vertex2f)(vgl_float, vgl_float);
+} vgl;
+static int vgl_state = -1; /* -1 untried, 0 can't, 1 ready */
+static vgl_uint vgl_prog = 0;
+enum { VGL_U_MAP, VGL_U_NRM, VGL_U_LIGHT, VGL_U_DIRS, VGL_U_SIZE, VGL_U_LG, VGL_U_LGS, VGL_U_DG,
+       VGL_U_DGS, VGL_U_AREA, VGL_U_N };
+static vgl_int vgl_loc[VGL_U_N];
+static SDL_Texture *vgm_nrm = NULL;   /* the normal layer */
+static SDL_Texture *vgm_lit = NULL;   /* the lit map */
+static SDL_Texture *vgl_light = NULL; /* the light grid: A darkness, RGB tint */
+static SDL_Texture *vgl_dirs = NULL;  /* per cell: light direction and strength */
+static bool vgm_lit_valid = false;    /* vgm_lit is this frame's map */
+struct vgm_nrec {
+	SDL_Surface *s;
+	int x, y;
+	bool ex;
+	double sx, sy, deg;
+	int alpha;
+};
+static std::vector<vgm_nrec> vgm_nlist; /* this frame's normal-map draws */
+static SDL_Rect vgm_clip;               /* the region the map pass redrew */
+
+static const char *const vgl_vs = R"VGL(#version 110
+void main()
+{
+    gl_TexCoord[0] = gl_MultiTexCoord0;
+    gl_Position = gl_Vertex;
+}
+)VGL";
+
+/* vl_nmap + vl_apply (levelwin.cpp), in floats - same constants, same order */
+static const char *const vgl_fs = R"VGL(#version 110
+uniform sampler2D u_map;
+uniform sampler2D u_nrm;
+uniform sampler2D u_light;
+uniform sampler2D u_dirs;
+uniform vec4 u_size;  /* W, H, texcoord scale of the map / normal layers */
+uniform vec4 u_lg;    /* light grid: origin x, y, cell size, - */
+uniform vec4 u_lgs;   /* light grid: columns, rows, texcoord scale */
+uniform vec4 u_dg;    /* direction grid: origin x, y, cell size, relief on */
+uniform vec4 u_dgs;   /* direction grid: columns, rows, texcoord scale */
+uniform vec4 u_area;  /* the map's rectangle: x0, y0, x1, y1 */
+void main()
+{
+    vec2 tc = gl_TexCoord[0].xy;
+    vec2 px = tc * u_size.xy;
+    vec4 c = texture2D(u_map, tc * u_size.zw);
+    vec3 rgb = c.rgb * 255.0;
+
+    if (px.x < u_area.x || px.y < u_area.y || px.x >= u_area.z || px.y >= u_area.w) {
+        gl_FragColor = c;
+        return;
+    }
+    if (u_dg.w > 0.5) {
+        vec4 n = texture2D(u_nrm, tc * u_size.zw);
+        float a = n.a * 255.0;
+
+        if (a >= 24.0) {
+            vec2 cell = floor((px - u_dg.xy) / u_dg.z);
+
+            if (cell.x >= 0.0 && cell.y >= 0.0 && cell.x < u_dgs.x && cell.y < u_dgs.y) {
+                vec4 dd = texture2D(u_dirs, (cell + 0.5) / u_dgs.xy * u_dgs.zw);
+
+                if (dd.a > 0.5) {
+                    float dx = (dd.r * 255.0 - 128.0) * 4.0;
+                    float dy = (dd.g * 255.0 - 128.0) * 4.0;
+                    float lv = dd.b * 256.0;
+                    float nx = n.r * 255.0 - 128.0;
+                    float ny = n.g * 255.0 - 128.0;
+                    float nz = n.b * 255.0 - 128.0;
+                    float d = (nx * dx + ny * dy) * 3.0 / 512.0;
+                    float sp = 0.0;
+
+                    d -= (127.0 - nz) * lv / 512.0;
+                    if (d > 30.0 && lv > 64.0)
+                        sp = (d - 30.0) * (d - 30.0) * lv / 65536.0;
+                    d = clamp(d * a / 256.0, -80.0, 80.0);
+                    sp = min(sp, 32.0);
+                    rgb = min(rgb * (256.0 + d) / 256.0 + vec3(sp, sp, sp * 0.75), 255.0);
+                }
+            }
+        }
+    }
+    if (rgb.r + rgb.g + rgb.b > 0.5) { /* black stays black */
+        vec2 g = (px - u_lg.xy) / u_lg.z + 0.5;
+        vec4 L = texture2D(u_light, g / u_lgs.xy * u_lgs.zw);
+
+        rgb = mix(rgb, L.rgb * 255.0, L.a);
+    }
+    gl_FragColor = vec4(rgb / 255.0, c.a);
+}
+)VGL";
+
 /* forget every GPU-map texture - destroying them while the renderer lives,
    or only dropping them once SDL_DestroyWindow / a device reset took them */
 static void vgm_drop(bool destroy)
@@ -411,6 +572,19 @@ static void vgm_drop(bool destroy)
 	vgm_tex = vgm_out = vgm_big = vgm_rgb = NULL;
 	vgm_valid = false;
 	vgm_blend = -1;
+	if (destroy) { /* s185 */
+		if (vgm_nrm)
+			SDL_DestroyTexture(vgm_nrm);
+		if (vgm_lit)
+			SDL_DestroyTexture(vgm_lit);
+		if (vgl_light)
+			SDL_DestroyTexture(vgl_light);
+		if (vgl_dirs)
+			SDL_DestroyTexture(vgl_dirs);
+	}
+	vgm_nrm = vgm_lit = vgl_light = vgl_dirs = NULL;
+	vgm_lit_valid = false;
+	vgl_state = -1, vgl_prog = 0; /* a new renderer is a new GL context */
 }
 
 /* transparent pixels take a neighbour's colour (alpha stays 0), so a sprite
@@ -496,8 +670,19 @@ static bool vgpu_reattach(int want)
 	}
 	if (!vulture_gpu) {
 		Uint32 fl = getenv("VULTURE_GPU_SOFT") ? SDL_RENDERER_SOFTWARE : SDL_RENDERER_ACCELERATED;
+		/* s185: OpenGL while lit - its textures can be lent to the lighting
+		   shader; SDL's choice otherwise (Direct3D presents ~6 ms faster) */
+		bool gl = vgpu_gl_wanted && !getenv("VULTURE_GPU_SOFT") && !getenv("SDL_RENDER_DRIVER")
+			&& !getenv("VULTURE_NO_GL");
 
+		if (gl)
+			SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
 		vulture_gpu = SDL_CreateRenderer(vulture_sdl_window, -1, fl);
+		if (gl) {
+			SDL_SetHint(SDL_HINT_RENDER_DRIVER, "");
+			if (!vulture_gpu) /* no OpenGL: whatever SDL picks */
+				vulture_gpu = SDL_CreateRenderer(vulture_sdl_window, -1, fl);
+		}
 		if (!vulture_gpu) {
 			vulture_gpu_failed = 1;
 			vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
@@ -618,14 +803,16 @@ static void vgm_compose(void)
 	SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_NONE);
 	SDL_SetRenderDrawColor(vulture_gpu, 0, 0, 0, 255);
 	SDL_RenderClear(vulture_gpu);
-	SDL_SetTextureBlendMode(vgm_tex, SDL_BLENDMODE_NONE);
-	SDL_SetTextureColorMod(vgm_tex, 255, 255, 255);
-	SDL_SetTextureAlphaMod(vgm_tex, 255);
-	SDL_SetTextureScaleMode(vgm_tex, SDL_ScaleModeNearest);
+	SDL_Texture *mapt = (vgm_lit_valid && vgm_lit) ? vgm_lit : vgm_tex; /* s185 */
+
+	SDL_SetTextureBlendMode(mapt, SDL_BLENDMODE_NONE);
+	SDL_SetTextureColorMod(mapt, 255, 255, 255);
+	SDL_SetTextureAlphaMod(mapt, 255);
+	SDL_SetTextureScaleMode(mapt, SDL_ScaleModeNearest);
 	if (!vgm_zoom) {
-		SDL_RenderCopy(vulture_gpu, vgm_tex, NULL, NULL);
+		SDL_RenderCopy(vulture_gpu, mapt, NULL, NULL);
 	} else if (vgm_zexact || vgm_zk <= 1) {
-		SDL_RenderCopy(vulture_gpu, vgm_tex, &vgm_zsrc, &vgm_zdst);
+		SDL_RenderCopy(vulture_gpu, mapt, &vgm_zsrc, &vgm_zdst);
 	} else {
 		/* 1.5x (s122's "sharp bilinear"): nearest up to k x, then a small
 		   smooth step down */
@@ -643,7 +830,7 @@ static void vgm_compose(void)
 		}
 		if (vgm_big) {
 			SDL_SetRenderTarget(vulture_gpu, vgm_big);
-			SDL_RenderCopy(vulture_gpu, vgm_tex, &vgm_zsrc, &big);
+			SDL_RenderCopy(vulture_gpu, mapt, &vgm_zsrc, &big);
 			SDL_SetRenderTarget(vulture_gpu, vgm_out);
 			SDL_SetTextureBlendMode(vgm_big, SDL_BLENDMODE_NONE);
 			SDL_SetTextureScaleMode(vgm_big, SDL_ScaleModeLinear);
@@ -682,6 +869,7 @@ static void vgpu_present(const SDL_Rect *r)
 	if (!vulture_gpu || !vulture_gpu_tex || !s)
 		return;
 	vgm_upload_overlay(r);
+	Uint64 pc1 = SDL_GetPerformanceCounter(); /* probe */
 	if (vgm_live()) { /* s183 */
 		vgm_compose();
 		SDL_SetTextureBlendMode(vgm_out, SDL_BLENDMODE_NONE);
@@ -693,11 +881,17 @@ static void vgpu_present(const SDL_Rect *r)
 		SDL_SetTextureColorMod(vulture_gpu_tex, 255, 255, 255);
 		SDL_RenderCopy(vulture_gpu, vulture_gpu_tex, NULL, NULL);
 	}
+	Uint64 pc2 = SDL_GetPerformanceCounter(); /* probe */
 	SDL_RenderPresent(vulture_gpu);
-	if (getenv("VULTURE_SELFTEST"))
-		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "present %u us (%s, %dx%d)\n",
-			(unsigned) ((SDL_GetPerformanceCounter() - pc0) * 1000000 / SDL_GetPerformanceFrequency()),
-			vgm_live() ? "gpumap" : "software", r ? r->w : s->w, r ? r->h : s->h);
+	if (getenv("VULTURE_SELFTEST")) {
+		Uint64 pc3 = SDL_GetPerformanceCounter(), pf = SDL_GetPerformanceFrequency();
+
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+			"present %u us (%s, %dx%d) upload %u draw %u swap %u\n",
+			(unsigned) ((pc3 - pc0) * 1000000 / pf), vgm_live() ? "gpumap" : "software",
+			r ? r->w : s->w, r ? r->h : s->h, (unsigned) ((pc1 - pc0) * 1000000 / pf),
+			(unsigned) ((pc2 - pc1) * 1000000 / pf), (unsigned) ((pc3 - pc2) * 1000000 / pf));
+	}
 }
 
 /* s183: make (or resize) the map layer and the compose target; test the
@@ -776,6 +970,9 @@ bool vulture_gpumap_begin(const SDL_Rect *clip)
 	SDL_SetRenderDrawColor(vulture_gpu, 0, 0, 0, 255);
 	SDL_RenderFillRect(vulture_gpu, clip ? clip : &all);
 	vulture_gpumap_on = true;
+	vgm_clip = clip ? *clip : all; /* s185 */
+	vgm_nlist.clear();
+	vgm_lit_valid = false;
 	return true;
 }
 
@@ -797,6 +994,7 @@ void vulture_gpumap_abandon(void)
 		vulture_gpumap_end();
 	vgm_valid = false;
 	vgm_zoom = false;
+	vgm_lit_valid = false; /* s185 */
 }
 
 bool vulture_gpumap_valid(void)
@@ -952,6 +1150,311 @@ static void vgm_lost(bool device)
 		vulture_gpu_tex = NULL;
 		vgpu_reattach(vulture_render_scale);
 	}
+}
+
+/* s185: a GL shader */
+static vgl_uint vgl_shader(vgl_enum type, const char *src)
+{
+	vgl_uint sh = vgl.CreateShader(type);
+	vgl_int ok = 0;
+	char lg[600];
+
+	vgl.ShaderSource(sh, 1, &src, NULL);
+	vgl.CompileShader(sh);
+	vgl.GetShaderiv(sh, VGL_COMPILE_STATUS, &ok);
+	if (!ok) {
+		lg[0] = 0;
+		vgl.GetShaderInfoLog(sh, (vgl_sizei) sizeof lg, NULL, lg);
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+			"gpulit: a shader didn't compile - lighting stays in software: %s\n", lg);
+		return 0;
+	}
+	return sh;
+}
+
+/* s185: can the GPU light the map? (the OpenGL renderer and the shader) */
+bool vulture_gpulit_ok(void)
+{
+	SDL_RendererInfo ri;
+	vgl_uint vs, fsh;
+	vgl_int ok = 0;
+	static const char *const un[VGL_U_N] = { "u_map", "u_nrm", "u_light", "u_dirs", "u_size",
+		"u_lg", "u_lgs", "u_dg", "u_dgs", "u_area" };
+	int k;
+
+	if (vgl_state >= 0)
+		return vgl_state == 1 && vulture_gpu;
+	if (!vulture_gpu || getenv("VULTURE_NO_GPULIT"))
+		return false;
+	vgl_state = 0;
+	if (SDL_GetRendererInfo(vulture_gpu, &ri) != 0 || strcmp(ri.name, "opengl") != 0) {
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+			"gpulit: the renderer isn't OpenGL - lighting stays in software\n");
+		return false;
+	}
+	SDL_RenderFlush(vulture_gpu); /* its GL context is the current one */
+#define VGL_GET(f)                                                                    \
+	if (!(*(void **) &vgl.f = SDL_GL_GetProcAddress("gl" #f))) {                      \
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,                             \
+			"gpulit: no gl%s - lighting stays in software\n", #f);                    \
+		return false;                                                                 \
+	}
+	VGL_GET(CreateShader) VGL_GET(ShaderSource) VGL_GET(CompileShader) VGL_GET(GetShaderiv)
+	VGL_GET(GetShaderInfoLog) VGL_GET(CreateProgram) VGL_GET(AttachShader) VGL_GET(LinkProgram)
+	VGL_GET(GetProgramiv) VGL_GET(GetProgramInfoLog) VGL_GET(UseProgram)
+	VGL_GET(GetUniformLocation) VGL_GET(Uniform1i) VGL_GET(Uniform4f) VGL_GET(ActiveTexture)
+	VGL_GET(GetIntegerv) VGL_GET(PushAttrib) VGL_GET(PopAttrib) VGL_GET(Disable)
+	VGL_GET(TexParameteri) VGL_GET(Begin) VGL_GET(End) VGL_GET(TexCoord2f) VGL_GET(Vertex2f)
+#undef VGL_GET
+	vs = vgl_shader(VGL_VERTEX_SHADER, vgl_vs);
+	fsh = vgl_shader(VGL_FRAGMENT_SHADER, vgl_fs);
+	if (!vs || !fsh)
+		return false;
+	vgl_prog = vgl.CreateProgram();
+	vgl.AttachShader(vgl_prog, vs);
+	vgl.AttachShader(vgl_prog, fsh);
+	vgl.LinkProgram(vgl_prog);
+	vgl.GetProgramiv(vgl_prog, VGL_LINK_STATUS, &ok);
+	if (!ok) {
+		char lg[600];
+
+		lg[0] = 0;
+		vgl.GetProgramInfoLog(vgl_prog, (vgl_sizei) sizeof lg, NULL, lg);
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+			"gpulit: the shader didn't link - lighting stays in software: %s\n", lg);
+		return false;
+	}
+	for (k = 0; k < VGL_U_N; k++)
+		vgl_loc[k] = vgl.GetUniformLocation(vgl_prog, un[k]);
+	vgl_state = 1;
+	vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+		"gpulit: dynamic lighting runs on the GPU (%s)\n", ri.name);
+	return true;
+}
+
+/* s185: OpenGL while the map is lit, SDL's default renderer otherwise.  A
+   change makes a new renderer: every GPU texture is remade lazily and the
+   level redrawn; vulture_screen (the overlay / software frame) is kept. */
+void vulture_gpu_use_gl(bool on)
+{
+	SDL_RendererInfo ri;
+	bool is_gl;
+
+	if (on == vgpu_gl_wanted)
+		return;
+	vgpu_gl_wanted = on;
+	if (!vulture_gpu || getenv("VULTURE_GPU_SOFT") || getenv("SDL_RENDER_DRIVER")
+	    || getenv("VULTURE_NO_GL"))
+		return;
+	is_gl = SDL_GetRendererInfo(vulture_gpu, &ri) == 0 && !strcmp(ri.name, "opengl");
+	if (is_gl == on)
+		return;
+	vgm_drop(true);
+	if (vulture_gpu_tex)
+		SDL_DestroyTexture(vulture_gpu_tex);
+	vulture_gpu_tex = NULL;
+	SDL_DestroyRenderer(vulture_gpu);
+	vulture_gpu = NULL;
+	vgpu_reattach(vulture_render_scale);
+	vulture_gpumap_lost = true;
+	vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "gpu: renderer remade for %s\n",
+		on ? "lighting (OpenGL)" : "no lighting");
+}
+
+/* s185: a normal-map draw during the map pass, replayed into the normal layer */
+void vulture_gpumap_normal(SDL_Surface *s, int x, int y)
+{
+	vgm_nrec r;
+
+	if (!vulture_gpumap_on || !s)
+		return;
+	r.s = s, r.x = x, r.y = y, r.ex = false, r.sx = r.sy = 1.0, r.deg = 0.0, r.alpha = 255;
+	vgm_nlist.push_back(r);
+}
+
+void vulture_gpumap_normal_ex(SDL_Surface *s, int dx, int dy, double sx, double sy, double deg,
+                              int alpha)
+{
+	vgm_nrec r;
+
+	if (!vulture_gpumap_on || !s)
+		return;
+	r.s = s, r.x = dx, r.y = dy, r.ex = true, r.sx = sx, r.sy = sy, r.deg = deg, r.alpha = alpha;
+	vgm_nlist.push_back(r);
+}
+
+/* s185: (re)make a texture at w x h; 0 failed, 1 kept, 2 new */
+static int vgl_texture(SDL_Texture **t, int w, int h, int access)
+{
+	int tw = 0, th = 0;
+
+	if (*t) {
+		SDL_QueryTexture(*t, NULL, NULL, &tw, &th);
+		if (tw == w && th == h)
+			return 1;
+		SDL_DestroyTexture(*t);
+	}
+	*t = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888, access, w, h);
+	return *t ? 2 : 0;
+}
+
+/*
+ * s185: light this frame's map on the GPU - vl_render calls this where it
+ * would run vl_relief + vl_apply, with the same grids and origins: the light
+ * grid `low` (sample i at x = lox + i*FS), the per-cell directions dx/dy/lv
+ * (dw x dh cells from gx0, gy0), relief on or off, `fresh` when the grids
+ * were rebuilt (upload them), `area` the map's rectangle.
+ */
+void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const short *dx,
+                          const short *dy, const short *lv, int dw, int dh, int gx0, int gy0,
+                          bool relief, bool fresh, const SDL_Rect *area)
+{
+	int W, Hh, mk;
+	float tw = 1.0f, th = 1.0f, ltw = 1.0f, lth = 1.0f, dtw = 1.0f, dth = 1.0f;
+	size_t i;
+
+	vgm_lit_valid = false;
+	if (!vgm_live() || !low || FS <= 0 || !vulture_gpulit_ok())
+		return;
+	W = vulture_screen->w, Hh = vulture_screen->h;
+	if (!vgl_texture(&vgm_lit, W, Hh, SDL_TEXTUREACCESS_TARGET))
+		return;
+	if (!dx || !dy || !lv || dw <= 0 || dh <= 0)
+		relief = false;
+	if (relief && !vgl_texture(&vgm_nrm, W, Hh, SDL_TEXTUREACCESS_TARGET))
+		relief = false;
+	/* the light grid */
+	mk = vgl_texture(&vgl_light, low->w, low->h, SDL_TEXTUREACCESS_STREAMING);
+	if (!mk)
+		return;
+	if (fresh || mk == 2) {
+		if (SDL_MUSTLOCK(low))
+			SDL_LockSurface(low);
+		SDL_UpdateTexture(vgl_light, NULL, low->pixels, low->pitch);
+		if (SDL_MUSTLOCK(low))
+			SDL_UnlockSurface(low);
+	}
+	/* the per-cell light: R, G direction (/4, +128), B strength, A on */
+	if (relief) {
+		mk = vgl_texture(&vgl_dirs, dw, dh, SDL_TEXTUREACCESS_STREAMING);
+		if (!mk)
+			relief = false;
+		else if (fresh || mk == 2) {
+			std::vector<Uint32> px((size_t) dw * dh);
+
+			for (i = 0; i < px.size(); i++) {
+				int r = dx[i] / 4 + 128, g = dy[i] / 4 + 128, b = lv[i] * 255 / 256;
+
+				r = r < 0 ? 0 : r > 255 ? 255 : r;
+				g = g < 0 ? 0 : g > 255 ? 255 : g;
+				b = b < 0 ? 0 : b > 255 ? 255 : b;
+				px[i] = ((dx[i] || dy[i]) ? 0xFF000000u : 0u) | ((Uint32) r << 16)
+					| ((Uint32) g << 8) | (Uint32) b;
+			}
+			SDL_UpdateTexture(vgl_dirs, NULL, &px[0], dw * 4);
+		}
+	}
+	/* the normal layer: this frame's normal-map draws, as the map pass made them */
+	if (relief) {
+		SDL_SetRenderTarget(vulture_gpu, vgm_nrm);
+		SDL_RenderSetClipRect(vulture_gpu, &vgm_clip);
+		SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_NONE);
+		SDL_SetRenderDrawColor(vulture_gpu, 0, 0, 0, 0);
+		SDL_RenderFillRect(vulture_gpu, &vgm_clip);
+		for (i = 0; i < vgm_nlist.size(); i++) {
+			const vgm_nrec &r = vgm_nlist[i];
+			SDL_Texture *t = vgm_texture(r.s);
+			SDL_BlendMode bm = SDL_BLENDMODE_BLEND;
+
+			if (!t)
+				continue;
+			SDL_GetSurfaceBlendMode(r.s, &bm);
+			SDL_SetTextureBlendMode(t, bm);
+			SDL_SetTextureColorMod(t, 255, 255, 255);
+			if (!r.ex) {
+				SDL_Rect d = { r.x, r.y, r.s->w, r.s->h };
+
+				SDL_SetTextureAlphaMod(t, 255);
+				SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
+				SDL_RenderCopy(vulture_gpu, t, NULL, &d);
+			} else if (r.sx > 0.0 && r.sy > 0.0) { /* vulture_gpumap_blit_ex's pose */
+				SDL_FRect d;
+				SDL_FPoint c;
+
+				d.w = (float) (r.s->w * r.sx), d.h = (float) (r.s->h * r.sy);
+				d.x = (float) (r.x + r.s->w * 0.5 * (1.0 - r.sx));
+				d.y = (float) (r.y + r.s->h * (1.0 - r.sy));
+				c.x = d.w * 0.5f, c.y = d.h;
+				SDL_SetTextureAlphaMod(t, (Uint8) (r.alpha < 0 ? 0 : r.alpha > 255 ? 255 : r.alpha));
+				SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+				SDL_RenderCopyExF(vulture_gpu, t, NULL, &d, r.deg, &c, SDL_FLIP_NONE);
+			}
+		}
+		SDL_RenderSetClipRect(vulture_gpu, NULL);
+	}
+	/* the shader pass: map (+ normals) + light -> vgm_lit */
+	SDL_SetRenderTarget(vulture_gpu, vgm_lit);
+	SDL_RenderSetClipRect(vulture_gpu, NULL);
+	SDL_RenderFlush(vulture_gpu);
+	{
+		vgl_int prev = 0;
+
+		vgl.GetIntegerv(VGL_CURRENT_PROGRAM, &prev);
+		vgl.PushAttrib(VGL_ALL_ATTRIB_BITS);
+		vgl.UseProgram(vgl_prog);
+		vgl.ActiveTexture(VGL_TEXTURE0);
+		SDL_GL_BindTexture(vgm_tex, &tw, &th);
+		vgl.ActiveTexture(VGL_TEXTURE0 + 1);
+		SDL_GL_BindTexture(relief ? vgm_nrm : vgm_tex, NULL, NULL);
+		vgl.ActiveTexture(VGL_TEXTURE0 + 2);
+		SDL_GL_BindTexture(vgl_light, &ltw, &lth);
+		vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MIN_FILTER, VGL_LINEAR);
+		vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MAG_FILTER, VGL_LINEAR);
+		vgl.ActiveTexture(VGL_TEXTURE0 + 3);
+		SDL_GL_BindTexture(relief ? vgl_dirs : vgl_light, &dtw, &dth);
+		if (relief) {
+			vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MIN_FILTER, VGL_NEAREST);
+			vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MAG_FILTER, VGL_NEAREST);
+		}
+		if (tw > 1.5f || ltw > 1.5f) { /* rectangle textures: not this shader's kind */
+			vgl.UseProgram((vgl_uint) prev);
+			SDL_GL_UnbindTexture(vgm_tex);
+			vgl.PopAttrib();
+			SDL_SetRenderTarget(vulture_gpu, NULL);
+			vgl_state = 0;
+			vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+				"gpulit: rectangle textures - lighting stays in software\n");
+			return;
+		}
+		vgl.Uniform1i(vgl_loc[VGL_U_MAP], 0);
+		vgl.Uniform1i(vgl_loc[VGL_U_NRM], 1);
+		vgl.Uniform1i(vgl_loc[VGL_U_LIGHT], 2);
+		vgl.Uniform1i(vgl_loc[VGL_U_DIRS], 3);
+		vgl.Uniform4f(vgl_loc[VGL_U_SIZE], (float) W, (float) Hh, tw, th);
+		vgl.Uniform4f(vgl_loc[VGL_U_LG], (float) lox, (float) loy, (float) FS, 0.0f);
+		vgl.Uniform4f(vgl_loc[VGL_U_LGS], (float) low->w, (float) low->h, ltw, lth);
+		vgl.Uniform4f(vgl_loc[VGL_U_DG], (float) gx0, (float) gy0, (float) FS, relief ? 1.0f : 0.0f);
+		vgl.Uniform4f(vgl_loc[VGL_U_DGS], (float) (dw > 0 ? dw : 1), (float) (dh > 0 ? dh : 1), dtw, dth);
+		vgl.Uniform4f(vgl_loc[VGL_U_AREA], (float) area->x, (float) area->y,
+			(float) (area->x + area->w), (float) (area->y + area->h));
+		vgl.Disable(VGL_BLEND);
+		vgl.Disable(VGL_SCISSOR_TEST);
+		vgl.Begin(VGL_QUADS);
+		vgl.TexCoord2f(0.0f, 0.0f);
+		vgl.Vertex2f(-1.0f, -1.0f);
+		vgl.TexCoord2f(1.0f, 0.0f);
+		vgl.Vertex2f(1.0f, -1.0f);
+		vgl.TexCoord2f(1.0f, 1.0f);
+		vgl.Vertex2f(1.0f, 1.0f);
+		vgl.TexCoord2f(0.0f, 1.0f);
+		vgl.Vertex2f(-1.0f, 1.0f);
+		vgl.End();
+		vgl.UseProgram((vgl_uint) prev);
+		SDL_GL_UnbindTexture(vgm_tex); /* SDL forgets which texture it thinks is bound */
+		vgl.PopAttrib();
+	}
+	SDL_SetRenderTarget(vulture_gpu, NULL);
+	vgm_lit_valid = true;
 }
 
 void vulture_reattach_render_surface(void)

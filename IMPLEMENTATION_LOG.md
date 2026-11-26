@@ -3752,6 +3752,50 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   with them), then the jackal lunges and the hero flashes red.  The keys
   turn with the view, so the probe clicks instead of pressing 'l'.
 
+### 185. Dynamic lighting on the GPU
+
+- The user: make the dynamic lighting work with the GPU.  s183 drew the map
+  on the GPU only with lighting off, because the light passes (vl_nmap's
+  normal-mapped relief, vl_apply's light layer) read and write the map's
+  pixels.  SDL2's renderer has no shaders, but its OpenGL backend lends its
+  textures to OpenGL (SDL_GL_BindTexture) - so while the map is lit the
+  renderer is OpenGL (`vulture_gpu_use_gl`, called from levelwin::draw:
+  turning lighting on or off remakes the renderer once - every GPU texture
+  is rebuilt lazily, vulture_screen is kept; VULTURE_NO_GL=1 or
+  SDL_RENDER_DRIVER override it), and unlit it stays SDL's default
+  (Direct3D here): OpenGL presents cost ~6 ms more per frame on this PC
+  (unlit: present 8.1 ms vs 1.5, mostly in the swap).  One GLSL pass does both passes'
+  arithmetic, same constants and order, in floats: n . L with the 1.5x
+  gain, crevices, the soft glint, the +-80 / 32 clamps, then
+  out = rgb + (tint - rgb) * A from the light grid, black staying black.
+- Inputs: the map layer; a normal layer (vgm_nrm) - the normal-map tiles
+  and transformed sprite normals are recorded during the map pass
+  (vulture_put_normal and vtw_put_tile_x branch on vulture_gpumap_on) and
+  replayed into it, so it holds exactly what vulture_normal_buf held; the
+  light grid vl_low (bilinear) and the per-cell directions vr_dx / vr_dy /
+  vr_lv packed into a small texture (per cell).  vl_render hands its grids
+  and origins over where it would have run vl_relief + vl_apply
+  (`vulture_gpulit_frame`; uploads only when the grids were rebuilt).  The
+  lit map goes into vgm_lit, which the composite shows.  Raw GL runs
+  between SDL's commands: the renderer is flushed, all state pushed and
+  popped, the program restored, SDL's texture cache reset.
+- Without OpenGL, or if the shader fails, lighting draws the old way (the
+  log says which); VULTURE_NO_GPULIT=1 forces that.  The Visual effects
+  switch says when lighting is in software.
+- Probes (hidden window, this PC, OpenGL): "gpulit: dynamic lighting runs
+  on the GPU (opengl)"; the same lit frame both ways (GPUDIFF with
+  VULTURE_SELFTEST_LIT=1) differs by a mean of 0.73 per channel, 100 pixels
+  over 16 - rounding (the GPU is ~0.5 brighter on average), sprite edges,
+  and faint 8 px banding where the CPU held the tint per cell.  Zoomed 2x /
+  1.5x: 1.1 / 1.1.  VULTURE_SELFTEST_FLAT=1: lighting without the normal
+  maps.
+- Measured (hidden window, this PC, 30 s of the soak bot, lighting on): CPU
+  lighting on Direct3D - map draw median 12 ms (p90 13), present 1.4 ms,
+  ~13.4 ms a frame; GPU lighting on OpenGL - map draw 2 ms (p90 4), present
+  3.5 ms (p90 8.6), ~5.5 ms a frame, and a third more frames drawn.  Unlit
+  stays on Direct3D: map draw 1 ms, present 1.5 ms.  The present log now
+  splits upload / draw / swap.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

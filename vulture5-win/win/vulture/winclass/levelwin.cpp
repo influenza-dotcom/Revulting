@@ -858,7 +858,12 @@ vtw_put_tile_x(int x, int y, int tile_id, int face, double sx, double sy,
         }
     }
     vtx_blit(img, dx, y + tile->ymod, sx, sy, deg, red, alpha);
-    if (vulture_normal_capture && vulture_normal_buf) { /* s149: its normal map, same pose */
+    if (vulture_normal_capture && vulture_gpumap_on) { /* s185: recorded for the GPU */
+        SDL_Surface *nm = vulture_get_tile_normal(tile_id, img != tile->graphic);
+
+        if (nm)
+            vulture_gpumap_normal_ex(nm, dx, y + tile->ymod, sx, sy, deg, alpha);
+    } else if (vulture_normal_capture && vulture_normal_buf) { /* s149: its normal map, same pose */
         SDL_Surface *nm = vulture_get_tile_normal(tile_id, img != tile->graphic);
 
         if (nm) {
@@ -3346,6 +3351,7 @@ static void vselftest(void); /* s126 probe */
    Visual effects menu turn it on; the choice is kept in effects.txt
    ("lighting="). */
 static bool vl_on = false;
+static bool vl_gpu_frame = false; /* s185: this frame's map is lit on the GPU */
 static point vck_from = { -1, -1 }, vck_to = { -1, -1 }; /* s145 probe */
 
 static void
@@ -6560,6 +6566,8 @@ vselftest(void)
         if (getenv("VULTURE_SELFTEST_LIGHT") || getenv("VULTURE_SELFTEST_PORTAL")
             || getenv("VULTURE_SELFTEST_LIT"))
             vl_on = true;
+        if (getenv("VULTURE_SELFTEST_FLAT")) /* s185: lighting without the normal maps */
+            vl_on = true, vl_relief_set(false);
     }
     switch (stage) {
     case 0: {
@@ -9198,7 +9206,8 @@ vfx_menu(void)
             snprintf(ml, sizeof ml, "Draw the map on the GPU  -  %s%s",
                      vulture_gpumap_wanted ? "ON" : "off",
                      !vulture_gpu ? "  (needs GPU presentation)"
-                     : vl_on ? "  (only while dynamic lighting is off)" : "");
+                     : vl_on && !vulture_gpulit_ok() ? "  (lighting needs OpenGL - software now)"
+                     : ""); /* s185 */
             any = cg.zeroany;
             any.a_int = 9;
             vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'm', 0,
@@ -9647,6 +9656,11 @@ vnm_begin(void)
     vulture_normal_capture = false;
     if (!vl_on || !vl_relief_on2 || !vulture_screen)
         return;
+    if (vulture_gpumap_on) { /* s185: the normal-map draws are recorded for the GPU */
+        vulture_normal_capture = true;
+        vnm_ok = true;
+        return;
+    }
     if (!vulture_normal_buf || vulture_normal_buf->w != vulture_screen->w
         || vulture_normal_buf->h != vulture_screen->h) {
         if (vulture_normal_buf)
@@ -10423,6 +10437,15 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         && abs(cx - c_cx) < M && abs(cy - c_cy) < M
         && (vtw_animating || now - c_when < (vl_magic ? 50u : 120u)) && vl_flashes.empty()) {
         dst.x = ax - M + (cx - c_cx), dst.y = ay - M + (cy - c_cy);
+        if (vl_gpu_frame) { /* s185: the same grids and origins, lit by the GPU */
+            SDL_Rect ar = { max0, may0, mw0, mh0 };
+
+            vulture_gpulit_frame(vl_low, dst.x, dst.y, FS, vr_dx.empty() ? NULL : &vr_dx[0],
+                                 vr_dy.empty() ? NULL : &vr_dy[0], vr_lv.empty() ? NULL : &vr_lv[0],
+                                 vr_lw, vr_lh, c_gx0 + (cx - c_cx), c_gy0 + (cy - c_cy),
+                                 vl_relief_on && vnm_ok, false, &ar);
+            return;
+        }
         vl_relief(max0, may0, mw0, mh0, c_gx0 + (cx - c_cx), c_gy0 + (cy - c_cy), FS);
         vl_apply(vl_low, max0, may0, mw0, mh0, dst.x, dst.y, FS); /* s153 */
         return;
@@ -10491,6 +10514,14 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     Uint32 vt_s = SDL_GetTicks(); /* probe: s147 (no stretch since s153) */
     vl_relief_dirs(Lg, lw, lh); /* s145 */
     c_gx0 = ax - FS / 2, c_gy0 = ay - FS / 2; /* cell i covers ax+i*FS +- FS/2 */
+    if (vl_gpu_frame) { /* s185: rebuilt grids - the GPU uploads and lights */
+        SDL_Rect ar = { max0, may0, mw0, mh0 };
+
+        vulture_gpulit_frame(vl_low, ax, ay, FS, vr_dx.empty() ? NULL : &vr_dx[0],
+                             vr_dy.empty() ? NULL : &vr_dy[0], vr_lv.empty() ? NULL : &vr_lv[0],
+                             vr_lw, vr_lh, c_gx0, c_gy0, vl_relief_on && vnm_ok, true, &ar);
+        return;
+    }
     vl_relief(max0, may0, mw0, mh0, c_gx0, c_gy0, FS);
     Uint32 vt_r = SDL_GetTicks(); /* probe: s147 */
     vl_apply(vl_low, max0, may0, mw0, mh0, ax, ay, FS); /* s153 */
@@ -10667,7 +10698,11 @@ levelwin::draw()
          the two, or textures lost, redraws everything */
         extern SDL_Renderer *vulture_gpu;
         static int last_gpu = -1;
-        int want_gpu = !vl_on && vulture_gpumap_wanted && vulture_gpu != NULL;
+        int want_gpu;
+
+        vulture_gpu_use_gl(vl_on && vulture_gpumap_wanted); /* s185: OpenGL only while lit */
+        want_gpu = (!vl_on || vulture_gpulit_ok()) /* s185: lit too, given the shader */
+                   && vulture_gpumap_wanted && vulture_gpu != NULL;
 
         if (want_gpu != last_gpu || vulture_gpumap_lost) {
             prev_cx = -1;
@@ -10742,7 +10777,7 @@ levelwin::draw()
     Uint32 vpf_a = SDL_GetTicks(); /* probe: s152 frame stages */
     bool vgm = false; /* s183: tiles and sprites into the GPU map layer */
 
-    if (!vl_on) {
+    if (!vl_on || vulture_gpulit_ok()) { /* s185: lighting on the GPU too */
         SDL_Rect cr;
 
         cr.x = clip_tl_x, cr.y = clip_tl_y;
@@ -10753,6 +10788,7 @@ levelwin::draw()
         SDL_FillRect(vulture_screen, NULL, 0); /* the overlay starts clear over the map */
     else
         vulture_gpumap_abandon();
+    vl_gpu_frame = vgm && vl_on; /* s185 */
     vnm_begin(); /* s149: the map's tiles lay their normal maps from here */
 
     /* without the +-1 small corners within the viewport are not drawn */

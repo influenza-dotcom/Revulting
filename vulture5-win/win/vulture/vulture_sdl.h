@@ -121,4 +121,15 @@ extern void vulture_gpu_forget(SDL_Surface *s);
 extern bool vulture_frame_to_surface(SDL_Surface *out, const SDL_Rect *area);
 extern int vulture_save_frame_bmp(const char *path);
 
+/* s185: dynamic lighting on the GPU - the OpenGL renderer runs one shader
+ * that does the normal-mapped relief and the light layer (vulture_sdl.cpp) */
+extern bool vulture_gpulit_ok(void);
+extern void vulture_gpu_use_gl(bool on); /* OpenGL while lit, SDL's default otherwise */
+extern void vulture_gpumap_normal(SDL_Surface *s, int x, int y);
+extern void vulture_gpumap_normal_ex(SDL_Surface *s, int dx, int dy, double sx, double sy,
+                                     double deg, int alpha);
+extern void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const short *dx,
+                                 const short *dy, const short *lv, int dw, int dh, int gx0,
+                                 int gy0, bool relief, bool fresh, const SDL_Rect *area);
+
 #endif

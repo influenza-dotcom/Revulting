@@ -290,6 +290,11 @@ void vulture_put_normal(int x, int y, int tile_id)
 	SDL_Surface *n;
 	SDL_Rect r;
 
+	if (vulture_gpumap_on) { /* s185: recorded, replayed into the GPU's normal layer */
+		if (vulture_normal_capture && (n = vulture_get_tile_normal(tile_id, false)))
+			vulture_gpumap_normal(n, x, y);
+		return;
+	}
 	if (!vulture_normal_capture || !vulture_normal_buf
 	    || !(n = vulture_get_tile_normal(tile_id, false)))
 		return;
