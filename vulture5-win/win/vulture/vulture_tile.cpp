@@ -28,7 +28,10 @@ extern "C" {
 #include "vulture_tileconfig.h"
 
 #define TILEARRAYLEN (GAMETILECOUNT*3)
-#define TILECACHE_MAXAGE 4
+/* s186: in FRAMES (vulture_tilecache_age runs every map draw) - 4 freed a
+   tile that left the screen for a tenth of a second, so panning back read
+   its PNG from disk again (and re-uploaded it to the GPU) */
+#define TILECACHE_MAXAGE 1800
 
 typedef struct {
 	vulture_tile *tile;

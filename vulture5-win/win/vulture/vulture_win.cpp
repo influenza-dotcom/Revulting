@@ -231,7 +231,11 @@ void vulture_event_dispatcher(void * result, int resulttype, window * topwin)
 #ifdef __EMSCRIPTEN__
 		emscripten_sleep(1);
 #else
-		SDL_Delay(20);
+		/* s186: not while the map is being dragged - the camera follows
+		   the mouse every frame (20 ms a frame held it to ~35 moves a
+		   second) */
+		if (!(event.type == SDL_MOUSEMOTION && (event.motion.state & SDL_BUTTON_MMASK)))
+			SDL_Delay(20);
 #endif
 	}
 }

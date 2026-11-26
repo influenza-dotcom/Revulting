@@ -3575,11 +3575,30 @@ static int vrt_get(void);
 static void vrt_probe_dump(FILE *f);
 extern "C" void vulture_search_fx(void); /* s136 */
 
+/* probe: s186 - VULTURE_SELFTEST_PAN pushes a burst of middle-drag motion
+   and reports how long the game took to catch up, and in how many frames */
+static Uint32 vpan_probe_t0 = 0;
+static int vpan_probe_frames = 0, vpan_probe_round = 0;
+static int vpan_probe_dx = 0, vpan_probe_dy = 0, vpan_probe_moves = 0;
+
 void
 vulture_idle_bob(bool at_map)
 {
     static Uint32 last = 0;
     Uint32 now = SDL_GetTicks(), took;
+
+    if (vpan_probe_t0) { /* probe: s186 */
+        SDL_PumpEvents();
+        if (SDL_PeepEvents(NULL, 0, SDL_PEEKEVENT, SDL_MOUSEMOTION, SDL_MOUSEMOTION) == 0) {
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+                              "pan: round %d - 300 drag events caught up in %u ms, %d frames;"
+                              " %d drag moves took (%d, %d) px of (%d, 0)\n",
+                              vpan_probe_round, (unsigned) (now - vpan_probe_t0),
+                              vpan_probe_frames, vpan_probe_moves, vpan_probe_dx,
+                              vpan_probe_dy, 300 * (vulture_render_scale > 1 ? vulture_render_scale : 1));
+            vpan_probe_t0 = 0;
+        }
+    }
 
     if (vpause_probe_t && now - vpause_probe_t > 700 && getenv("VULTURE_SELFTEST")) {
         char pp[700];
@@ -7017,6 +7036,22 @@ vselftest(void)
             for (q = 0; q < 6; q++)
                 vprobe_push_key(ks[q & 3]);
         }
+        if (getenv("VULTURE_SELFTEST_PAN")) { /* probe: s186 a fast middle-drag */
+            SDL_Event e;
+            int q;
+
+            memset(&e, 0, sizeof e);
+            e.type = SDL_MOUSEMOTION;
+            e.motion.state = SDL_BUTTON_MMASK;
+            e.motion.x = vulture_screen->w / 2, e.motion.y = vulture_screen->h / 2;
+            for (q = 0; q < 300; q++) {
+                e.motion.xrel = (q / 60) % 2 ? -5 : 5;
+                e.motion.yrel = (q / 75) % 2 ? -2 : 2;
+                SDL_PushEvent(&e);
+            }
+            vpan_probe_t0 = SDL_GetTicks(), vpan_probe_frames = 0, vpan_probe_round++;
+            vpan_probe_dx = vpan_probe_dy = vpan_probe_moves = 0;
+        }
         if (getenv("VULTURE_SELFTEST_APPROACH")) { /* probe: s184 step next to a hostile */
             int ex1 = u.ux + 1, ex2 = u.ux + 2, ey = u.uy;
 
@@ -10420,7 +10455,9 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     /* s147: 8 px cells (was 4) - pools are bilinear across 56 px squares, so
        it looks the same at a quarter of the sampling */
     int FS = 8 * (vulture_render_scale > 0 ? vulture_render_scale : 1);
-    int M = 64; /* margin: a cached layer can slide with the camera (s152: was 96) */
+    int M = 128; /* margin: a cached layer can slide with the camera (s152: 96 -> 64;
+                    s186: 128 - panning slides it instead of rebuilding) */
+    int pvx = 0, pvy = 0, sox, soy; /* s186: a view shift, in pixels */
     int lw, lh, i, j;
     Uint32 now = SDL_GetTicks();
     SDL_Rect src, dst;
@@ -10432,21 +10469,26 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         return;
     /* reuse the last layer (shifted with the camera) unless the scene
        changed or ~90 ms passed (flicker); during a slide, always reuse */
-    if (vl_low && c_vx == vx && c_vy == vy && c_ux == u.ux && c_uy == u.uy
+    /* s186: a pan that changed the view square is a slide too - the grid is
+       map light sampled on the screen, so it only moves */
+    if (c_vx != -99 && abs(vx - c_vx) <= 8 && abs(vy - c_vy) <= 8)
+        vtw_proj(vx - c_vx, vy - c_vy, &pvx, &pvy);
+    sox = (cx - c_cx) - pvx, soy = (cy - c_cy) - pvy;
+    if (vl_low && abs(vx - c_vx) <= 8 && abs(vy - c_vy) <= 8 && c_ux == u.ux && c_uy == u.uy
         && c_moves == svm.moves && c_rot == vulture_view_rot && c_w == w && c_h == h
-        && abs(cx - c_cx) < M && abs(cy - c_cy) < M
+        && abs(sox) < M && abs(soy) < M
         && (vtw_animating || now - c_when < (vl_magic ? 50u : 120u)) && vl_flashes.empty()) {
-        dst.x = ax - M + (cx - c_cx), dst.y = ay - M + (cy - c_cy);
+        dst.x = ax - M + sox, dst.y = ay - M + soy;
         if (vl_gpu_frame) { /* s185: the same grids and origins, lit by the GPU */
             SDL_Rect ar = { max0, may0, mw0, mh0 };
 
             vulture_gpulit_frame(vl_low, dst.x, dst.y, FS, vr_dx.empty() ? NULL : &vr_dx[0],
                                  vr_dy.empty() ? NULL : &vr_dy[0], vr_lv.empty() ? NULL : &vr_lv[0],
-                                 vr_lw, vr_lh, c_gx0 + (cx - c_cx), c_gy0 + (cy - c_cy),
+                                 vr_lw, vr_lh, c_gx0 + sox, c_gy0 + soy,
                                  vl_relief_on && vnm_ok, false, &ar);
             return;
         }
-        vl_relief(max0, may0, mw0, mh0, c_gx0 + (cx - c_cx), c_gy0 + (cy - c_cy), FS);
+        vl_relief(max0, may0, mw0, mh0, c_gx0 + sox, c_gy0 + soy, FS); /* s186 */
         vl_apply(vl_low, max0, may0, mw0, mh0, dst.x, dst.y, FS); /* s153 */
         return;
     }
@@ -11098,6 +11140,8 @@ levelwin::draw()
     vulture_tilecache_age();
 
     vulture_map_draw_msecs = SDL_GetTicks() - startticks;
+    if (vpan_probe_t0) /* probe: s186 */
+        vpan_probe_frames++;
     if (getenv("VULTURE_SELFTEST")) /* probe: s152 where a frame goes */
         vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
                           "frame %u: pre %u tiles %u light %u vw %u fx %u vignette %u hud %u\n",
@@ -11328,6 +11372,21 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
         vulture_cam_follow = false; /* s123/s124: you moved the camera */
         vulture_cam_manual = true;
 
+        { /* s186: every drag event already waiting goes into this one move,
+             so one redraw covers them all - a redraw per event (a mouse
+             sends hundreds a second) left the camera trailing the mouse */
+            SDL_Event mev;
+
+            SDL_PumpEvents();
+            while (SDL_PeepEvents(&mev, 1, SDL_PEEKEVENT, SDL_MOUSEMOTION, SDL_MOUSEMOTION) > 0
+                   && (mev.motion.state & SDL_BUTTON_MMASK)) {
+                SDL_PeepEvents(&mev, 1, SDL_GETEVENT, SDL_MOUSEMOTION, SDL_MOUSEMOTION);
+                vulture_handle_global_event(&mev); /* render space, pointer position */
+                xrel += mev.motion.xrel, yrel += mev.motion.yrel;
+            }
+        }
+        if (vpan_probe_t0) /* probe: s186 */
+            vpan_probe_dx += xrel, vpan_probe_dy += yrel, vpan_probe_moves++;
         vpan_px += xrel * sc;
         vpan_py += yrel * sc;
         for (int guard = 0; guard < 64; guard++) {
@@ -11362,6 +11421,13 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
         return V_EVENT_HANDLED_REDRAW;
     }
 
+    { /* s186: a newer motion event is already waiting - let it do the work */
+        SDL_Event mev;
+
+        if (SDL_PeepEvents(&mev, 1, SDL_PEEKEVENT, SDL_MOUSEMOTION, SDL_MOUSEMOTION) > 0
+            && !(mev.motion.state & SDL_BUTTON_MMASK))
+            return V_EVENT_HANDLED_NOREDRAW;
+    }
     mouse = vulture_get_mouse_pos();
     mappos = mouse_to_map(mouse);
 

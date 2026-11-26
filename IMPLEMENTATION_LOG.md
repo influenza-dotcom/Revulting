@@ -3796,6 +3796,37 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   stays on Direct3D: map draw 1 ms, present 1.5 ms.  The present log now
   splits upload / draw / swap.
 
+### 186. The camera keeps up with a middle-drag
+
+- The user: the game noticeably lags when you move the camera.  Four causes:
+  1. The drag lost most of its distance.  vulture_wait_event /
+     vulture_poll_event skip stale MOUSEMOTION and dispatch only the newest
+     event of a run - right for hovering, wrong for a middle-drag: the
+     camera moved by the last event's few pixels per frame, so a fast drag
+     felt like dragging through mud and slower frames lost more.  The skip
+     is now `vulture_take_event`: a drag run's xrel/yrel add up into the
+     event kept (hover runs are unchanged), and a key or click that ends a
+     drag run is held one call so the run before it isn't dropped (hover
+     motion before a click is still dropped, so clicks aren't delayed).
+  2. vulture_event_dispatcher slept 20 ms after every event, which held a
+     drag to ~35 camera moves a second; it doesn't sleep after a drag event.
+     handle_mousemotion_event also takes any drag events that arrived during
+     the frame (and vulture_travel_pan's), and plain hovering skips a motion
+     event when a newer one is already waiting.
+  3. The light grid was rebuilt whenever the pan changed the view square.
+     It is map light sampled on the screen, so it only moves: a view shift
+     of up to 8 squares slides it (vtw_proj of the shift), with a 128 px
+     margin (was 64), in the CPU path and the GPU hand-off alike.
+  4. TILECACHE_MAXAGE 4 counted in turns once but vulture_tilecache_age now
+     runs every map draw, so a tile off the screen for four frames was freed
+     and panning back decoded its PNG again (and re-uploaded it); now 1800
+     frames.
+- Probe: VULTURE_SELFTEST_PAN pushes 300 drag events at once (net +300 px
+  across) and reports how the game took them: "1 drag moves took (300, 0) px
+  of (300, 0)", unlit and lit.  By the code the old skip took only the last
+  event's (5, -2).  (Its "caught up in N ms, N frames" counts every frame
+  until the queue is empty, other stage work included.)
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

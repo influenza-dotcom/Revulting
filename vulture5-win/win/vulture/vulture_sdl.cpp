@@ -112,6 +112,45 @@ bool is_modifier_key(int sym)
 }
 
 
+#ifndef __EMSCRIPTEN__
+/* s186: take the next queued event, skipping stale MOUSEMOTION (only the
+   newest of a run matters for hovering) - but a middle-drag's run adds up:
+   the event kept carries the whole run's xrel/yrel, so the camera moves as
+   far as the mouse did (it moved by the last event's few pixels, so a fast
+   drag felt like dragging through mud), and a click or key that ends a
+   drag run waits one call, so the run before it isn't dropped either */
+static SDL_Event vte_stash;
+static int vte_stashed = 0;
+
+static int vulture_take_event(SDL_Event * event)
+{
+	SDL_Event tmp;
+	int n = 0, dx = 0, dy = 0;
+
+	if (vte_stashed) {
+		*event = vte_stash;
+		vte_stashed = 0;
+		return 1;
+	}
+	while (SDL_PollEvent(&tmp)) {
+		if (tmp.type != SDL_MOUSEMOTION) {
+			if (n && (event->motion.state & SDL_BUTTON_MMASK)) {
+				vte_stash = tmp, vte_stashed = 1; /* the drag first */
+				break;
+			}
+			*event = tmp;
+			return 1;
+		}
+		dx += tmp.motion.xrel, dy += tmp.motion.yrel;
+		*event = tmp;
+		n++;
+	}
+	if (n && (event->motion.state & SDL_BUTTON_MMASK))
+		event->motion.xrel = dx, event->motion.yrel = dy;
+	return n > 0;
+}
+#endif
+
 void vulture_wait_event(SDL_Event * event, int wait_timeout)
 {
 	int done = 0;
@@ -133,15 +172,9 @@ void vulture_wait_event(SDL_Event * event, int wait_timeout)
 			break; /* got a real event */
 		}
 #else
-		/* Drain stale MOUSEMOTION events, keeping the last polled event */
-		{
-			SDL_Event tmp;
-			while (SDL_PollEvent(&tmp)) {
-				*event = tmp;
-				if (tmp.type != SDL_MOUSEMOTION)
-					break;
-			}
-		}
+		/* Drain stale MOUSEMOTION events, keeping the last polled event
+		   (s186: a middle-drag keeps their motion too) */
+		(void) vulture_take_event(event);
 #endif
 
 		if (!event->type) {
@@ -193,15 +226,9 @@ int vulture_poll_event(SDL_Event * event)
 			break;
 		}
 #else
-		/* Drain stale MOUSEMOTION events, keeping the last polled event */
-		{
-			SDL_Event tmp;
-			while (SDL_PollEvent(&tmp)) {
-				*event = tmp;
-				if (tmp.type != SDL_MOUSEMOTION)
-					break;
-			}
-		}
+		/* Drain stale MOUSEMOTION events, keeping the last polled event
+		   (s186: a middle-drag keeps their motion too) */
+		(void) vulture_take_event(event);
 #endif
 
 		if (!event->type)
