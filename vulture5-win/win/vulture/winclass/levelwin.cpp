@@ -3567,6 +3567,37 @@ vsoak_tick(bool at_map)
 }
 static void vaim_probe(int stage, const char *dir); /* s156 probe */
 static Uint32 vpause_probe_t = 0; /* s145 probe: shoot the pause menu */
+/* probe: s187 - VULTURE_SELFTEST_FOG maps the level and shoots the fog of
+   war against the light: in the start room, in a corridor, in a dark room */
+static Uint32 vfog_probe_t = 0;
+static int vfog_probe_n = 0, vfog_sx = 0, vfog_sy = 0;
+
+static bool
+vfog_probe_move(int n)
+{
+    int x, y, bx = -1, by = -1, bd = 999;
+
+    if (n == 1) { /* the nearest corridor a few squares off */
+        for (x = 1; x < COLNO; x++)
+            for (y = 0; y < ROWNO; y++) {
+                int d = distmin(vfog_sx, vfog_sy, x, y);
+
+                if (levl[x][y].typ == CORR && d >= 5 && d < bd && !m_at(x, y))
+                    bd = d, bx = x, by = y;
+            }
+    } else { /* back to the start, every room dark */
+        for (x = 1; x < COLNO; x++)
+            for (y = 0; y < ROWNO; y++)
+                levl[x][y].lit = 0;
+        bx = vfog_sx, by = vfog_sy;
+    }
+    if (bx < 0)
+        return false;
+    teleds(bx, by, TELEDS_NO_FLAGS);
+    vision_recalc(0);
+    flush_screen(1);
+    return true;
+}
 static void vl_relief_set(bool on); /* s145 */
 static void vl_relief_report(FILE *f);
 
@@ -3600,6 +3631,18 @@ vulture_idle_bob(bool at_map)
         }
     }
 
+    if (vfog_probe_t && now - vfog_probe_t > 900 && getenv("VULTURE_SELFTEST")) { /* probe: s187 */
+        static const char *const nm[3] = { "room", "corridor", "dark" };
+        char pp[700];
+
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(pp, sizeof pp, "%s\\fog_%s.bmp", getenv("VULTURE_SELFTEST"), nm[vfog_probe_n]);
+        vulture_save_frame_bmp(pp);
+        vfog_probe_t = 0;
+        if (++vfog_probe_n < 3 && vfog_probe_move(vfog_probe_n))
+            vfog_probe_t = SDL_GetTicks();
+    }
     if (vpause_probe_t && now - vpause_probe_t > 700 && getenv("VULTURE_SELFTEST")) {
         char pp[700];
 
@@ -6574,6 +6617,8 @@ vselftest(void)
 
     if (!dir || !*dir || stage > 4 || !levwin || !u.ux)
         return;
+    if (stage > 0 && getenv("VULTURE_SELFTEST_FOG")) /* probe: s187 only its own shots */
+        return;
     if (!t0)
         t0 = SDL_GetTicks();
     if (SDL_GetTicks() - t0 < 1500 + 700u * stage)
@@ -6587,6 +6632,12 @@ vselftest(void)
             vl_on = true;
         if (getenv("VULTURE_SELFTEST_FLAT")) /* s185: lighting without the normal maps */
             vl_on = true, vl_relief_set(false);
+        if (getenv("VULTURE_SELFTEST_FOG")) { /* probe: s187 */
+            vfog_sx = u.ux, vfog_sy = u.uy, vfog_probe_n = 0;
+            do_mapping();
+            flush_screen(1);
+            vfog_probe_t = SDL_GetTicks();
+        }
     }
     switch (stage) {
     case 0: {
@@ -9717,6 +9768,60 @@ vnm_begin(void)
     vnm_ok = true;
 }
 static float vl_L[ROWNO][COLNO], vl_R[ROWNO][COLNO], vl_G[ROWNO][COLNO], vl_B[ROWNO][COLNO];
+/*
+ * IMPLEMENTATION_LOG s187: the fog of war is drawn by the light layer.
+ * Squares out of sight used to be drawn with pre-darkened tiles (x0.68, or
+ * x0.31 for a dark room's floor) and then lit at 0.50 - brighter than the
+ * real shadows beside them, flat, and cut off at every tile's edge.  While
+ * lighting is on, every tile is drawn at full brightness and this layer
+ * does all of it: remembered ground gets a low light and a cold blue
+ * shadow (vl_F, sampled bilinearly like the light, so the edge of sight is
+ * a soft falloff), and light from lamps falls short into it.  The void -
+ * rock and never-seen squares, judged from the map as the hero knows it -
+ * is drawn black (its tile is a dark grey texture), and lends the walls
+ * standing on or reaching over it most of its brightest known neighbour's
+ * light, so they fade into the dark instead of stopping at a tile's edge.
+ * The darkness runs deeper (0.94 where no light reaches, was 0.80), the
+ * hero carries a bigger, warmer pool, and light past full brightness glows
+ * in its own colour.
+ */
+static float vl_F[ROWNO][COLNO]; /* s187: 1 remembered out of sight, 0 in sight (or the
+                                    void, unless it borrows a neighbour's) */
+static float vl_S[ROWNO][COLNO]; /* s187: the light from sources alone - the relief follows it */
+static bool vl_V[ROWNO][COLNO];  /* s187: nothing known here but rock - the void */
+
+/* s187: what the hero knows is here - the map as drawn, never the level
+   itself (a secret door is a wall, a secret corridor rock, until found) */
+static bool
+vl_voidish(mapdata *md, int x, int y)
+{
+    int mb;
+
+    if (!levl[x][y].seenv)
+        return true;
+    if (!md)
+        return false;
+    mb = md->get_glyph(MAP_BACK, x, y);
+    return mb == V_MISC_UNMAPPED_AREA || mb == V_TILE_NONE;
+}
+
+static bool
+vl_rockish(mapdata *md, int x, int y) /* wall or rock, as known */
+{
+    if (!isok(x, y) || vl_voidish(md, x, y))
+        return true;
+    return md && md->get_glyph(MAP_BACK, x, y) == V_TILE_WALL_GENERIC;
+}
+#define VL_LIT 0.70f     /* a lit room in sight (s152: 0.80) */
+#define VL_DARK 0.26f    /* an unlit square in sight - next to you (0.38) */
+#define VL_MEM 0.26f     /* remembered: the fog of war (0.50 on a x0.68 tile) */
+#define VL_MEMDARK 0.16f /* a remembered dark room's floor (0.50 on a x0.31 tile) */
+#define VL_DMAX 0.94f    /* the darkness where no light reaches (0.80) */
+#define VL_TINT 0.45f    /* how strongly a coloured light colours (0.35) */
+#define VL_GLOW 0.30f    /* light past full brightness glows in its colour */
+#define VL_FOG_R 0.035f  /* the fog of war's shadow: a cold dark blue */
+#define VL_FOG_G 0.050f
+#define VL_FOG_B 0.100f
 static SDL_Surface *vl_low = NULL, *vl_full = NULL;
 struct vl_flash_t {
     int x, y;
@@ -9745,7 +9850,7 @@ vl_add(int cx, int cy, double radius, double inten, double r, double g, double b
         for (x = cx - R; x <= cx + R; x++) {
             double d, k, f;
 
-            if (!isok(x, y) || !levl[x][y].seenv) /* light only lands on known ground */
+            if (!isok(x, y) || vl_V[y][x]) /* light only lands on known ground (s187: not rock) */
                 continue;
             d = sqrt((double) ((x - cx) * (x - cx) + (y - cy) * (y - cy)));
             k = 1.0 - d / (radius + 1.0);
@@ -9754,6 +9859,9 @@ vl_add(int cx, int cy, double radius, double inten, double r, double g, double b
             if ((x != cx || y != cy) && !clear_path(cx, cy, x, y))
                 continue;
             f = inten * k * k;
+            if (vl_F[y][x] > 0.5f) /* s187: light falls short into the fog of war */
+                f *= 0.35;
+            vl_S[y][x] += (float) f;
             vl_L[y][x] += (float) f;
             vl_R[y][x] += (float) (f * r);
             vl_G[y][x] += (float) (f * g);
@@ -9807,19 +9915,25 @@ vl_compute(mapdata *md)
         for (x = 1; x < COLNO; x++) {
             float base;
 
-            if (!levl[x][y].seenv)
+            vl_F[y][x] = 0.0f, vl_S[y][x] = 0.0f; /* s187 */
+            vl_V[y][x] = vl_voidish(md, x, y);
+            if (vl_V[y][x])
                 base = 0.0f;
             else if (cansee(x, y))
-                base = levl[x][y].lit ? 0.80f : 0.38f; /* s152: 0.93 left lights nothing to do */
-            else
-                base = 0.50f; /* remembered, out of sight */
-            if (base > 0.0f && !IS_STWALL(levl[x][y].typ)) { /* s143: contact shadows */
+                base = levl[x][y].lit ? VL_LIT : VL_DARK;
+            else { /* remembered, out of sight (s187: the tile is no longer darkened) */
+                base = md && md->get_glyph(MAP_DARKNESS, x, y) == 2 ? VL_MEMDARK : VL_MEM;
+                vl_F[y][x] = 1.0f;
+            }
+            if (base > 0.0f && !vl_rockish(md, x, y)) { /* s143: contact shadows */
                 int nw = 0;
 
-                nw += (isok(x - 1, y) && IS_STWALL(levl[x - 1][y].typ));
-                nw += (isok(x + 1, y) && IS_STWALL(levl[x + 1][y].typ));
-                nw += (isok(x, y - 1) && IS_STWALL(levl[x][y - 1].typ));
-                nw += (isok(x, y + 1) && IS_STWALL(levl[x][y + 1].typ));
+                /* s187: walls and rock as the hero knows them - the level's
+                   own terrain told a secret door (no shadow) from a wall */
+                nw += vl_rockish(md, x - 1, y);
+                nw += vl_rockish(md, x + 1, y);
+                nw += vl_rockish(md, x, y - 1);
+                nw += vl_rockish(md, x, y + 1);
                 base *= 1.0f - 0.055f * (float) nw;
             }
             vl_L[y][x] = base;
@@ -9931,8 +10045,9 @@ vl_compute(mapdata *md)
     { /* s152: you carry a warm pool of light - surroundings catch it as you move */
         double fl = 0.94 + 0.04 * sin(t * 7.0) + 0.02 * sin(t * 17.0);
 
-        vl_add(u.ux, u.uy, 1.6, 0.30, 1.0, 0.95, 0.85); /* you can always see yourself */
-        vl_add(u.ux, u.uy, 3.6, 0.32 * fl, 1.0, 0.82, 0.58);
+        /* s187: bigger and warmer (1.6 / 0.30 and 3.6 / 0.32) */
+        vl_add(u.ux, u.uy, 1.8, 0.34, 1.0, 0.93, 0.82); /* you can always see yourself */
+        vl_add(u.ux, u.uy, 4.6, 0.46 * fl, 1.0, 0.78, 0.50);
     }
     for (i = 0; i < vl_flashes.size(); i++) {
         vl_flash_t &f = vl_flashes[i];
@@ -9944,15 +10059,45 @@ vl_compute(mapdata *md)
         vl_flashes[n++] = f;
     }
     vl_flashes.resize(n);
+    /* s187: rock and never-seen squares (drawn black while lit) borrow
+       most of their brightest known neighbour's light and fog, for what
+       stands on them or reaches over them: a corridor's walls, a wall's top
+       drawn over the square behind it - lit like what they border, fading
+       into the void instead of stopping at a tile's edge */
+    for (y = 0; y < ROWNO; y++)
+        for (x = 1; x < COLNO; x++) {
+            int dx, dy, bx2 = -1, by2 = -1;
+            float m = 0.0f;
+
+            if (!vl_V[y][x])
+                continue;
+            for (dy = -1; dy <= 1; dy++)
+                for (dx = -1; dx <= 1; dx++) {
+                    int xx = x + dx, yy = y + dy;
+
+                    if ((!dx && !dy) || xx < 1 || xx >= COLNO || yy < 0 || yy >= ROWNO
+                        || vl_V[yy][xx])
+                        continue;
+                    if (vl_L[yy][xx] > m)
+                        m = vl_L[yy][xx], bx2 = xx, by2 = yy;
+                }
+            if (bx2 < 0)
+                continue;
+            vl_L[y][x] = 0.70f * m;
+            vl_R[y][x] = 0.70f * vl_R[by2][bx2];
+            vl_G[y][x] = 0.70f * vl_G[by2][bx2];
+            vl_B[y][x] = 0.70f * vl_B[by2][bx2];
+            vl_F[y][x] = vl_F[by2][bx2];
+        }
 }
 
 /* bilinear light at fractional map position */
 static void
-vl_sample(double mx, double my, float *L, float *r, float *g, float *b)
+vl_sample(double mx, double my, float *L, float *r, float *g, float *b, float *F, float *S)
 {
     int x0 = (int) floor(mx), y0 = (int) floor(my), k;
     double fx = mx - x0, fy = my - y0;
-    float acc[4] = { 0, 0, 0, 0 };
+    float acc[6] = { 0, 0, 0, 0, 0, 0 };
 
     for (k = 0; k < 4; k++) {
         int x = x0 + (k & 1), y = y0 + (k >> 1);
@@ -9964,8 +10109,10 @@ vl_sample(double mx, double my, float *L, float *r, float *g, float *b)
         acc[1] += (float) (w * vl_R[y][x]);
         acc[2] += (float) (w * vl_G[y][x]);
         acc[3] += (float) (w * vl_B[y][x]);
+        acc[4] += (float) (w * vl_F[y][x]); /* s187 */
+        acc[5] += (float) (w * vl_S[y][x]);
     }
-    *L = acc[0], *r = acc[1], *g = acc[2], *b = acc[3];
+    *L = acc[0], *r = acc[1], *g = acc[2], *b = acc[3], *F = acc[4], *S = acc[5];
 }
 
 /*
@@ -10260,7 +10407,7 @@ vl_relief(int ax, int ay, int w, int h, int gx0, int gy0, int FS)
    light levels Lg (lw x lh): towards brighter, stronger where it falls off
    faster (near a source), plus a faint top-left key where it's lit */
 static void
-vl_relief_dirs(const std::vector<float> &Lg, int lw, int lh)
+vl_relief_dirs(const std::vector<float> &Lg, const std::vector<float> &Sg, int lw, int lh)
 {
     int i, j;
 
@@ -10276,8 +10423,10 @@ vl_relief_dirs(const std::vector<float> &Lg, int lw, int lh)
 
             if (L < 0.08f)
                 continue; /* too dark to show any relief */
-            gx = Lg[(size_t) j * lw + i + 1] - Lg[(size_t) j * lw + i - 1];
-            gy = Lg[(size_t) (j + 1) * lw + i] - Lg[(size_t) (j - 1) * lw + i];
+            /* s187: from the sources' light alone - the step down into the
+               fog of war (or out of a lit room) isn't a lamp */
+            gx = Sg[(size_t) j * lw + i + 1] - Sg[(size_t) j * lw + i - 1];
+            gy = Sg[(size_t) (j + 1) * lw + i] - Sg[(size_t) (j - 1) * lw + i];
             mag = sqrtf(gx * gx + gy * gy);
             st = mag * 7.0f; /* near a lamp: full strength (s147: 8 px cells) */
             if (st > 1.0f)
@@ -10463,7 +10612,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     SDL_Rect src, dst;
     int max0 = ax, may0 = ay, mw0 = w, mh0 = h; /* s145: the map's own rect */
     static int c_gx0 = 0, c_gy0 = 0;              /* s145: where grid cell 0,0 was */
-    static std::vector<float> Lg;
+    static std::vector<float> Lg, Sg; /* s187: Sg - the sources' light alone */
 
     if (!vl_on || !u.ux || w < 32 || h < 32 || u.uswallow)
         return;
@@ -10510,6 +10659,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     if (!vl_low)
         return;
     Lg.assign((size_t) lw * lh, 0.0f);
+    Sg.assign((size_t) lw * lh, 0.0f); /* s187 */
     SDL_LockSurface(vl_low);
     for (j = 0; j < lh; j++) {
         Uint32 *row = (Uint32 *) ((Uint8 *) vl_low->pixels + j * vl_low->pitch);
@@ -10519,7 +10669,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
             double sx = (ax + i * FS - cx) / (double) V_MAP_XMOD;
             double sy = (ay + j * FS - cy) / (double) V_MAP_YMOD;
             double a = (sx + sy) / 2.0, b2 = (sy - sx) / 2.0, t;
-            float L, r, g, b, dark, tint, A, cr, cg, cb, mx, mn;
+            float L, r, g, b, dark, tint, A, cr, cg, cb, mx, mn, F, S;
             int k;
 
             for (k = vulture_view_rot & 3; k > 0; k--) { /* view -> map */
@@ -10527,25 +10677,39 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
                 a = -b2;
                 b2 = t;
             }
-            vl_sample(vx + a, vy + b2, &L, &r, &g, &b);
+            vl_sample(vx + a, vy + b2, &L, &r, &g, &b, &F, &S);
             if (L < 0)
                 L = 0;
             Lg[(size_t) j * lw + i] = L; /* s145 */
-            dark = (1.0f - (L > 1.0f ? 1.0f : L)) * 0.80f;
+            Sg[(size_t) j * lw + i] = S; /* s187 */
+            dark = (1.0f - (L > 1.0f ? 1.0f : L)) * VL_DMAX; /* s187: was 0.80 */
             cr = cg = cb = 1.0f;
             if (L > 0.01f)
                 cr = r / L, cg = g / L, cb = b / L;
             mx = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
             mn = cr < cg ? (cr < cb ? cr : cb) : (cg < cb ? cg : cb);
-            tint = (mx - mn) * 0.35f * (L > 1.2f ? 1.2f : L);
+            if (mx < 0.001f)
+                cr = cg = cb = mx = 1.0f, mn = 1.0f;
+            tint = (mx - mn) * VL_TINT * (L > 1.2f ? 1.2f : L);
+            if (L > 1.0f) /* s187: hot spots glow in the light's colour */
+                tint += VL_GLOW * (L - 1.0f > 0.8f ? 0.8f : L - 1.0f);
+            if (tint > 0.6f)
+                tint = 0.6f;
             A = dark + tint * (1.0f - dark);
-            if (A > 0.95f)
-                A = 0.95f;
             {
-                float s = A > 0.001f ? tint * (1.0f - dark) / A : 0.0f;
-                Uint8 R8 = (Uint8) (255 * (cr / mx) * s), G8 = (Uint8) (255 * (cg / mx) * s),
-                      B8 = (Uint8) (255 * (cb / mx) * s);
+                /* s187: the colour pulled towards: the shadow's (black in
+                   sight, a cold blue in the fog of war) by the darkness's
+                   share, the light's by the tint's */
+                float wd = A > 0.001f ? dark / A : 0.0f;
+                float wt = A > 0.001f ? tint * (1.0f - dark) / A : 0.0f;
+                float tr = wd * F * VL_FOG_R + wt * cr / mx, tg = wd * F * VL_FOG_G + wt * cg / mx;
+                float tb = wd * F * VL_FOG_B + wt * cb / mx;
+                Uint8 R8 = (Uint8) (255 * (tr > 1.0f ? 1.0f : tr));
+                Uint8 G8 = (Uint8) (255 * (tg > 1.0f ? 1.0f : tg));
+                Uint8 B8 = (Uint8) (255 * (tb > 1.0f ? 1.0f : tb));
 
+                if (A > 0.95f)
+                    A = 0.95f;
                 row[i] = ((Uint32) (A * 255) << 24) | ((Uint32) R8 << 16) | ((Uint32) G8 << 8) | B8;
             }
         }
@@ -10554,7 +10718,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     Uint32 vt_g = SDL_GetTicks(); /* probe: s147 */
     nhUse(src);
     Uint32 vt_s = SDL_GetTicks(); /* probe: s147 (no stretch since s153) */
-    vl_relief_dirs(Lg, lw, lh); /* s145 */
+    vl_relief_dirs(Lg, Sg, lw, lh); /* s145, s187 */
     c_gx0 = ax - FS / 2, c_gy0 = ay - FS / 2; /* cell i covers ax+i*FS +- FS/2 */
     if (vl_gpu_frame) { /* s185: rebuilt grids - the GPU uploads and lights */
         SDL_Rect ar = { max0, may0, mw0, mh0 };
@@ -10831,6 +10995,9 @@ levelwin::draw()
     else
         vulture_gpumap_abandon();
     vl_gpu_frame = vgm && vl_on; /* s185 */
+    /* s187: while lighting is on, the light layer draws the fog of war -
+       remembered squares' tiles aren't darkened (vl_render's own test) */
+    bool vl_fog = vl_on && u.ux && !u.uswallow && this->w >= 32 && this->h >= 32;
     vnm_begin(); /* s149: the map's tiles lay their normal maps from here */
 
     /* without the +-1 small corners within the viewport are not drawn */
@@ -10905,12 +11072,16 @@ levelwin::draw()
             if ((tile_id >= V_TILE_FLOOR_COBBLESTONE)
                 && (tile_id <= V_TILE_FLOOR_DARK)) {
                 tile_id = get_floor_tile(tile_id, i, j);
-                shadelevel = map_darkness;
+                shadelevel = vl_fog ? 0 : map_darkness; /* s187 */
             } else if (tile_id == V_TILE_NONE
                        || tile_id == V_TILE_WALL_GENERIC)
                 tile_id = V_MISC_UNMAPPED_AREA;
 
-            vulture_put_tile_shaded(x, y, tile_id, shadelevel);
+            /* s187: while lit the void is black (its tile is a dark grey
+               texture, which the light layer drew as the level's outline) */
+            vulture_put_tile_shaded(x, y, vl_fog && tile_id == V_MISC_UNMAPPED_AREA ? V_MISC_OFF_MAP
+                                                                                  : tile_id,
+                                    shadelevel);
 
             /* shortcut for unmapped case */
             if (tile_id == V_MISC_UNMAPPED_AREA)
@@ -10956,11 +11127,11 @@ levelwin::draw()
             if (nwx >= 1 && nwx < COLNO && nwy >= 0 && nwy < ROWNO)
                 vulture_put_tile_shaded(
                     x, y, maptile_wall[i][j].west,
-                    map_data->get_glyph(MAP_DARKNESS, nwx, nwy));
+                    vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nwx, nwy)); /* s187 */
             if (nnx >= 1 && nnx < COLNO && nny >= 0 && nny < ROWNO)
                 vulture_put_tile_shaded(
                     x, y, maptile_wall[i][j].north,
-                    map_data->get_glyph(MAP_DARKNESS, nnx, nny));
+                    vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nnx, nny)); /* s187 */
 
             /* shortcut for unmapped case */
             if (map_back != V_MISC_UNMAPPED_AREA || map_obj != V_TILE_NONE) {
@@ -11059,11 +11230,11 @@ levelwin::draw()
             if (nsx >= 1 && nsx < COLNO && nsy >= 0 && nsy < ROWNO)
                 vulture_put_tile_shaded(
                     x, y, maptile_wall[i][j].south,
-                    map_data->get_glyph(MAP_DARKNESS, nsx, nsy));
+                    vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nsx, nsy)); /* s187 */
             if (nex >= 1 && nex < COLNO && ney >= 0 && ney < ROWNO)
                 vulture_put_tile_shaded(
                     x, y, maptile_wall[i][j].east,
-                    map_data->get_glyph(MAP_DARKNESS, nex, ney));
+                    vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nex, ney)); /* s187 */
         }
     }
 

@@ -3827,6 +3827,43 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   event's (5, -2).  (Its "caught up in N ms, N frames" counts every frame
   until the queue is empty, other stage work included.)
 
+### 187. Dynamic lighting draws the fog of war
+
+- The user: make the dynamic lighting better - the fog of war and unseen
+  tiles should blend with the shadows, and it should be more dramatic.  What
+  was wrong (VULTURE_SELFTEST_FOG shots): squares out of sight were drawn
+  with pre-darkened tiles (x0.68, x0.31 for a dark room's floor) and then
+  lit at 0.50 - brighter than the real shadows beside them, flat, and cut off
+  at every tile's edge; the void's tile is a dark grey texture (mean 24), so
+  the light layer drew it as a grey outline of the whole level.
+- Now, while lighting is on (levelwin::draw's `vl_fog`, vl_render's own
+  test), tiles are drawn at full brightness and the light layer does it all:
+  - remembered squares: light 0.26 (a dark room's floor 0.16) and a cold
+    blue shadow - a new fog map vl_F, sampled bilinearly like the light, so
+    the edge of sight is a soft falloff; the grid's colour is now the
+    shadow's colour by the darkness's share plus the light's by the tint's
+    (out = p + (T - p) * A as before - the GPU shader is unchanged);
+  - light from sources falls short into the fog (x0.35);
+  - the void - rock and never-seen squares, judged from the map as drawn
+    (MAP_BACK unmapped or none), never the level - is drawn as the black
+    off-map tile, gets no light of its own, and lends the walls standing on
+    or reaching over it 70% of its brightest known neighbour's light and fog;
+  - deeper darkness (0.94 where no light reaches, was 0.80), lit rooms 0.70
+    (0.80), unlit squares in sight 0.26 (0.38); the hero's pool is bigger and
+    warmer (radius 4.6 / 0.46, was 3.6 / 0.32); light past full brightness
+    glows in its own colour (0.30 per unit, up to 0.8 over); coloured light
+    colours more (0.45, was 0.35).
+- The relief's light direction follows the sources' light alone (vl_S): the
+  step down into the fog, or out of a lit room, isn't a lamp.
+- Hero knowledge: the contact shadows (s143) read IS_STWALL off the level, so
+  a secret door (or corridor) beside a known floor cast no shadow - a tell.
+  They read the drawn map now (wall, rock, or unknown).
+- Measured (hidden window): remembered corridor floor ~30 (was ~45), lit
+  room floor ~118 (was ~110) - the lit-to-fog contrast went from ~2.4x to
+  ~3.9x; the same lit frame on the GPU and in software differs by a mean of
+  0.2 per channel; the light stage stays at a 1 ms median (3 ms p90).
+  Unlit play is unchanged.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
