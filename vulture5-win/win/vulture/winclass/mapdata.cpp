@@ -398,6 +398,8 @@ mapdata::set_tileidx(int x, int y, short tileidx, short bktileidx)
     map_bktileidx[y][x] = bktileidx;
 }
 
+extern void vsp_glyph(int x, int y, int glyph); /* s198: levelwin.cpp */
+
 void
 mapdata::set_glyph(int x, int y, int glyph)
 {
@@ -430,6 +432,7 @@ mapdata::set_glyph(int x, int y, int glyph)
     unsigned int attr;
 
     set_map_data(MAP_GLYPH, x, y, glyph, false);
+    vsp_glyph(x, y, glyph); /* s198: rays and explosions, for their light and motion */
 
     /* check wether we are swallowed, if so, return, because nothing but the
      * swallow graphic will be drawn anyway */

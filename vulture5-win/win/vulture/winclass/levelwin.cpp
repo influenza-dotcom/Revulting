@@ -3346,11 +3346,13 @@ vbob_wanted(void)
 /* wait timeout for the input loop: shorter while something is bobbing */
 static Uint32 vidle_interval = 33; /* s85: grows if frames are slow; s147: 30 fps */
 
+static bool vsp_active(Uint32 now); /* s198 */
+
 int
 vulture_idle_wait_ms(bool at_map)
 {
     nhUse(vbob_wanted);
-    return at_map ? (vfx_list.empty() ? 30 : 15) : 100; /* s108; s147 */
+    return at_map ? (vfx_list.empty() && !vsp_active(SDL_GetTicks()) ? 30 : 15) : 100; /* s108; s147; s198 */
 }
 
 /* one idle frame for bobbing, breathing and combat effects (called from
@@ -3366,6 +3368,891 @@ static void vselftest(void); /* s126 probe */
 static bool vl_on = true;
 static bool vl_gpu_frame = false; /* s185: this frame's map is lit on the GPU */
 static point vck_from = { -1, -1 }, vck_to = { -1, -1 }; /* s145 probe */
+
+/*
+ * IMPLEMENTATION_LOG s198: spells, wands, breath and explosions.
+ * The core draws a ray one square at a time (tmp_at, a delay_output a step)
+ * and an explosion as a 3x3 of glyphs for ~100 ms.  Vulture drew every ray
+ * with the same orange zigzag, whatever it was, and four of the seven
+ * explosion types with the fire sprites; nothing moved between the core's
+ * steps.  Each square a ray or an explosion covers is recorded here
+ * (vsp_glyph, from mapdata::set_glyph) with its type and when it came and
+ * went, and:
+ *  - a ray is drawn as light instead of a sprite (vsp_draw_ray): a core and
+ *    a halo in its colour, brightest at its head, each type moving its own
+ *    way - lightning re-forks ~22 times a second, fire licks, frost
+ *    glitters, gas billows, magic missiles pulse, death is a dark core in a
+ *    violet haze;
+ *  - it lights the room in that colour (vsp_light, from vl_compute), so
+ *    walls and floor catch it and shadows swing as the head passes, and
+ *    every square glows on for a moment after the ray has gone (vl_flash);
+ *  - sparks, embers, frost, droplets, gas and smoke fly off and keep moving
+ *    after the core has cleared the glyphs (vsp_parts);
+ *  - an explosion flashes the room, its sprites pop in, a shockwave ring
+ *    runs across the floor, debris flies, the camera jolts;
+ *  - vulture_fx_pump draws frames during the core's delay_output while any
+ *    of it is alive, and the idle loop runs at 60 fps meanwhile.
+ */
+struct vsp_cell_t {
+    unsigned char on, kind, type, dir; /* kind: 1 ray, 2 explosion, 3 wand flash, 4 digging, 5 sparkle */
+    Uint32 t_on, t_off;
+};
+static vsp_cell_t vsp_cells[ROWNO][COLNO];
+static int vsp_on_count = 0;  /* squares shown right now */
+static Uint32 vsp_live_t = 0; /* when one last came or went */
+static d_level vsp_lev = { -1, -1 };
+
+struct vsp_part_t {
+    short sqx, sqy;        /* the square it is anchored to */
+    float ox, oy, oz;      /* px from that square's floor centre; oz = height */
+    float vx, vy, vz;      /* px a second */
+    float grav, drag;      /* px/s/s on vz (negative falls); velocity lost a second */
+    float size, grow;      /* radius px; px a second */
+    Uint32 t0, dur;
+    Uint8 r, g, b, mode;   /* 0 spark, 1 soft glow, 2 dark wisp, 3 smoke, 4 twinkle */
+    Uint8 alpha;
+};
+static std::vector<vsp_part_t> vsp_parts;
+#define VSP_MAX_PARTS 900
+
+struct vsp_wave_t {
+    int x, y;
+    Uint32 t0, dur;
+    Uint8 r, g, b;
+    float rad; /* squares */
+};
+static std::vector<vsp_wave_t> vsp_waves;
+static int vsp_ex_x = -1, vsp_ex_y = -1; /* the last explosion's centre */
+static Uint32 vsp_ex_t = 0;
+static int vsp_cx = 0, vsp_cy = 0, vsp_vx = 0, vsp_vy = 0; /* this frame's map centre and view */
+
+struct vsp_style_t {
+    Uint8 cr, cg, cb, hr, hg, hb; /* core, halo */
+    float li, lr;                 /* the light: intensity, radius in squares */
+};
+static const vsp_style_t vsp_ray_st[NUM_ZAP] = {
+    { 225, 236, 255, 80, 130, 255, 1.05f, 2.9f },  /* magic missile */
+    { 255, 236, 170, 255, 105, 25, 1.30f, 3.2f },  /* fire */
+    { 236, 250, 255, 120, 200, 255, 1.05f, 3.0f }, /* cold */
+    { 245, 215, 255, 170, 105, 255, 0.85f, 2.8f }, /* sleep */
+    { 30, 8, 40, 150, 60, 210, 0.35f, 2.2f },      /* death, disintegration: a dark core */
+    { 255, 255, 255, 140, 175, 255, 1.50f, 3.5f }, /* lightning */
+    { 215, 255, 140, 90, 205, 40, 0.80f, 2.8f },   /* poison gas */
+    { 235, 255, 150, 160, 235, 40, 0.90f, 2.8f },  /* acid */
+};
+static const vsp_style_t vsp_expl_st[EXPL_MAX] = {
+    { 200, 150, 255, 110, 40, 190, 0.55f, 4.5f },  /* dark */
+    { 210, 255, 150, 90, 200, 50, 1.00f, 5.0f },   /* noxious */
+    { 230, 200, 150, 150, 105, 55, 0.80f, 4.5f },  /* muddy */
+    { 220, 240, 255, 70, 140, 255, 1.00f, 5.0f },  /* wet */
+    { 255, 210, 255, 220, 90, 255, 1.30f, 5.5f },  /* magical */
+    { 255, 240, 190, 255, 120, 30, 1.60f, 6.0f },  /* fiery */
+    { 240, 250, 255, 150, 210, 255, 1.30f, 5.5f }, /* frosty */
+};
+/* a ray glyph's direction: | - \ / */
+static const int vsp_dx[4] = { 0, 1, 1, -1 }, vsp_dy[4] = { 1, 0, 1, 1 };
+
+static double
+vsp_frand(void)
+{
+    return (rand() % 10000) / 10000.0;
+}
+
+static double
+vsp_hash(int a, int b, int c) /* 0..1, steady for the same three numbers */
+{
+    unsigned h = (unsigned) a * 73856093u ^ (unsigned) b * 19349663u ^ (unsigned) c * 83492791u;
+
+    h ^= h >> 13;
+    h *= 0x5bd1e995u;
+    h ^= h >> 15;
+    return (h & 0xFFFFFFu) / 16777216.0;
+}
+
+static void
+vsp_screen(int x, int y, int *sx, int *sy)
+{
+    vfx_square_screen(x, y, vsp_cx, vsp_cy, vsp_vx, vsp_vy, sx, sy);
+}
+
+/* soft round discs, white: [0] added (glow), [1] blended (shade); radius
+   1..8 px kept as they are, [.][0] a 127 px one scaled for bigger ones */
+static SDL_Surface *vsp_disc[2][9];
+
+static SDL_Surface *
+vsp_make_disc(int rad, bool add)
+{
+    int n = rad * 2 + 1, x, y;
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, n, n, 32, SDL_PIXELFORMAT_ARGB8888);
+
+    if (!s)
+        return NULL;
+    SDL_LockSurface(s);
+    for (y = 0; y < n; y++) {
+        Uint32 *row = (Uint32 *) ((Uint8 *) s->pixels + y * s->pitch);
+
+        for (x = 0; x < n; x++) {
+            double dx = (x - rad) / (rad + 0.5), dy = (y - rad) / (rad + 0.5), r2 = dx * dx + dy * dy;
+            double a = r2 >= 1.0 ? 0.0 : pow(1.0 - r2, add ? 1.8 : 1.2);
+
+            row[x] = ((Uint32) (a * 255.0 + 0.5) << 24) | 0x00FFFFFFu;
+        }
+    }
+    SDL_UnlockSurface(s);
+    SDL_SetSurfaceBlendMode(s, add ? SDL_BLENDMODE_ADD : SDL_BLENDMODE_BLEND);
+    return s;
+}
+
+/* a soft glow (add) or shade (!add) of radius rad px at (x, y); aspect < 1
+   flattens it onto the floor */
+static void
+vsp_blob(int x, int y, double rad, int r, int g, int b, int alpha, bool add, double aspect = 1.0)
+{
+    SDL_Surface *s;
+    SDL_Rect d;
+    int ir = (int) (rad + 0.5), k = add ? 0 : 1;
+
+    if (alpha <= 2 || rad < 0.5)
+        return;
+    if (alpha > 255)
+        alpha = 255;
+    if (ir <= 8 && aspect == 1.0) {
+        if (ir < 1)
+            ir = 1;
+        if (!vsp_disc[k][ir] && !(vsp_disc[k][ir] = vsp_make_disc(ir, add)))
+            return;
+        s = vsp_disc[k][ir];
+        d.x = x - ir, d.y = y - ir, d.w = s->w, d.h = s->h;
+        SDL_SetSurfaceColorMod(s, (Uint8) r, (Uint8) g, (Uint8) b);
+        SDL_SetSurfaceAlphaMod(s, (Uint8) alpha);
+        SDL_BlitSurface(s, NULL, vulture_screen, &d);
+        return;
+    }
+    if (!vsp_disc[k][0] && !(vsp_disc[k][0] = vsp_make_disc(63, add)))
+        return;
+    s = vsp_disc[k][0];
+    d.w = (int) (rad * 2), d.h = (int) (rad * 2 * aspect);
+    if (d.w < 2 || d.h < 2)
+        return;
+    d.x = x - d.w / 2, d.y = y - d.h / 2;
+    SDL_SetSurfaceColorMod(s, (Uint8) r, (Uint8) g, (Uint8) b);
+    SDL_SetSurfaceAlphaMod(s, (Uint8) alpha);
+    SDL_BlitScaled(s, NULL, vulture_screen, &d);
+}
+
+/* soft blobs every `step` px from (x0, y0) to (x1, y1) */
+static void
+vsp_line(double x0, double y0, double x1, double y1, double rad, int r, int g, int b, int alpha,
+         bool add, double step)
+{
+    double dx = x1 - x0, dy = y1 - y0, len = sqrt(dx * dx + dy * dy);
+    int k, n = (int) (len / step) + 1;
+
+    for (k = 0; k <= n; k++) {
+        double f = (double) k / n;
+
+        vsp_blob((int) (x0 + dx * f), (int) (y0 + dy * f), rad, r, g, b, alpha, add);
+    }
+}
+
+static void
+vsp_spawn(int sqx, int sqy, double ox, double oy, double oz, double vx, double vy, double vz,
+          double grav, double drag, double size, double grow, int dur, int r, int g, int b,
+          int mode, int alpha)
+{
+    vsp_part_t p;
+
+    if (vsp_parts.size() >= VSP_MAX_PARTS)
+        return;
+    p.sqx = (short) sqx, p.sqy = (short) sqy;
+    p.ox = (float) ox, p.oy = (float) oy, p.oz = (float) oz;
+    p.vx = (float) vx, p.vy = (float) vy, p.vz = (float) vz;
+    p.grav = (float) grav, p.drag = (float) drag, p.size = (float) size, p.grow = (float) grow;
+    p.t0 = SDL_GetTicks(), p.dur = (Uint32) (dur < 50 ? 50 : dur);
+    p.r = (Uint8) r, p.g = (Uint8) g, p.b = (Uint8) b, p.mode = (Uint8) mode, p.alpha = (Uint8) alpha;
+    vsp_parts.push_back(p);
+}
+
+/* n particles of ray type ty off square (x, y), at chest height;
+   lingering: what is left when the ray has gone */
+static void
+vsp_emit_ray(int x, int y, int ty, int n, bool lingering)
+{
+    const vsp_style_t &s = vsp_ray_st[ty];
+    int k;
+
+    for (k = 0; k < n; k++) {
+        double ox = vsp_frand() * 30 - 15, oy = vsp_frand() * 14 - 7;
+        double a = vsp_frand() * 6.2832, sp = 20 + vsp_frand() * 60;
+
+        switch (ty) {
+        case 1: /* fire: embers rising; smoke when it has gone */
+            vsp_spawn(x, y, ox, oy, 28, cos(a) * sp * 0.4, sin(a) * sp * 0.2, 40 + vsp_frand() * 70,
+                      -30, 0.6, 1.6, 0, 500 + rand() % 500, 255, 140 + rand() % 90, 40, 0, 230);
+            if (lingering && k % 2 == 0)
+                vsp_spawn(x, y, ox, oy, 30, 0, 0, 22 + vsp_frand() * 18, 0, 0.3, 4, 9, 1100 + rand() % 500,
+                          60, 55, 52, 3, 70);
+            break;
+        case 2: /* cold: frost glittering down */
+            vsp_spawn(x, y, ox, oy, 26 + vsp_frand() * 10, cos(a) * 12, sin(a) * 6, -8 - vsp_frand() * 14,
+                      0, 0.5, 1.2, 0, 600 + rand() % 600, 220, 245, 255, 4, 255);
+            if (lingering && k % 2 == 0)
+                vsp_spawn(x, y, ox, oy, 12, 0, 0, 4, 0, 0.3, 6, 10, 900, 170, 210, 255, 1, 40);
+            break;
+        case 3: /* sleep: slow motes */
+            vsp_spawn(x, y, ox, oy, 28, cos(a) * 8, sin(a) * 4, 6 + vsp_frand() * 8, 0, 0.2, 1.6, 0,
+                      1000 + rand() % 600, s.hr, s.hg, s.hb, 4, 230);
+            break;
+        case 4: /* death: dark wisps curling up, a few violet sparks */
+            vsp_spawn(x, y, ox, oy, 26, cos(a) * 8, sin(a) * 4, 18 + vsp_frand() * 14, 0, 0.3, 4, 6,
+                      800 + rand() % 400, 0, 0, 0, 2, 110);
+            vsp_spawn(x, y, ox, oy, 26, cos(a) * 14, sin(a) * 7, 20, 0, 0.4, 1.2, 0, 500, s.hr, s.hg, s.hb, 0, 200);
+            break;
+        case 5: /* lightning: sparks thrown off */
+            vsp_spawn(x, y, ox * 0.4, oy * 0.4, 28, cos(a) * sp * 2.2, sin(a) * sp * 1.1, 40 + vsp_frand() * 90,
+                      -260, 2.0, 1.3, 0, 260 + rand() % 220, 220, 230, 255, 0, 255);
+            break;
+        case 6: /* poison gas: billows */
+            vsp_spawn(x, y, ox, oy, 24, cos(a) * 10, sin(a) * 5, 6, 0, 0.4, 6, 12, 1000 + rand() % 600,
+                      s.hr, s.hg, s.hb, 1, 55);
+            break;
+        case 7: /* acid: drops falling */
+            vsp_spawn(x, y, ox, oy, 26, cos(a) * 18, sin(a) * 9, 10, -320, 0.2, 1.4, 0, 700, 200, 255, 60, 0, 230);
+            break;
+        default: /* magic missile: blue-white sparkles */
+            vsp_spawn(x, y, ox, oy, 28, cos(a) * sp, sin(a) * sp * 0.5, 20 + vsp_frand() * 40, -60, 1.2, 1.3, 0,
+                      380 + rand() % 300, 170, 200, 255, 0, 255);
+            break;
+        }
+    }
+}
+
+/* n pieces of explosion type ty thrown from square (x, y) (big: its centre) */
+static void
+vsp_emit_expl(int x, int y, int ty, int n, bool big)
+{
+    const vsp_style_t &s = vsp_expl_st[ty];
+    int k;
+
+    for (k = 0; k < n; k++) {
+        double a = vsp_frand() * 6.2832, sp = (big ? 60 : 25) + vsp_frand() * (big ? 160 : 60);
+        double ox = vsp_frand() * 20 - 10, oy = vsp_frand() * 10 - 5;
+        double vx = cos(a) * sp, vy = sin(a) * sp * 0.5;
+
+        switch (ty) {
+        case EXPL_FIERY:
+            vsp_spawn(x, y, ox, oy, 20, vx, vy, 60 + vsp_frand() * 150, -220, 0.9, 1.8, 0, 600 + rand() % 600,
+                      255, 120 + rand() % 120, 30, 0, 255);
+            break;
+        case EXPL_FROSTY:
+            vsp_spawn(x, y, ox, oy, 20, vx, vy, 50 + vsp_frand() * 120, -300, 0.6, 1.6, 0, 700 + rand() % 500,
+                      225, 245, 255, 4, 255);
+            break;
+        case EXPL_WET:
+            vsp_spawn(x, y, ox, oy, 18, vx, vy, 80 + vsp_frand() * 120, -420, 0.3, 1.7, 0, 700, 140, 190, 255, 0, 220);
+            break;
+        case EXPL_MUDDY:
+            vsp_spawn(x, y, ox, oy, 18, vx, vy, 70 + vsp_frand() * 110, -420, 0.3, 2.2, 0, 700, 120, 85, 45, 3, 200);
+            break;
+        case EXPL_NOXIOUS:
+            vsp_spawn(x, y, ox, oy, 16, vx * 0.35, vy * 0.35, 10, 0, 0.8, 6, 16, 1200 + rand() % 600,
+                      s.hr, s.hg, s.hb, 1, 60);
+            break;
+        case EXPL_MAGICAL:
+            vsp_spawn(x, y, ox, oy, 22, vx, vy, 40 + vsp_frand() * 120, -80, 1.2, 1.5, 0, 700 + rand() % 500,
+                      200 + rand() % 55, 120 + rand() % 100, 255, 4, 255);
+            break;
+        default: /* dark */
+            vsp_spawn(x, y, ox, oy, 16, vx * 0.4, vy * 0.4, 16, 0, 0.8, 6, 12, 1000 + rand() % 500, 0, 0, 0, 2, 120);
+            vsp_spawn(x, y, ox, oy, 18, vx, vy, 40, -100, 1.0, 1.3, 0, 600, s.hr, s.hg, s.hb, 0, 230);
+            break;
+        }
+    }
+}
+
+/* what an explosion leaves on a square: smoke, mist, gas, dust */
+static void
+vsp_emit_linger(int x, int y, int ty)
+{
+    const vsp_style_t &s = vsp_expl_st[ty];
+    int k;
+
+    for (k = 0; k < 3; k++) {
+        double ox = vsp_frand() * 36 - 18, oy = vsp_frand() * 16 - 8;
+
+        switch (ty) {
+        case EXPL_FIERY:
+            vsp_spawn(x, y, ox, oy, 24, 0, 0, 16 + vsp_frand() * 16, 0, 0.2, 6, 10, 1400 + rand() % 600,
+                      50, 46, 44, 3, 90);
+            break;
+        case EXPL_FROSTY:
+            vsp_spawn(x, y, ox, oy, 10, 0, 0, 3, 0, 0.2, 9, 10, 1300, 190, 225, 255, 1, 45);
+            break;
+        case EXPL_NOXIOUS:
+            vsp_spawn(x, y, ox, oy, 14, 0, 0, 4, 0, 0.2, 9, 12, 1600, s.hr, s.hg, s.hb, 1, 50);
+            break;
+        case EXPL_MUDDY:
+            vsp_spawn(x, y, ox, oy, 8, 0, 0, 6, 0, 0.2, 7, 9, 1100, 110, 85, 55, 3, 80);
+            break;
+        case EXPL_WET:
+            vsp_spawn(x, y, ox, oy, 8, 0, 0, 2, 0, 0.2, 8, 8, 900, 150, 200, 255, 1, 35);
+            break;
+        case EXPL_MAGICAL:
+            vsp_spawn(x, y, ox, oy, 20, 0, 0, 14, 0, 0.3, 1.4, 0, 900 + rand() % 400, 255, 180, 255, 4, 255);
+            break;
+        default:
+            vsp_spawn(x, y, ox, oy, 16, 0, 0, 10, 0, 0.2, 7, 8, 1200, 0, 0, 0, 2, 100);
+            break;
+        }
+    }
+}
+
+/* a quick camera jolt from an explosion at (x, y), weaker far from you */
+static void
+vsp_jolt(int x, int y, double amp)
+{
+    Uint32 now = SDL_GetTicks();
+    int d = distmin(u.ux, u.uy, x, y);
+    double a = amp * (d <= 2 ? 1.0 : d >= 12 ? 0.0 : (12 - d) / 10.0);
+
+    if (!vfx_jolts || a <= 0.0)
+        return;
+    if (now - vimp_t0 > 260 || a > vimp_amp * (1.0 - (now - vimp_t0) / 260.0))
+        vimp_amp = a, vimp_t0 = now;
+}
+
+/* a square started showing a ray / explosion / ... */
+static void
+vsp_start(int x, int y, int kind, int ty, int dir)
+{
+    if (kind == 1) {
+        vsp_emit_ray(x, y, ty, ty == 5 ? 5 : 2, false);
+    } else if (kind == 2) {
+        const vsp_style_t &s = vsp_expl_st[ty];
+        int cx = x - (dir % 3 - 1), cy = y - (dir / 3 - 1);
+        Uint32 now = SDL_GetTicks();
+
+        if (cx != vsp_ex_x || cy != vsp_ex_y || now - vsp_ex_t > 400) { /* a new explosion */
+            vsp_wave_t w;
+
+            vsp_ex_x = cx, vsp_ex_y = cy, vsp_ex_t = now;
+            vl_flash(cx, cy, s.hr / 255.0f, s.hg / 255.0f, s.hb / 255.0f, s.li, s.lr, 950);
+            w.x = cx, w.y = cy, w.t0 = now, w.dur = 560, w.r = s.cr, w.g = s.cg, w.b = s.cb, w.rad = 2.6f;
+            if (vsp_waves.size() < 16)
+                vsp_waves.push_back(w);
+            vsp_emit_expl(cx, cy, ty, 44, true);
+            vsp_jolt(cx, cy, ty == EXPL_FIERY || ty == EXPL_MAGICAL ? 7.0 : 5.0);
+        }
+        vsp_emit_expl(x, y, ty, 5, false);
+    } else if (kind == 3) {
+        vl_flash(x, y, 0.80f, 0.88f, 1.0f, 0.55f, 2.2f, 260);
+        vsp_emit_ray(x, y, 0, 2, false);
+    } else if (kind == 4) {
+        int k;
+
+        for (k = 0; k < 3; k++) {
+            double a = vsp_frand() * 6.2832;
+
+            vsp_spawn(x, y, vsp_frand() * 24 - 12, vsp_frand() * 10 - 5, 14, cos(a) * 20, sin(a) * 10, 10, 0,
+                      0.6, 4, 8, 700, 140, 120, 95, 3, 90);
+        }
+    }
+}
+
+/* ... and stopped: it glows on a moment and leaves something behind */
+static void
+vsp_end(int x, int y, int kind, int ty)
+{
+    if (kind == 1) {
+        const vsp_style_t &s = vsp_ray_st[ty];
+
+        vl_flash(x, y, s.hr / 255.0f, s.hg / 255.0f, s.hb / 255.0f, s.li * 0.55f, s.lr * 0.85f, 600);
+        vsp_emit_ray(x, y, ty, ty == 1 || ty == 2 ? 3 : 2, true);
+    } else if (kind == 2) {
+        const vsp_style_t &s = vsp_expl_st[ty];
+
+        vl_flash(x, y, s.hr / 255.0f, s.hg / 255.0f, s.hb / 255.0f, s.li * 0.35f, 2.2f, 650);
+        vsp_emit_linger(x, y, ty);
+    }
+}
+
+static void
+vsp_reset(void)
+{
+    memset(vsp_cells, 0, sizeof vsp_cells);
+    vsp_on_count = 0;
+    vsp_parts.clear();
+    vsp_waves.clear();
+    vsp_ex_x = vsp_ex_y = -1;
+}
+
+static void
+vsp_level_check(void)
+{
+    if (!on_level(&vsp_lev, &u.uz)) {
+        vsp_lev = u.uz;
+        vsp_reset();
+    }
+}
+
+/* mapdata::set_glyph: the glyph shown on (x, y) changed */
+void
+vsp_glyph(int x, int y, int glyph)
+{
+    int kind = 0, ty = 0, dir = 0;
+    Uint32 now;
+    vsp_cell_t *c;
+
+    if (x < 1 || x >= COLNO || y < 0 || y >= ROWNO || !u.ux)
+        return;
+    vsp_level_check();
+    c = &vsp_cells[y][x];
+    if (iflags.window_inited && cansee(x, y)) {
+        if (glyph_is_cmap_zap(glyph)) {
+            kind = 1, ty = (glyph - GLYPH_ZAP_OFF) >> 2, dir = (glyph - GLYPH_ZAP_OFF) & 3;
+        } else if (glyph_is_explosion(glyph)) {
+            kind = 2, ty = (glyph - GLYPH_EXPLODE_OFF) / MAXEXPCHARS;
+            dir = (glyph - GLYPH_EXPLODE_OFF) % MAXEXPCHARS;
+        } else if (glyph_is_cmap_c(glyph)) {
+            int cm = glyph_to_cmap(glyph);
+
+            kind = cm == S_flashbeam ? 3 : cm == S_digbeam ? 4 : (cm >= S_ss1 && cm <= S_ss4) ? 5 : 0;
+        }
+        if ((kind == 1 && (ty < 0 || ty >= NUM_ZAP)) || (kind == 2 && (ty < 0 || ty >= EXPL_MAX)))
+            kind = 0;
+    }
+    now = SDL_GetTicks();
+    if (kind) {
+        if (!c->on || c->kind != kind || c->type != ty) {
+            if (!c->on)
+                vsp_on_count++;
+            c->on = 1, c->kind = (unsigned char) kind, c->type = (unsigned char) ty;
+            c->dir = (unsigned char) dir, c->t_on = now;
+            vsp_start(x, y, kind, ty, dir);
+        } else if (kind == 1 && c->dir != dir) { /* it came back the other way: it bounced */
+            c->dir = (unsigned char) dir, c->t_on = now;
+            vsp_emit_ray(x, y, ty, 8, false);
+        }
+        vsp_live_t = now;
+    } else if (c->on) {
+        c->on = 0, c->t_off = now;
+        vsp_on_count--;
+        vsp_end(x, y, c->kind, c->type);
+        vsp_live_t = now;
+    }
+}
+
+static bool
+vsp_active(Uint32 now)
+{
+    return vsp_on_count > 0 || !vsp_parts.empty() || !vsp_waves.empty() || now - vsp_live_t < 1000;
+}
+
+/* step 6 of the map: a ray's square is drawn as light by vsp_draw instead
+   of the old sprite; an explosion's sprite pops in */
+static void
+vsp_put_special(int x, int y, int j, int i, int tile)
+{
+    if (tile == V_TILE_NONE)
+        return;
+    if (j >= 1 && j < COLNO && i >= 0 && i < ROWNO && vsp_cells[i][j].on) {
+        const vsp_cell_t &c = vsp_cells[i][j];
+
+        if (c.kind == 1 && tile >= V_MISC_ZAP_SLANT_RIGHT && tile <= V_MISC_ZAP_VERTICAL)
+            return;
+        if (c.kind == 2 && tile >= EXPTILEOFFSET && tile < EXPTILEOFFSET + EXPTILECOUNT) {
+            double age = (double) (SDL_GetTicks() - c.t_on) / 1000.0;
+            double sc = age < 0.08 ? 0.72 + 0.36 * age / 0.08
+                        : age < 0.2 ? 1.08 - 0.08 * (age - 0.08) / 0.12 : 1.0;
+
+            vtw_put_tile_x(x, y, tile, 0, sc, sc, 0.0, false, 255);
+            return;
+        }
+    }
+    vulture_put_tile(x, y, tile);
+}
+
+static void
+vsp_draw_ray(int x, int y, const vsp_cell_t &c, Uint32 now, double t, double dt)
+{
+    static const double rate[NUM_ZAP] = { 9, 15, 8, 4, 6, 10, 5, 6 }; /* particles a second */
+    const vsp_style_t &s = vsp_ray_st[c.type];
+    double age = (double) (now - c.t_on) / 1000.0, hf = 0.55 + 0.45 * exp(-age / 0.12);
+    double hx, hy, len, nx, ny, ax, ay, bx, by, py;
+    int sx, sy, ex, ey, k, ty = c.type;
+
+    vsp_screen(x, y, &sx, &sy);
+    vsp_screen(x + vsp_dx[c.dir], y + vsp_dy[c.dir], &ex, &ey);
+    hx = (ex - sx) * 0.5, hy = (ey - sy) * 0.5; /* half a square along the ray */
+    len = sqrt(hx * hx + hy * hy);
+    if (len < 1.0)
+        return;
+    nx = -hy / len, ny = hx / len; /* across it */
+    py = sy - 28.0;                /* rays fly at chest height */
+    ax = sx - hx, ay = py - hy, bx = sx + hx, by = py + hy;
+
+    /* its glow on the floor (the light layer adds the real light) */
+    vsp_blob(sx, sy, vl_on ? 34 : 46, s.hr, s.hg, s.hb, (int) ((vl_on ? 34 : 62) * hf), true, 0.5);
+    if (ty == 4) { /* death: a dark core in a violet haze */
+        for (k = -1; k <= 1; k++)
+            vsp_blob((int) (sx + hx * 0.66 * k), (int) (py + hy * 0.66 * k), 15, s.hr, s.hg, s.hb,
+                     (int) (60 * hf), true);
+        vsp_line(ax, ay, bx, by, 4.5, 0, 0, 0, (int) (175 * hf), false, 3.0);
+        vsp_line(ax + nx * 5, ay + ny * 5, bx + nx * 5, by + ny * 5, 2.0, s.hr, s.hg, s.hb,
+                 (int) (150 * hf), true, 3.0);
+        vsp_line(ax - nx * 5, ay - ny * 5, bx - nx * 5, by - ny * 5, 2.0, s.hr, s.hg, s.hb,
+                 (int) (150 * hf), true, 3.0);
+    } else {
+        double big = ty == 3 || ty == 6 ? 25 : 21;
+
+        for (k = -1; k <= 1; k++)
+            vsp_blob((int) (sx + hx * 0.66 * k), (int) (py + hy * 0.66 * k), big, s.hr, s.hg, s.hb,
+                     (int) ((ty == 5 ? 115 : 92) * hf), true);
+    }
+    switch (ty) {
+    case 5: { /* lightning: a jagged bolt, forked anew ~22 times a second */
+        int seed = (int) (t * 22.0), i;
+        double px[5], pyy[5], st = 0.75 + 0.25 * vsp_hash(x, y, seed * 3 + 1);
+
+        for (i = 0; i < 5; i++) {
+            double f = -1.0 + 0.5 * i;
+            double off = (i == 0 || i == 4) ? 0.0 : (vsp_hash(x * 7 + i, y, seed) - 0.5) * 18.0;
+
+            px[i] = sx + hx * f + nx * off, pyy[i] = py + hy * f + ny * off;
+        }
+        for (i = 0; i < 4; i++) {
+            vsp_line(px[i], pyy[i], px[i + 1], pyy[i + 1], 4.0, s.hr, s.hg, s.hb, (int) (150 * hf * st), true, 2.5);
+            vsp_line(px[i], pyy[i], px[i + 1], pyy[i + 1], 1.5, 255, 255, 255, (int) (255 * hf * st), true, 1.5);
+        }
+        if (vsp_hash(x, y, seed * 13 + 5) > 0.55) { /* a branch off the middle */
+            double side = vsp_hash(x, y, seed * 17) > 0.5 ? 1.0 : -1.0;
+            double qx = px[2] + nx * side * 16 + hx * 0.4, qy = pyy[2] + ny * side * 16 + hy * 0.4;
+            double rx = qx + nx * side * 10 + hx * 0.3, ry = qy + ny * side * 10 + hy * 0.3 + 6;
+
+            vsp_line(px[2], pyy[2], qx, qy, 1.2, 220, 230, 255, (int) (200 * hf * st), true, 1.5);
+            vsp_line(qx, qy, rx, ry, 1.0, 190, 210, 255, (int) (140 * hf * st), true, 1.5);
+        }
+        break;
+    }
+    case 1: /* fire: a thick licking core, white-hot inside, tongues of flame rising off it */
+        for (k = 0; k <= 16; k++) {
+            double f = -1.0 + k / 8.0, w = 2.5 * sin(t * 38.0 + f * 5.0 + x * 3.1 + y);
+            double fl = 0.8 + 0.2 * sin(t * 47.0 + k * 1.9);
+            int qx = (int) (sx + hx * f + nx * w), qy = (int) (py + hy * f + ny * w);
+
+            vsp_blob(qx, qy, 8, 255, 110, 25, (int) (115 * hf * fl), true);
+            vsp_blob(qx, qy, 4, s.cr, s.cg, s.cb, (int) (230 * hf * fl), true);
+        }
+        vsp_line(ax, ay, bx, by, 1.5, 255, 250, 225, (int) (170 * hf), true, 2.0);
+        for (k = 0; k < 5; k++) {
+            double ph0 = vsp_hash(x, y, k * 5 + 1), ph = fmod(t * 2.6 + ph0, 1.0);
+            double f = vsp_hash(x, y, k * 7 + (int) (t * 2.6 + ph0)) * 2.0 - 1.0;
+            int up = (int) (4 + 20 * ph);
+
+            vsp_blob((int) (sx + hx * f), (int) (py + hy * f) - up, 7.0 * (1.0 - 0.5 * ph), 255,
+                     (int) (210 - 140 * ph), (int) (60 - 40 * ph), (int) (160 * (1.0 - ph) * hf), true);
+        }
+        break;
+    case 6: /* poison gas: a thin core in billows */
+        vsp_line(ax, ay, bx, by, 2.5, s.cr, s.cg, s.cb, (int) (170 * hf), true, 3.0);
+        for (k = 0; k < 3; k++) {
+            double f = -0.66 + 0.66 * k, wob = 4 * sin(t * 3.0 + k * 2.0 + x);
+
+            vsp_blob((int) (sx + hx * f + nx * wob), (int) (py + hy * f + ny * wob), 12 + 2 * sin(t * 2.0 + k),
+                     s.hr, s.hg, s.hb, (int) (55 * hf), true);
+        }
+        break;
+    case 4:
+        break; /* drawn with its haze */
+    default: { /* magic missile, cold, sleep, acid: a straight core */
+        vsp_line(ax, ay, bx, by, ty == 3 ? 4.5 : 3.5, s.cr, s.cg, s.cb, (int) (200 * hf), true, 2.5);
+        vsp_line(ax, ay, bx, by, 1.5, 255, 255, 255, (int) (150 * hf), true, 2.0);
+        if (ty == 0) /* magic missile: pulses running along it */
+            for (k = 0; k < 2; k++) {
+                double f = fmod(t * 3.5 + k * 0.5 + (x + y) * 0.25, 1.0) * 2.0 - 1.0;
+
+                vsp_blob((int) (sx + hx * f), (int) (py + hy * f), 5, 230, 240, 255, (int) (220 * hf), true);
+            }
+        if (ty == 2) /* cold: glitter */
+            for (k = 0; k < 4; k++) {
+                double tw = sin(t * 9.0 + vsp_hash(x, y, k) * 6.2832);
+                double f = vsp_hash(x, y, k + 9) * 2.0 - 1.0, o = (vsp_hash(x, y, k + 20) - 0.5) * 20.0;
+
+                if (tw > 0.2)
+                    vsp_blob((int) (sx + hx * f + nx * o), (int) (py + hy * f + ny * o), 2, 255, 255, 255,
+                             (int) (255 * tw), true);
+            }
+        break;
+    }
+    }
+    /* sparks and the like while it shines (lightning throws most at its head) */
+    if (vsp_frand() < rate[ty] * dt * (ty == 5 ? (age < 0.2 ? 2.0 : 0.3) : 1.0))
+        vsp_emit_ray(x, y, ty, 1, false);
+}
+
+static void
+vsp_draw_expl(int x, int y, const vsp_cell_t &c, Uint32 now, double t)
+{
+    const vsp_style_t &s = vsp_expl_st[c.type];
+    double age = (double) (now - c.t_on) / 1000.0;
+    int sx, sy;
+
+    vsp_screen(x, y, &sx, &sy);
+    if (c.type == EXPL_DARK)
+        vsp_blob(sx, sy - 24, 30, 0, 0, 0, 120, false);
+    vsp_blob(sx, sy - 24, 40, s.hr, s.hg, s.hb, (int) (110 * (0.85 + 0.15 * sin(t * 40.0 + x + y))), true);
+    if (age < 0.09) /* white-hot for an instant */
+        vsp_blob(sx, sy - 24, 34, 255, 255, 255, (int) (210 * (1.0 - age / 0.09)), true);
+}
+
+static void
+vsp_draw_small(int x, int y, const vsp_cell_t &c, double t)
+{
+    int sx, sy;
+
+    vsp_screen(x, y, &sx, &sy);
+    if (c.kind == 3) /* a wand's flash */
+        vsp_blob(sx, sy - 26, 20, 170, 200, 255, (int) (90 + 40 * sin(t * 30.0 + x)), true);
+    else if (c.kind == 4) /* digging */
+        vsp_blob(sx, sy - 10, 18, 200, 160, 110, 50, true);
+    else /* resistance sparkle */
+        vsp_blob(sx, sy - 26, 14, 230, 240, 255, (int) (80 + 60 * sin(t * 25.0 + x * 2 + y)), true);
+}
+
+static void
+vsp_draw_waves(Uint32 now)
+{
+    size_t i, n = 0;
+
+    for (i = 0; i < vsp_waves.size(); i++) {
+        vsp_wave_t &w = vsp_waves[i];
+        double age = (double) (now - w.t0) / w.dur, ea, rw, rh;
+        int sx, sy, k, m, al;
+
+        if (age >= 1.0)
+            continue;
+        vsp_waves[n++] = w;
+        ea = 1.0 - (1.0 - age) * (1.0 - age) * (1.0 - age);
+        rw = w.rad * 79.0 * ea, rh = w.rad * 31.0 * ea;
+        al = (int) (220 * (1.0 - age));
+        vsp_screen(w.x, w.y, &sx, &sy);
+        m = 48 + (int) (rw * 0.6); /* close enough to read as one ring, not dots */
+        for (k = 0; k < m; k++) {
+            double a = 6.28318 * k / m;
+
+            vsp_blob((int) (sx + rw * cos(a)), (int) (sy + rh * sin(a)), 4.5, w.r, w.g, w.b, al, true);
+            if (k % 2 == 0)
+                vsp_blob((int) (sx + rw * 0.86 * cos(a)), (int) (sy + rh * 0.86 * sin(a)), 6, w.r, w.g, w.b,
+                         al / 4, true);
+        }
+    }
+    vsp_waves.resize(n);
+}
+
+static void
+vsp_draw_parts(Uint32 now, double t, double dt)
+{
+    size_t i, n = 0;
+
+    for (i = 0; i < vsp_parts.size(); i++) {
+        vsp_part_t p = vsp_parts[i];
+        double age = (double) (now - p.t0) / p.dur, dk = exp(-p.drag * dt), a;
+        int sx, sy, px, py;
+
+        if (age >= 1.0)
+            continue;
+        p.vz += (float) (p.grav * dt);
+        p.vx *= (float) dk, p.vy *= (float) dk;
+        if (p.grav == 0.0f)
+            p.vz *= (float) dk;
+        p.ox += (float) (p.vx * dt), p.oy += (float) (p.vy * dt), p.oz += (float) (p.vz * dt);
+        if (p.oz < 0.0f) /* on the floor: it settles */
+            p.oz = 0.0f, p.vz = -p.vz * 0.25f, p.vx *= 0.5f, p.vy *= 0.5f;
+        p.size += (float) (p.grow * dt);
+        vsp_parts[n++] = p;
+        vsp_screen(p.sqx, p.sqy, &sx, &sy);
+        px = sx + (int) p.ox, py = sy + (int) p.oy - (int) p.oz;
+        switch (p.mode) {
+        case 0: /* a spark */
+            a = p.alpha * pow(1.0 - age, 1.3);
+            vsp_blob(px, py, p.size, p.r, p.g, p.b, (int) a, true);
+            if (p.size >= 1.2)
+                vsp_blob(px, py, 1, 255, 255, 255, (int) (a * 0.6), true);
+            break;
+        case 4: /* a twinkle */
+            a = p.alpha * (1.0 - age) * (0.35 + 0.65 * fabs(sin(t * 13.0 + (p.t0 % 97) * 0.37)));
+            vsp_blob(px, py, p.size, p.r, p.g, p.b, (int) a, true);
+            break;
+        case 1: /* gas, mist */
+            vsp_blob(px, py, p.size, p.r, p.g, p.b, (int) (p.alpha * sin(3.14159265 * age)), true);
+            break;
+        default: /* 2 dark wisp, 3 smoke: shading */
+            vsp_blob(px, py, p.size, p.r, p.g, p.b, (int) (p.alpha * sin(3.14159265 * age)), false);
+            break;
+        }
+    }
+    vsp_parts.resize(n);
+}
+
+/* the overlay pass, after vfx_draw */
+static void
+vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
+{
+    static Uint32 last = 0;
+    Uint32 now = SDL_GetTicks();
+    double dt = last ? (now - last) / 1000.0 : 0.0, t = now / 1000.0;
+    int x, y;
+
+    last = now;
+    if (dt > 0.05)
+        dt = 0.05;
+    if (!u.ux)
+        return;
+    vsp_level_check();
+    vsp_cx = cx, vsp_cy = cy, vsp_vx = vx, vsp_vy = vy;
+    if (vsp_on_count > 0)
+        for (y = 0; y < ROWNO; y++)
+            for (x = 1; x < COLNO; x++) {
+                vsp_cell_t &c = vsp_cells[y][x];
+
+                if (!c.on)
+                    continue;
+                /* the map stopped showing it without our hearing (a level
+                   change, a cleared map) or it is stuck: let it go */
+                if ((md && md->get_glyph(MAP_SPECIAL, x, y) == V_TILE_NONE) || now - c.t_on > 6000) {
+                    c.on = 0, c.t_off = now;
+                    vsp_on_count--;
+                    continue;
+                }
+                if (c.kind == 1)
+                    vsp_draw_ray(x, y, c, now, t, dt);
+                else if (c.kind == 2)
+                    vsp_draw_expl(x, y, c, now, t);
+                else
+                    vsp_draw_small(x, y, c, t);
+            }
+    if (vsp_on_count < 0)
+        vsp_on_count = 0;
+    vsp_draw_waves(now);
+    vsp_draw_parts(now, t, dt);
+}
+
+/* probe: s198 - VULTURE_SELFTEST_SPELL fires each ray type, then each
+   explosion type, from the hero, shooting frames as they play */
+static Uint32 vsp_probe_t = 0, vsp_probe_end = 0;
+static int vsp_probe_n = 0, vsp_probe_shots = 0, vsp_probe_pumped = 0;
+
+static void
+vsp_probe_shot(const char *tag)
+{
+    const char *dir = getenv("VULTURE_SELFTEST");
+    char p[700];
+    SDL_Surface *o;
+    SDL_Rect a;
+    int hx, hy;
+
+    if (!dir || vsp_probe_shots >= 80 || !vulture_screen || vulture_screen->w < 960 || vulture_screen->h < 540)
+        return;
+    vsp_screen(u.ux, u.uy, &hx, &hy);
+    a.w = 960, a.h = 540, a.x = hx - 480, a.y = hy - 310;
+    if (a.x < 0)
+        a.x = 0;
+    if (a.y < 0)
+        a.y = 0;
+    if (a.x + a.w > vulture_screen->w)
+        a.x = vulture_screen->w - a.w;
+    if (a.y + a.h > vulture_screen->h)
+        a.y = vulture_screen->h - a.h;
+    if (!(o = SDL_CreateRGBSurfaceWithFormat(0, a.w, a.h, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return;
+    snprintf(p, sizeof p, "%s\\spell%02d_%s_%02d.bmp", dir, vsp_probe_n - 1, tag, vsp_probe_shots++);
+    if (vulture_frame_to_surface(o, &a))
+        SDL_SaveBMP(o, p);
+    SDL_FreeSurface(o);
+}
+
+static void
+vsp_probe_fire(void)
+{
+    static const int rays[8] = { 1, 5, 2, 4, 0, 3, 7, 6 }; /* gas last: its clouds block the view */
+    static const int expl[7] = { EXPL_FIERY, EXPL_FROSTY, EXPL_NOXIOUS, EXPL_WET, EXPL_MAGICAL, EXPL_DARK,
+                                 EXPL_MUDDY };
+    static const int ddx[8] = { 1, 1, 0, -1, -1, -1, 0, 1 }, ddy[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+    int n = vsp_probe_n++, k, best = -1, bl = 0, dx = 1, dy = 0;
+
+    if (n >= 15) {
+        vsp_probe_t = 0;
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "spellfx probe: done, %d shots\n", vsp_probe_shots);
+        return;
+    }
+    /* the probe hero lives through its own bounces */
+    HReflecting |= FROMOUTSIDE;
+    HFire_resistance |= FROMOUTSIDE, HCold_resistance |= FROMOUTSIDE, HShock_resistance |= FROMOUTSIDE;
+    HSleep_resistance |= FROMOUTSIDE, HPoison_resistance |= FROMOUTSIDE, HDisint_resistance |= FROMOUTSIDE;
+    HAcid_resistance |= FROMOUTSIDE;
+    u.uhp = u.uhpmax;
+    if (Blinded) /* a lightning bolt that came back still dazzles */
+        make_blinded(0L, FALSE);
+    for (k = 0; k < 8; k++) { /* the most open way */
+        int l = 0, x = u.ux + ddx[k], y = u.uy + ddy[k];
+
+        while (isok(x, y) && ACCESSIBLE(levl[x][y].typ) && !m_at(x, y) && l < 12)
+            l++, x += ddx[k], y += ddy[k];
+        if (l > bl)
+            bl = l, best = k;
+    }
+    if (best >= 0)
+        dx = ddx[best], dy = ddy[best];
+    vsp_probe_pumped = 0;
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "spellfx probe %d: way %d,%d, %d open\n", n, dx, dy, bl);
+    if (n < 7 || n == 14) {
+        buzz(rays[n < 7 ? n : 7], 2, u.ux, u.uy, dx, dy);
+    } else {
+        int d = bl > 4 ? 4 : bl < 2 ? 2 : bl;
+
+        explode(u.ux + dx * d, u.uy + dy * d, 11, 1, WAND_CLASS, expl[n - 7]);
+    }
+    flush_screen(1); /* as the end of a turn does */
+    vsp_probe_t = vsp_probe_end = SDL_GetTicks();
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "spellfx probe %d: %d particles, %d waves after\n", n,
+                      (int) vsp_parts.size(), (int) vsp_waves.size());
+}
+
+static void
+vsp_probe_tick(Uint32 now)
+{
+    if (vsp_probe_end && now - vsp_probe_end > 260) { /* the afterglow */
+        vsp_probe_end = 0;
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        vsp_probe_shot("after");
+    }
+    if (now - vsp_probe_t > 1700)
+        vsp_probe_fire();
+}
+
+/* vulture_delay_output: while a spell effect is alive, keep drawing frames
+   through the core's pause between steps (it used to show one a step) */
+void
+vulture_fx_pump(void)
+{
+    static Uint32 last = 0;
+    Uint32 now = SDL_GetTicks();
+
+    if (!levwin || vulture_windows_inited != TRUE || vtw_animating || vanim_kind || !vsp_active(now)
+        || now - last < 15)
+        return;
+    last = now;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    vulture_refresh_window_region();
+    if (vsp_probe_t && getenv("VULTURE_SELFTEST_SPELL")) { /* probe: s198 */
+        int f = ++vsp_probe_pumped;
+
+        if (f == 2 || f == 5 || f == 10)
+            vsp_probe_shot("live");
+    }
+}
 
 static void
 vprobe_push_click(point sq) /* probe: s145 a real left click on a square */
@@ -3714,6 +4601,8 @@ vulture_idle_bob(bool at_map)
         snprintf(pp, sizeof pp, "%s\\selftest_pause.bmp", getenv("VULTURE_SELFTEST"));
         vulture_save_frame_bmp(pp);
     }
+    if (vsp_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s198 */
+        vsp_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -3725,7 +4614,7 @@ vulture_idle_bob(bool at_map)
         for (q = 0; q < vfx_list.size(); q++)
             if (vfx_list[q].kind == 3 && now - vfx_list[q].t0 < vfx_list[q].dur)
                 marker = true;
-        if (now - last < (marker ? 25u : vidle_interval))
+        if (now - last < (vsp_active(now) ? 16u : marker ? 25u : vidle_interval)) /* s198: 60 fps */
             return;
     }
     last = now;
@@ -6938,6 +7827,10 @@ vselftest(void)
     case 1:
         if (getenv("VULTURE_SELFTEST_MENUKEY")) { /* probe: s197 a menu opened by its key */
             vprobe_push_key(SDLK_i);
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_SPELL")) { /* probe: s198 rays and explosions */
+            vsp_probe_t = SDL_GetTicks() - 1500, vsp_probe_n = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_ITEM")) { /* probe: s136 pulse + glint */
@@ -10229,7 +11122,7 @@ vl_flash(int x, int y, float r, float g, float b, float inten, float rad, Uint32
 
     f.x = x, f.y = y, f.t0 = SDL_GetTicks(), f.dur = dur;
     f.r = r, f.g = g, f.b = b, f.inten = inten, f.rad = rad;
-    if (vl_flashes.size() < 32)
+    if (vl_flashes.size() < 128) /* s198: a ray leaves one a square (was 32) */
         vl_flashes.push_back(f);
 }
 
@@ -10303,6 +11196,38 @@ vmagic_light(int tt, int x, int y, double t, double *c, double *pu)
     return false;
 }
 
+/* s198: a ray's or an explosion's square lights the room in its colour */
+static void
+vsp_light(int x, int y, double t)
+{
+    const vsp_cell_t &c = vsp_cells[y][x];
+    double age, hf;
+
+    if (!c.on) { /* not one of ours (s32's trap marker): as before */
+        vl_add(x, y, 2.5, 0.9, 0.85, 0.9, 1.0);
+        return;
+    }
+    age = (double) (SDL_GetTicks() - c.t_on) / 1000.0;
+    hf = 0.6 + 0.4 * exp(-age / 0.15); /* the head is brightest */
+    if (c.kind == 1) {
+        const vsp_style_t &s = vsp_ray_st[c.type];
+        double fl = c.type == 5 ? 0.65 + 0.7 * vsp_hash(x, y, (int) (t * 25.0)) /* lightning strobes */
+                    : c.type == 1 ? 0.85 + 0.15 * sin(t * 31.0 + x * 1.7 + y) : 1.0;
+
+        vl_add(x, y, s.lr, s.li * hf * fl, s.hr / 255.0, s.hg / 255.0, s.hb / 255.0, 30.0f, 48.0f);
+    } else if (c.kind == 2) {
+        const vsp_style_t &s = vsp_expl_st[c.type];
+
+        vl_add(x, y, 2.6, s.li * (age < 0.1 ? 0.9 : 0.6), s.hr / 255.0, s.hg / 255.0, s.hb / 255.0, 30.0f,
+               48.0f);
+    } else if (c.kind == 3)
+        vl_add(x, y, 2.4, 0.8, 0.85, 0.92, 1.0);
+    else if (c.kind == 4)
+        vl_add(x, y, 1.8, 0.4, 1.0, 0.8, 0.55);
+    else
+        vl_add(x, y, 1.6, 0.45, 0.9, 0.95, 1.0);
+}
+
 static void
 vl_compute(mapdata *md)
 {
@@ -10368,7 +11293,7 @@ vl_compute(mapdata *md)
             if (glyph_is_cmap(g) && (glyph_to_cmap(g) == S_lava || glyph_to_cmap(g) == S_lavawall))
                 vl_add(x, y, 2.2, 0.45 + 0.08 * sin(t * 2.5 + x * 0.9 + y * 1.3), 1.0, 0.42, 0.12);
             if (md && md->get_glyph(MAP_SPECIAL, x, y) != V_TILE_NONE) /* zap / explosion */
-                vl_add(x, y, 2.5, 0.9, 0.85, 0.9, 1.0);
+                vsp_light(x, y, t); /* s198: in its own colour */
             if (glyph_is_cmap(g)) { /* s143: features give off light */
                 int c = glyph_to_cmap(g);
                 double sh = sin(t * 1.7 + x * 1.3 + y * 0.7);
@@ -12352,9 +13277,8 @@ levelwin::draw()
                 /* s78: a slain monster sinking and fading */
                 vanim_draw_death(j, i, x, y);
 
-                /* 6. Effects */
-                vulture_put_tile(x, y,
-                                 map_data->get_glyph(MAP_SPECIAL, j, i));
+                /* 6. Effects (s198: a ray is drawn as light by vsp_draw; an explosion pops) */
+                vsp_put_special(x, y, j, i, map_data->get_glyph(MAP_SPECIAL, j, i));
             }
 
             /* 7. South & East walls */
@@ -12401,6 +13325,7 @@ levelwin::draw()
     vcond_draw(); /* s193: your conditions, on you */
     vambient_draw(this->abs_x, this->abs_y, this->w, this->h); /* s160 */
     vfx_draw(map_centre_x, map_centre_y, view_x, view_y); /* s85 */
+    vsp_draw(map_data, map_centre_x, map_centre_y, view_x, view_y); /* s198 */
     vpath_draw(map_centre_x, map_centre_y, view_x, view_y); /* s125 */
     vmp_mark(map_centre_x, map_centre_y, view_x, view_y);   /* s130 */
     vthreat_draw(map_centre_x, map_centre_y, view_x, view_y); /* s144 */

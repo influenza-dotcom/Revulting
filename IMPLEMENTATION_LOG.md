@@ -4108,6 +4108,59 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   coming, which carry it up.  DIFFUP checks the GPU side; MENUKEY opens a
   menu the way a key does.
 
+### 198. Spells, wands, breath and explosions that look current
+
+- The user picked four improvements, in order: this (4), a readable status
+  panel (2), modern menus and inventory (1), sharper art (3).
+- Before: every ray - fire, frost, lightning, death, sleep, gas, acid, magic
+  missile, wand or spell or breath - was the same orange zigzag sprite over a
+  white splat (Vulture read only the glyph's direction, not its type), with
+  one white light per square; dark, noxious, muddy and wet explosions used
+  the fire sprites; a ray got one frame per step of the core (~20 fps).
+- Now (levelwin.cpp "s198", vsp_*): mapdata::set_glyph tells vsp_glyph about
+  every ray / explosion / wand-flash / digging / resistance-sparkle square,
+  with its type and when it came and went.
+  - A ray is drawn as light in the overlay (vsp_draw_ray), not the sprite: a
+    core and halo in its colour, brightest at the head, each type with its
+    own motion - lightning re-forks ~22 times a second with side branches,
+    fire licks with a white-hot centre and rising tongues, frost glitters,
+    gas billows, magic missiles pulse along it, death is a dark core in a
+    violet haze.  It flies at chest height and pools on the floor below.
+  - It lights the room in its colour (vsp_light replaces the white light in
+    vl_compute), so the walls and floor catch it and the cast shadows swing
+    as the head passes; each square glows on 0.6 s after the ray has gone.
+  - Particles (vsp_parts, at most 900): embers and smoke, frost, sparks,
+    acid drops, gas, dark wisps, motes - they keep moving after the core
+    has cleared the glyphs.  A ray coming back the other way (a bounce)
+    throws a burst where it turns.
+  - An explosion: a room flash in its colour (0.95 s), its sprites pop in
+    (scale 0.72 -> 1.08 -> 1), a white-hot instant, a shockwave ring across
+    the floor, 44 pieces of debris from the centre and 5 from each square,
+    a camera jolt (vimp, weaker with distance), smoke / mist / gas left
+    behind.
+  - New explosion sprites for dark, noxious, muddy and wet: the fire set's
+    brightness mapped onto each type's three-stop ramp, alpha kept, the fire
+    normal maps copied (toolchain/make_explosion_tiles.py, which also points
+    vulture_tiles.conf at them).  5.0 never makes a dark explosion, and its
+    explosion_to_glyph() shows EXPL_DARK as fire anyway; the set is there
+    for completeness.
+  - vulture_delay_output calls vulture_fx_pump: while any of this is alive,
+    frames are drawn through the core's pause between steps (every 15 ms),
+    and the idle loop runs at 60 fps (16 ms) meanwhile.
+- Core (display.c tmp_at DISP_END): a flush_screen(0) after a beam's squares
+  are restored.  The erasure reached the window port only at the next flush,
+  so a ray or an explosion stayed drawn into the monsters' turn (the old
+  zigzag did too; it just didn't move).
+- Probe VULTURE_SELFTEST_SPELL: from the hero, the most open way, fires the
+  7 ray types, the 7 explosion types, then poison gas (last: its clouds
+  block the view), with reflection and resistances, and shoots 960x540 crops
+  live (pumped frames 2, 5, 10) and 260 ms after each ends.  Lightning that
+  passes your square blinds even through reflection (flashburn), so the
+  probe cures it before each.  Lit (OpenGL) and unlit (Direct3D) both run
+  all 15; MENUKEY + DIFFUP still 0 px missing.
+- Cost: a map frame during a ray or explosion took 3 ms median, 6 ms p90
+  (otherwise 4 / 6), the effects about 1 ms of it.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -1222,6 +1222,11 @@ tmp_at(coordxy x, coordxy y)
                 /* Erase (reset) from source to end */
                 for (i = 0; i < tglyph->sidx; i++)
                     newsym(tglyph->saved[i].x, tglyph->saved[i].y);
+                /* Vulture s198: make sure the erasure shows up too - it
+                   reached the window port only at the next flush, so a ray
+                   or an explosion stayed on screen into the monsters' turn */
+                if (tglyph->sidx)
+                    flush_screen(0);
             } else if (tglyph->style == DISP_TETHER) {
                 int i;
 

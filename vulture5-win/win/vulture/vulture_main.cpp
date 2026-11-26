@@ -1210,6 +1210,7 @@ static void vulture_esc_cancels_travel(void)
 }
 
 extern int vulture_tween_ate_ms; /* s117: levelwin.cpp */
+extern void vulture_fx_pump(void); /* s198: levelwin.cpp */
 
 void vulture_delay_output(void)
 {
@@ -1247,6 +1248,7 @@ void vulture_delay_output(void)
 		vulture_esc_cancels_travel(); /* s118 */
 		if (svc.context.travel || svc.context.run || gm.multi > 0)
 			vulture_travel_pan(); /* s124: drag the camera mid-travel */
+		vulture_fx_pump(); /* s198: spell effects keep moving through the pause */
 
 #ifdef TRAVEL_HACK
 		if (vulture_event_dispatcher_nonblocking(&result, NULL))
