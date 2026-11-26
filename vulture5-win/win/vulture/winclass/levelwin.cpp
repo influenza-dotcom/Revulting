@@ -4287,6 +4287,7 @@ vprobe_push_key(SDL_Keycode k) /* probe: s145 */
 static void vgs_probe(int stage, const char *dir); /* s145 probe */
 static void vcontrols_page(void); /* s175 */
 static void vkeys_probe(const char *dir); /* s195 probe */
+static void vpn_probe(const char *dir);   /* s199 probe */
 static SDL_Rect vbtn_rect[4];
 
 /* probe: s166 - VULTURE_SELFTEST_SOAK: play by itself, through real input.
@@ -7829,6 +7830,10 @@ vselftest(void)
             vprobe_push_key(SDLK_i);
             break;
         }
+        if (getenv("VULTURE_SELFTEST_STATUSTIP")) { /* probe: s199 the panel's tooltips */
+            vpn_probe(dir);
+            break;
+        }
         if (getenv("VULTURE_SELFTEST_SPELL")) { /* probe: s198 rays and explosions */
             vsp_probe_t = SDL_GetTicks() - 1500, vsp_probe_n = 0;
             break;
@@ -8383,6 +8388,498 @@ vtint(int x, int y, int w, int h, Uint8 r, Uint8 g, Uint8 b, int a)
     SDL_SetSurfaceAlphaMod(vtint_px, (Uint8) (a > 255 ? 255 : a));
     d.x = x, d.y = y, d.w = w, d.h = h;
     SDL_BlitScaled(vtint_px, NULL, vulture_screen, &d);
+}
+
+
+/*
+ * IMPLEMENTATION_LOG s199: a status panel anyone can read.
+ * The bottom-left panel was NetHack's own status line cut into a 5 x 5 grid
+ * of words on stone - "St:18/16 In:14 HP:11(11) Pw:6(6) AC:9 Dlvl:1 $:0 T:3",
+ * conditions clipped to "Hallu" and "FoodPois".  It is drawn here now, in the
+ * newer HUD's style (vbox, gold): your name and rank, HP, power and
+ * experience as labelled bars (HP shows what a blow just took, fading), the
+ * six attributes and armor, gold, depth and turn spelled out, and conditions
+ * as coloured pills - each with a plain-language tooltip (vulture_status_tip)
+ * saying what it means and what to do.  Only what the status line already
+ * showed (and the s63 prayer hunch): nothing hidden.
+ */
+struct vpn_hot_t {
+    SDL_Rect r;
+    std::string tip;
+};
+static std::vector<vpn_hot_t> vpn_hots;
+static SDL_Rect vpn_rect = { 0, 0, 0, 0 };
+static double vpn_ghost = -1.0; /* the HP the bar still shows as "just lost" */
+static Uint32 vpn_ghost_t = 0;
+
+static void
+vpn_hot(int x, int y, int w, int h, const std::string &tip)
+{
+    vpn_hot_t t;
+
+    t.r.x = x, t.r.y = y, t.r.w = w, t.r.h = h;
+    t.tip = tip;
+    vpn_hots.push_back(t);
+}
+
+/* the panel's size - the status window takes it (statuswin.cpp) */
+void
+vulture_status_panel_size(int *w, int *h)
+{
+    int lh = vulture_get_lineheight(V_FONT_SMALL);
+
+    *w = V_UI(8 + 236 + 18 + 164 + 18 + 112 + 8);
+    *h = V_UI(7) + lh + V_UI(5 + 16 + 5 + 12 + 5 + 6 + 8) + lh + V_UI(6 + 6);
+}
+
+/* the portrait's frame, in the same style (statuswin.cpp vpt_draw) */
+void
+vulture_hud_frame(int x, int y, int w, int h)
+{
+    vbox(x, y, w, h, 205);
+    vtint(x, y, w, 1, 255, 200, 70, 110);
+}
+
+static void
+vpn_text(const std::string &s, int x, int y, Uint8 r, Uint8 g, Uint8 b)
+{
+    vulture_put_text_shadow(V_FONT_SMALL, s, vulture_screen, x, y,
+                            SDL_MapRGB(vulture_screen->format, r, g, b),
+                            SDL_MapRGB(vulture_screen->format, 0, 0, 0));
+}
+
+/* s cut down to fit w px */
+static std::string
+vpn_fit(std::string s, int w)
+{
+    while (s.size() > 3 && vulture_text_length(V_FONT_SMALL, s) > w)
+        s.resize(s.size() - 1);
+    return s;
+}
+
+/* a bar over (br, bgc, bb): f of it in (r, g, b) with a sheen on top */
+static void
+vpn_bar(int x, int y, int w, int h, double f, Uint8 r, Uint8 g, Uint8 b, Uint8 br, Uint8 bgc, Uint8 bb)
+{
+    SDL_Rect rc;
+    int fw;
+
+    if (f < 0.0)
+        f = 0.0;
+    if (f > 1.0)
+        f = 1.0;
+    rc.x = x, rc.y = y, rc.w = w, rc.h = h;
+    SDL_FillRect(vulture_screen, &rc, SDL_MapRGB(vulture_screen->format, br, bgc, bb));
+    fw = (int) (w * f + 0.5);
+    if (fw > 0) {
+        rc.w = fw;
+        SDL_FillRect(vulture_screen, &rc, SDL_MapRGB(vulture_screen->format, r, g, b));
+        vtint(x, y, fw, h * 2 / 5 > 1 ? h * 2 / 5 : 1, 255, 255, 255, 50);
+    }
+    vtint(x, y + h - 1, w, 1, 0, 0, 0, 110);
+}
+
+/* a pill; returns its width */
+static int
+vpn_pill(int x, int y, int h, const char *txt, Uint8 r, Uint8 g, Uint8 b, bool urgent, const std::string &tip)
+{
+    int lh = vulture_get_lineheight(V_FONT_SMALL), w = vulture_text_length(V_FONT_SMALL, txt) + V_UI(14);
+    int a = urgent ? (int) (60 + 50 * (0.5 + 0.5 * sin(SDL_GetTicks() / 140.0))) : 55;
+
+    vtint(x, y, w, h, r, g, b, a);
+    vtint(x, y, w, 1, r, g, b, 180);
+    vtint(x, y + h - 1, w, 1, r, g, b, 180);
+    vtint(x, y + 1, 1, h - 2, r, g, b, 180);
+    vtint(x + w - 1, y + 1, 1, h - 2, r, g, b, 180);
+    vpn_text(txt, x + V_UI(7), y + (h - lh) / 2, (Uint8) ((r + 255) / 2), (Uint8) ((g + 255) / 2),
+             (Uint8) ((b + 255) / 2));
+    vpn_hot(x, y, w, h, tip);
+    return w;
+}
+
+static std::string
+vpn_strength(void)
+{
+    char b[16];
+    int s = ACURR(A_STR);
+
+    if (s > 18) {
+        if (s > STR18(100))
+            snprintf(b, sizeof b, "%d", s - 100);
+        else if (s < STR18(100))
+            snprintf(b, sizeof b, "18/%02d", s - 18);
+        else
+            snprintf(b, sizeof b, "18/**");
+    } else
+        snprintf(b, sizeof b, "%d", s);
+    return b;
+}
+
+void
+vulture_status_panel_draw(int x, int y, int w, int h)
+{
+    static int last_hp = -1;
+    static Uint32 last_t = 0;
+    int lh = vulture_get_lineheight(V_FONT_SMALL), pad = V_UI(8);
+    int lx = x + pad, lw = V_UI(236), mx = lx + lw + V_UI(18), mw = V_UI(164), rx = mx + mw + V_UI(18);
+    int rw = x + w - pad - rx;
+    int ny = y + V_UI(7);
+    int hpy = ny + lh + V_UI(5), hph = V_UI(16);
+    int pwy = hpy + hph + V_UI(5), pwh = V_UI(12);
+    int xpy = pwy + pwh + V_UI(5), xph = V_UI(6);
+    int ply = xpy + xph + V_UI(8), plh = lh + V_UI(6);
+    int hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax;
+    int rowy[4], k, px, bw;
+    Uint32 now = SDL_GetTicks();
+    double dt = last_t ? (now - last_t) / 1000.0 : 0.0;
+    char b[400];
+    std::string s, tip;
+
+    last_t = now;
+    if (dt > 0.1)
+        dt = 0.1;
+    vpn_hots.clear();
+    vpn_rect.x = x, vpn_rect.y = y, vpn_rect.w = w, vpn_rect.h = h;
+    if (!u.ux)
+        return;
+    vbox(x, y, w, h, 205);
+    vtint(x, y, w, 1, 255, 200, 70, 110); /* a gold hairline along the top */
+    /* the middle and right columns: four rows spread evenly over the bars' band */
+    for (k = 0; k < 4; k++)
+        rowy[k] = ny + k * (xpy + xph - ny - lh) / 3;
+
+    /* your name and rank, your level */
+    s = svp.plname;
+    if (!s.empty())
+        s[0] = (char) toupper((unsigned char) s[0]);
+    if (Upolyd) {
+        std::string mn = pmname(&mons[u.umonnum], Ugender);
+
+        if (!mn.empty())
+            mn[0] = (char) toupper((unsigned char) mn[0]);
+        s += " the " + mn;
+    } else
+        s += std::string(" the ") + rank_of(u.ulevel, Role_switch, flags.female);
+    snprintf(b, sizeof b, "Level %d", u.ulevel);
+    bw = vulture_text_length(V_FONT_SMALL, b);
+    vpn_text(vpn_fit(s, lw - bw - V_UI(10)), lx, ny, 255, 200, 70);
+    vpn_text(b, lx + lw - bw, ny, 235, 230, 220);
+    vpn_hot(lx, ny, lw - bw - V_UI(6), lh,
+            Upolyd ? "Your name - and what you've turned into for now."
+                   : "Your name and rank.  The rank rises with your experience level.");
+    if (u.ulevel < MAXULEV) {
+        long need = newuexp(u.ulevel) - u.uexp;
+
+        snprintf(b, sizeof b, "Experience level %d.  %ld more experience point%s to reach level %d:\n"
+                 "more hit points and power, and better at everything.  You gain experience\n"
+                 "mostly by defeating monsters.", u.ulevel, need, need == 1 ? "" : "s", u.ulevel + 1);
+    } else
+        snprintf(b, sizeof b, "Experience level %d - as high as it goes.", u.ulevel);
+    vpn_hot(lx + lw - bw, ny, bw, lh, b);
+
+    /* HP: the part a blow just took stays pale a moment, then drains away */
+    if (last_hp >= 0 && hp < last_hp)
+        vpn_ghost_t = now;
+    if (vpn_ghost < hp)
+        vpn_ghost = hp;
+    else if (now - vpn_ghost_t > 450) {
+        vpn_ghost -= (vpn_ghost - hp) * (dt * 4.0 > 1.0 ? 1.0 : dt * 4.0) + 0.2;
+        if (vpn_ghost < hp)
+            vpn_ghost = hp;
+    }
+    last_hp = hp;
+    {
+        double f = hpmax > 0 ? (double) hp / hpmax : 0.0, fg = hpmax > 0 ? vpn_ghost / hpmax : 0.0;
+        Uint8 r = 70, g = 190, bb = 80;
+        SDL_Rect rc;
+
+        if (f <= 0.3)
+            r = 215, g = 50, bb = 40;
+        else if (f <= 0.6)
+            r = 225, g = 175, bb = 45;
+        if (f <= 0.25) { /* in danger: it throbs */
+            double pu = 0.78 + 0.22 * sin(now / 120.0);
+
+            r = (Uint8) (r * pu), g = (Uint8) (g * pu), bb = (Uint8) (bb * pu);
+        }
+        vpn_bar(lx, hpy, lw, hph, 0.0, 0, 0, 0, 40, 12, 12);
+        if (fg > f) {
+            rc.x = lx + (int) (lw * (f < 0 ? 0 : f)), rc.y = hpy;
+            rc.w = (int) (lw * (fg > 1 ? 1 : fg)) - (rc.x - lx), rc.h = hph - 1;
+            if (rc.w > 0)
+                SDL_FillRect(vulture_screen, &rc, SDL_MapRGB(vulture_screen->format, 250, 215, 195));
+        }
+        vpn_bar(lx, hpy, (int) (lw * (f < 0 ? 0 : f > 1 ? 1 : f) + 0.5), hph, 1.0, r, g, bb, r, g, bb);
+        vpn_text("HP", lx + V_UI(6), hpy + (hph - lh) / 2, 255, 255, 255);
+        snprintf(b, sizeof b, "%d / %d", hp, hpmax);
+        bw = vulture_text_length(V_FONT_SMALL, b);
+        vpn_text(b, lx + lw - bw - V_UI(6), hpy + (hph - lh) / 2, 255, 255, 255);
+        snprintf(b, sizeof b, "Hit points: %d of %d.  At 0 you die.\n"
+                 "They come back slowly as you rest or walk, faster with healing.%s", hp, hpmax,
+                 Upolyd ? "\nYou're transformed: if these run out you turn back into yourself." : "");
+        vpn_hot(lx, hpy, lw, hph, b);
+    }
+
+    /* power */
+    vpn_bar(lx, pwy, lw, pwh, u.uenmax > 0 ? (double) u.uen / u.uenmax : 0.0, 70, 125, 245, 12, 16, 42);
+    vpn_text("Power", lx + V_UI(6), pwy + (pwh - lh) / 2, 230, 236, 255);
+    snprintf(b, sizeof b, "%d / %d", u.uen, u.uenmax);
+    bw = vulture_text_length(V_FONT_SMALL, b);
+    vpn_text(b, lx + lw - bw - V_UI(6), pwy + (pwh - lh) / 2, 230, 236, 255);
+    snprintf(b, sizeof b, "Power: %d of %d.  Spent to cast spells (Z) and use some abilities;\n"
+             "it comes back over time.", u.uen, u.uenmax);
+    vpn_hot(lx, pwy, lw, pwh, b);
+
+    /* experience: how far into this level */
+    {
+        long lo = newuexp(u.ulevel - 1), hi = newuexp(u.ulevel);
+        double f = u.ulevel >= MAXULEV ? 1.0 : hi > lo ? (double) (u.uexp - lo) / (hi - lo) : 0.0;
+
+        vpn_bar(lx, xpy, lw, xph, f, 255, 200, 70, 40, 32, 12);
+        if (u.ulevel < MAXULEV)
+            snprintf(b, sizeof b, "Experience: %ld points.  %ld more to reach level %d.", u.uexp,
+                     hi - u.uexp, u.ulevel + 1);
+        else
+            snprintf(b, sizeof b, "Experience: %ld points - the highest level.", u.uexp);
+        vpn_hot(lx, xpy - V_UI(2), lw, xph + V_UI(4), b);
+    }
+
+    /* alignment, the six attributes */
+    {
+        static const char *const lab[6] = { "STR", "DEX", "CON", "INT", "WIS", "CHA" };
+        static const char *const what[6] = {
+            "Strength: how hard you hit in melee and how much you can carry.",
+            "Dexterity: how often you hit, above all with thrown and fired weapons.",
+            "Constitution: how many hit points each level brings, and how much you can carry.",
+            "Intelligence: spellcasting for most classes - wizards above all.",
+            "Wisdom: how fast your power comes back; spellcasting for priests,\nhealers, knights and monks.",
+            "Charisma: what shopkeepers charge you, and how well you get on with others."
+        };
+        static const int attr[6] = { A_STR, A_DEX, A_CON, A_INT, A_WIS, A_CHA };
+        const char *al = u.ualign.type == A_CHAOTIC ? "Chaotic" : u.ualign.type == A_NEUTRAL ? "Neutral" : "Lawful";
+        Uint8 ar = u.ualign.type == A_CHAOTIC ? 235 : u.ualign.type == A_NEUTRAL ? 185 : 235;
+        Uint8 ag = u.ualign.type == A_CHAOTIC ? 125 : u.ualign.type == A_NEUTRAL ? 205 : 220;
+        Uint8 ab = u.ualign.type == A_CHAOTIC ? 115 : u.ualign.type == A_NEUTRAL ? 230 : 150;
+
+        vpn_text(al, mx, ny, ar, ag, ab);
+        snprintf(b, sizeof b, "Your alignment: %s.  Your god favours %s deeds, and an altar\n"
+                 "of your own alignment is where to pray and sacrifice.", al,
+                 u.ualign.type == A_CHAOTIC ? "chaotic" : u.ualign.type == A_NEUTRAL ? "balanced" : "lawful");
+        vpn_hot(mx, ny, vulture_text_length(V_FONT_SMALL, al), lh, b);
+        for (k = 0; k < 6; k++) {
+            int cx = mx + (k / 3) * (mw / 2), cy = rowy[1 + k % 3];
+            std::string v = k == 0 ? vpn_strength() : std::to_string((int) ACURR(attr[k]));
+
+            vpn_text(lab[k], cx, cy, 150, 145, 135);
+            vpn_text(v, cx + V_UI(36), cy, 240, 235, 225);
+            vpn_hot(cx, cy, mw / 2 - V_UI(4), lh, what[k]);
+        }
+    }
+
+    /* depth, armor, gold, turn */
+    {
+        std::string dn = svd.dungeons[u.uz.dnum].dname;
+        long gold = money_cnt(gi.invent);
+        const char *lab[4] = { "Depth", "Armor", "Gold", "Turn" };
+        std::string val[4], tips[4];
+
+        val[0] = std::to_string(depth(&u.uz));
+        snprintf(b, sizeof b, "You are on level %d of %s.\nStairs down lead deeper; the Amulet lies far below.",
+                 dunlev(&u.uz), dn.c_str());
+        tips[0] = b;
+        val[1] = std::to_string(u.uac);
+        tips[1] = "Armor class: LOWER is better.  Each point lower makes monsters miss\n"
+                  "you more often; below 0 it also softens their blows.  Wear armor to lower it.";
+        val[2] = gold >= 100000L ? std::to_string(gold / 1000) + "k" : std::to_string(gold);
+        tips[2] = "Gold: spend it in shops, or donate it to a temple priest.";
+        val[3] = flags.time ? std::to_string(svm.moves) : std::string("");
+        tips[3] = "Game turns so far.";
+        for (k = 0; k < 4; k++) {
+            if (val[k].empty())
+                continue;
+            vpn_text(lab[k], rx, rowy[k], 150, 145, 135);
+            bw = vulture_text_length(V_FONT_SMALL, val[k]);
+            vpn_text(val[k], rx + rw - bw, rowy[k], k == 2 ? 255 : 240, k == 2 ? 215 : 235, k == 2 ? 90 : 225);
+            vpn_hot(rx, rowy[k], rw, lh, tips[k]);
+        }
+    }
+
+    /* conditions, as pills; the quiver on the right */
+    px = lx;
+    {
+        struct vpn_cond { const char *txt; Uint8 r, g, b; bool urgent; const char *tip; };
+        std::vector<vpn_cond> cs;
+        int cap = near_capacity();
+        long since = vq_turns_since_prayer();
+        int qw = 0;
+        std::string q;
+
+        if (Stoned)
+            cs.push_back({ "Turning to stone", 230, 60, 50, true,
+                           "You'll be a statue in a few turns!  Eat a lizard corpse or an acidic\n"
+                           "corpse, drink acid, or pray." });
+        if (Slimed)
+            cs.push_back({ "Turning into slime", 230, 60, 50, true,
+                           "You're turning into green slime!  Burn it off with fire, or pray." });
+        if (Strangled)
+            cs.push_back({ "Being strangled", 230, 60, 50, true,
+                           "You're choking!  Take off your amulet (R) - it's strangling you - or pray." });
+        if (Sick && (u.usick_type & SICK_VOMITABLE))
+            cs.push_back({ "Food poisoning", 230, 60, 50, true,
+                           "Deadly in a few turns!  Pray, apply a unicorn horn, eat a eucalyptus\n"
+                           "leaf, or drink a potion of extra or full healing." });
+        if (Sick && (u.usick_type & SICK_NONVOMITABLE))
+            cs.push_back({ "Terminally ill", 230, 60, 50, true,
+                           "Deadly in a few turns!  Pray, apply a unicorn horn, eat a eucalyptus\n"
+                           "leaf, or drink a potion of extra or full healing." });
+        if (u.uhs >= FAINTING)
+            cs.push_back({ "Fainting", 230, 60, 50, true,
+                           "You keep passing out from hunger.  Eat something NOW, or pray." });
+        else if (u.uhs == WEAK)
+            cs.push_back({ "Weak", 240, 140, 50, false,
+                           "Starving: eat soon (E).  Your strength is down until you do." });
+        else if (u.uhs == HUNGRY)
+            cs.push_back({ "Hungry", 235, 200, 70, false, "Hungry: eat something soon (E)." });
+        else if (u.uhs == SATIATED)
+            cs.push_back({ "Satiated", 150, 190, 120, false,
+                           "Full.  Eating much more could make you choke to death." });
+        if (cap >= EXT_ENCUMBER)
+            cs.push_back({ cap == OVERLOADED ? "Overloaded" : "Overtaxed", 230, 60, 50, false,
+                           "Far too heavy: you can hardly move.  Drop things (d or D)." });
+        else if (cap == HVY_ENCUMBER)
+            cs.push_back({ "Strained", 240, 140, 50, false,
+                           "Very heavy: very slow, and you don't heal while walking.  Drop something." });
+        else if (cap == MOD_ENCUMBER)
+            cs.push_back({ "Stressed", 240, 160, 60, false,
+                           "Heavy: slower, and you don't heal while walking.  Drop something heavy." });
+        else if (cap == SLT_ENCUMBER)
+            cs.push_back({ "Burdened", 235, 200, 70, false,
+                           "Carrying a lot: you move a little slower." });
+        if (Blind)
+            cs.push_back({ "Blind", 200, 160, 255, false,
+                           "You can't see.  You can still feel your way and fight what you bump into." });
+        if (Deaf)
+            cs.push_back({ "Deaf", 180, 180, 200, false, "You can't hear." });
+        if (Confusion)
+            cs.push_back({ "Confused", 200, 160, 255, false,
+                           "Your steps may go astray, and some scrolls and spells act strangely." });
+        if (Stunned)
+            cs.push_back({ "Stunned", 200, 160, 255, false,
+                           "You stagger in random directions.  Wait (s) for it to pass." });
+        if (Hallucination)
+            cs.push_back({ "Hallucinating", 220, 130, 255, false,
+                           "Monsters and items look like random things.  It wears off." });
+        if (Levitation)
+            cs.push_back({ "Levitating", 120, 200, 255, false,
+                           "You float: you can't pick things up or go down stairs." });
+        else if (Flying)
+            cs.push_back({ "Flying", 120, 200, 255, false, "You fly over water, lava and traps." });
+        if (u.usteed)
+            cs.push_back({ "Riding", 170, 200, 150, false, "You're riding your steed." });
+        if (u.ugangr) /* s63's hunch, as a pill */
+            cs.push_back({ "God angry", 230, 60, 50, false,
+                           "Your god is angry with you: praying now makes things worse.\n"
+                           "Make amends first - sacrifice fresh corpses at an altar of your god." });
+        else if (since >= 1000L)
+            cs.push_back({ "Can pray", 110, 210, 120, false,
+                           "A long time since you last prayed (or you never have).  If you're in real\n"
+                           "trouble - very low HP, weak from hunger, ill - praying should help.\n"
+                           "(A hunch: the real wait is hidden and varies.)" });
+        else if (since >= 500L)
+            cs.push_back({ "Pray?", 235, 200, 70, false,
+                           "A while since you last prayed: praying now might be too soon.\n"
+                           "Only risk it if you'd die otherwise." });
+        /* the quiver */
+        if (uquiver) {
+            q = std::string("Quiver: ") + std::to_string(uquiver->quan) + " " + simpleonames(uquiver);
+            snprintf(b, sizeof b, "What you fire with f: %ld left.%s", uquiver->quan,
+                     uquiver->quan <= 5 ? "  Running low!" : "");
+        } else {
+            q = "Quiver: empty";
+            snprintf(b, sizeof b, "Nothing to fire: put arrows, darts, daggers or rocks in your quiver with Q.");
+        }
+        q = vpn_fit(q, V_UI(180));
+        qw = vulture_text_length(V_FONT_SMALL, q);
+        vpn_text(q, x + w - pad - qw, ply + (plh - lh) / 2, uquiver && uquiver->quan <= 5 ? 235 : 190,
+                 uquiver && uquiver->quan <= 5 ? 200 : 185, uquiver && uquiver->quan <= 5 ? 70 : 175);
+        vpn_hot(x + w - pad - qw, ply, qw, plh, b);
+        for (k = 0; k < (int) cs.size(); k++) {
+            int pw2 = vulture_text_length(V_FONT_SMALL, cs[k].txt) + V_UI(14);
+
+            if (px + pw2 > x + w - pad - qw - V_UI(10))
+                break;
+            px += vpn_pill(px, ply, plh, cs[k].txt, cs[k].r, cs[k].g, cs[k].b, cs[k].urgent, cs[k].tip)
+                  + V_UI(5);
+        }
+    }
+}
+
+/* probe: s199 - every hot spot answers with its own tip; then the real hover
+   path over the Armor row (shot as selftest_pause.bmp) */
+bool vulture_status_tip(int mx, int my, std::string &tip);
+
+static void
+vpn_probe(const char *dir)
+{
+    char path[700];
+    FILE *o;
+    size_t i;
+    std::string t;
+    int bad = 0;
+
+    snprintf(path, sizeof path, "%s\\statustip.txt", dir);
+    if (!(o = fopen(path, "w")))
+        return;
+    fprintf(o, "panel %d,%d %dx%d, %d hot spots\n", vpn_rect.x, vpn_rect.y, vpn_rect.w, vpn_rect.h,
+            (int) vpn_hots.size());
+    for (i = 0; i < vpn_hots.size(); i++) {
+        const SDL_Rect r = vpn_hots[i].r;
+        bool in = vulture_status_tip(r.x + r.w / 2, r.y + r.h / 2, t);
+        std::string first = vpn_hots[i].tip.substr(0, vpn_hots[i].tip.find('\n'));
+        bool ok = in && t == vpn_hots[i].tip;
+
+        bad += !ok;
+        fprintf(o, "%4d,%3d %3dx%2d %s | %s\n", r.x - vpn_rect.x, r.y - vpn_rect.y, r.w, r.h,
+                ok ? "ok  " : "MISS", first.c_str());
+    }
+    fprintf(o, "outside the panel: %s\n",
+            vulture_status_tip(vpn_rect.x - 50, vpn_rect.y - 50, t) ? "WRONG" : "ok");
+    for (i = 0; i < vpn_hots.size(); i++)
+        if (vpn_hots[i].tip.compare(0, 11, "Armor class") == 0)
+            break;
+    if (i < vpn_hots.size()) {
+        const SDL_Rect r = vpn_hots[i].r;
+
+        vulture_cam_follow = true; /* the old hover path switched it off */
+        vulture_set_mouse_pos(r.x + r.w / 2, r.y + r.h / 2);
+        levwin->handle_timer_event(stwin, NULL, 5000);
+        vpause_probe_t = SDL_GetTicks();
+        fprintf(o, "hovered the Armor row: see selftest_pause.bmp; camera follow %s\n",
+                vulture_cam_follow ? "still on" : "OFF");
+    }
+    fprintf(o, "%d of %d hot spots wrong\n", bad, (int) vpn_hots.size());
+    fclose(o);
+}
+
+/* the hover chain (handle_timer_event): over the panel - its tooltip, if any */
+bool
+vulture_status_tip(int mx, int my, std::string &tip)
+{
+    size_t i;
+
+    tip.clear();
+    if (!stwin || !stwin->visible || !vpn_rect.w || mx < vpn_rect.x || my < vpn_rect.y
+        || mx >= vpn_rect.x + vpn_rect.w || my >= vpn_rect.y + vpn_rect.h)
+        return false;
+    for (i = 0; i < vpn_hots.size(); i++) {
+        const SDL_Rect &r = vpn_hots[i].r;
+
+        if (mx >= r.x && my >= r.y && mx < r.x + r.w && my < r.y + r.h) {
+            tip = vpn_hots[i].tip;
+            break;
+        }
+    }
+    return true;
 }
 
 static Uint32 vst_pulse_t = 0;
@@ -13401,8 +13898,11 @@ levelwin::handle_timer_event(window *target, void *result, int time)
         (mouse.x != last_hover_mouse.x || mouse.y != last_hover_mouse.y);
     last_hover_mouse = mouse;
 
-    /* hovering on a border: scroll */
-    if (target != this && target->menu_id) {
+    /* hovering on a border: scroll (s199: the scroll hotspots only - any
+       child with a menu_id used to land here, so moving the mouse over the
+       status panel switched camera-follow off) */
+    if (target != this && target->menu_id >= V_HOTSPOT_SCROLL_UPLEFT
+        && target->menu_id <= V_HOTSPOT_SCROLL_DOWNRIGHT) {
         int increment = (time / 500) + 1;
 
         /*
@@ -13489,6 +13989,15 @@ levelwin::handle_timer_event(window *target, void *result, int time)
 
         if (vpt_hit(mp.x, mp.y)) /* s123: no tooltip over the portrait */
             return V_EVENT_HANDLED_NOREDRAW;
+        {
+            std::string st;
+
+            if (vulture_status_tip(mp.x, mp.y, st)) { /* s199: the status panel */
+                if (!st.empty())
+                    vulture_mouse_set_tooltip(st);
+                return V_EVENT_HANDLED_NOREDRAW;
+            }
+        }
         if (vbtn_hit(mp.x, mp.y) >= 0) { /* s130 */
             static const char *const tip[4] = {
                 "Fight the nearest enemy  [Tab]",

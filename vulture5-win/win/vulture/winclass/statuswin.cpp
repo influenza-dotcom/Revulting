@@ -25,6 +25,10 @@ extern const char *const enc_stat[]; /* defined in botl.c */
 #include <sstream>
 
 statuswin *stwin;
+/* s199: the panel itself is drawn by levelwin.cpp, in the HUD's style */
+extern void vulture_status_panel_size(int *w, int *h);
+extern void vulture_status_panel_draw(int x, int y, int w, int h);
+extern void vulture_hud_frame(int x, int y, int w, int h);
 #define V_STATUS_CONDS 7 /* condition cells; see add_cond() (§45) */
 static const int status_xpos[5] = { 0, 60, 100, 180, 250 };
 static Uint32 warn_colors[V_MAX_WARN];
@@ -139,14 +143,13 @@ vpt_draw(SDL_Surface *bg, int px, int py, int ps)
 {
     int tile = (map_data && isok(u.ux, u.uy))
                    ? map_data->get_glyph(MAP_MON, u.ux, u.uy) : V_TILE_NONE;
-    int inset = V_UI(4), inner = ps - 2 * inset, barh = V_UI(4);
-    SDL_Rect s, d;
-    int hp = Upolyd ? u.mh : u.uhp, hpmax = Upolyd ? u.mhmax : u.uhpmax;
+    int inset = V_UI(4), inner = ps - 2 * inset;
+    SDL_Rect d;
 
-    /* frame: the status panel's stone, then a dark inner well */
-    s.x = 0, s.y = 0, s.w = ps < bg->w ? ps : bg->w, s.h = ps < bg->h ? ps : bg->h;
-    d.x = px, d.y = py, d.w = s.w, d.h = s.h;
-    SDL_BlitSurface(bg, &s, vulture_screen, &d);
+    /* frame: the HUD's dark box (s199: was the stone art), a dark inner well;
+       s199: no bars any more - the status panel has proper ones */
+    nhUse(bg);
+    vulture_hud_frame(px, py, ps, ps);
     d.x = px + inset, d.y = py + inset, d.w = inner, d.h = inner;
     SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 18, 16, 20));
 
@@ -161,26 +164,6 @@ vpt_draw(SDL_Surface *bg, int px, int py, int ps)
         SDL_BlitSurface(vpt_cache, NULL, vulture_screen, &d);
     }
 
-    /* HP (green -> red) and power (blue) bars along the bottom of the well */
-    if (hpmax > 0) {
-        int fill = inner * (hp < 0 ? 0 : hp > hpmax ? hpmax : hp) / hpmax;
-        double f = (double) hp / hpmax;
-        Uint8 r = (Uint8) (f > 0.5 ? (1 - f) * 2 * 230 : 230);
-        Uint8 g = (Uint8) (f > 0.5 ? 200 : f * 2 * 200);
-
-        d.x = px + inset, d.y = py + ps - inset - 2 * barh - 1, d.w = inner, d.h = barh;
-        SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 40, 10, 10));
-        d.w = fill;
-        SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, r, g, 40));
-    }
-    if (u.uenmax > 0) {
-        int fill = inner * (u.uen < 0 ? 0 : u.uen > u.uenmax ? u.uenmax : u.uen) / u.uenmax;
-
-        d.x = px + inset, d.y = py + ps - inset - barh, d.w = inner, d.h = barh;
-        SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 10, 14, 40));
-        d.w = fill;
-        SDL_FillRect(vulture_screen, &d, SDL_MapRGB(vulture_screen->format, 70, 130, 255));
-    }
 }
 
 statuswin::statuswin(window *p) : window(p)
@@ -191,17 +174,17 @@ statuswin::statuswin(window *p) : window(p)
      * downscale at its native apparent size (see vulture_types.h) */
     statusbg = vulture_load_graphic_ui(V_FILENAME_STATUS_BAR);
     bg_scale = vulture_ui_scale;
-    this->w = statusbg->w;
-    this->h = statusbg->h;
+    vulture_status_panel_size(&this->w, &this->h); /* s199 */
     this->x = V_UI(6) + this->h + V_UI(4); /* s110: room for the portrait */
     this->y = vulture_screen->h - (this->h + V_UI(6));
     this->menu_id = V_WIN_STATUSBAR;
 
     /* The enhance symbol: usually invisible, it is shown only when skill
-     * enhancement is possible */
+     * enhancement is possible.  s199: right of the panel, clear of the
+     * hotbar above it */
     subwin = new enhancebutton(this->parent);
-    subwin->x = this->x + this->w;
-    subwin->y = this->y - subwin->h;
+    subwin->x = this->x + this->w + V_UI(4);
+    subwin->y = this->y + (this->h - subwin->h) / 2;
     subwin->menu_id = V_WIN_ENHANCE;
 
     /* The column offsets and the text box sizes are in the same space as the
@@ -219,6 +202,9 @@ statuswin::statuswin(window *p) : window(p)
 
     /* the player is longer than everything else */
     tokenarray[0][0]->w = V_UI(250);
+    for (int i = 0; i < 5; i++) /* s199: the panel draws everything itself */
+        for (int j = 0; j < 5; j++)
+            tokenarray[i][j]->visible = 0;
 
     stwin = this;
 
@@ -238,10 +224,7 @@ statuswin::~statuswin()
 bool
 statuswin::draw()
 {
-    vulture_set_draw_region(abs_x, abs_y, abs_x + w - 1, abs_y + h - 1);
-    vulture_put_img(abs_x, abs_y, statusbg);
-    vulture_set_draw_region(0, 0, vulture_screen->w - 1,
-                            vulture_screen->h - 1);
+    vulture_status_panel_draw(abs_x, abs_y, w, h); /* s199 */
 
     vulture_invalidate_region(abs_x, abs_y, w, h);
     /* s110: the hero portrait, square, just left of the panel */
@@ -287,8 +270,7 @@ statuswin::handle_resize_event(window *target, void *result, int res_w,
             SDL_FreeSurface(statusbg);
             statusbg = newbg;
             bg_scale = vulture_ui_scale;
-            w = statusbg->w;
-            h = statusbg->h;
+            vulture_status_panel_size(&w, &h); /* s199 */
             x = V_UI(6) + h + V_UI(4); /* s110 */
 
             for (int i = 0; i < 5; i++)
@@ -305,6 +287,10 @@ statuswin::handle_resize_event(window *target, void *result, int res_w,
 
     /* x coordinate does not change */
     y = parent->h - (h + V_UI(6));
+    if (enhancebtn) { /* s199: it follows the panel */
+        enhancebtn->x = x + w + V_UI(4);
+        enhancebtn->y = y + (h - enhancebtn->h) / 2;
+    }
     return V_EVENT_HANDLED_NOREDRAW;
 }
 
@@ -505,6 +491,10 @@ statuswin::parse_statusline(std::string str)
         tokenarray[0][4]->caption = "Qv:-";
         tokenarray[0][4]->textcolor = warn_colors[V_WARN_NONE];
     }
+
+    for (int i = 0; i < 5; i++) /* s199: the panel draws everything itself */
+        for (int j = 0; j < 5; j++)
+            tokenarray[i][j]->visible = 0;
 
 #ifdef SHOW_WEIGHT
     if (flags.showweight && !tokenarray[0][4]->caption[0]) {

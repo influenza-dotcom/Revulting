@@ -4161,6 +4161,45 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Cost: a map frame during a ray or explosion took 3 ms median, 6 ms p90
   (otherwise 4 / 6), the effects about 1 ms of it.
 
+### 199. A status panel anyone can read
+
+- Step 2 of the user's 4-2-1-3.  The bottom-left panel was NetHack's status
+  line cut into a 5 x 5 grid of words on stone art: "St:18/16 In:14
+  HP:11(11) Pw:6(6) AC:9 Dlvl:1 $:0 T:3", conditions clipped to "Hallu",
+  "FoodPois", "Pray?".
+- Now drawn by levelwin.cpp (vulture_status_panel_draw, the newer HUD's
+  style: vbox, a gold hairline) - statuswin.cpp takes its size
+  (vulture_status_panel_size, 564 x 104 at UI scale 1) and hides its old
+  text cells:
+  - your name and rank (or what you've turned into), your level;
+  - HP, power and experience as bars with their numbers on them; HP turns
+    amber at 60%, red at 30% and throbs under 25%, and the part a blow just
+    took stays pale for 0.45 s, then drains away;
+  - alignment and the six attributes (STR 18/16 kept as NetHack writes it);
+  - Depth, Armor, Gold, Turn spelled out;
+  - conditions as coloured pills, in full words - Turning to stone, Food
+    poisoning, Fainting / Weak / Hungry / Satiated, Burdened .. Overloaded,
+    Blind, Deaf, Confused, Stunned, Hallucinating, Levitating / Flying,
+    Riding, and s63's prayer hunch as Can pray / Pray? / God angry - the
+    deadly ones pulsing; the quiver on the right.
+  - Every piece has a tooltip in plain words: what it is, and for a
+    condition what to do about it (vulture_status_tip, in levelwin's hover
+    chain).  Only what the status line already showed; no hidden values.
+- The portrait's frame is the same dark box (it was cut from the stone art)
+  and its thin bars are gone - the panel has proper ones.  The skill
+  "enhance" button sits right of the panel, clear of the hotbar above it,
+  and follows it on a UI-scale change.  The hotbar, the badges and "Things
+  that are here" were already anchored to the panel and moved up with it.
+- Fix on the way: levelwin's hover handler treated ANY child window with a
+  menu_id as a scroll hotspot, so moving the mouse over the status panel
+  ran the edge-scroll code - which scrolled nothing but switched
+  camera-follow off.  Only the eight scroll hotspots go there now.
+- Probe VULTURE_SELFTEST_STATUSTIP: all 17 hot spots answer with their own
+  tip, a point outside the panel with none, and a real hover over Armor
+  (handle_timer_event) shows its tooltip and leaves camera-follow on.
+  VULTURE_SELFTEST_COND shows the pills (food poisoning, confused,
+  levitating, hallucinating).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
