@@ -1362,6 +1362,7 @@ static d_level vfx_lev = { -1, -1 };
 static int vhitstop_ms = 0;
 static bool vfx_shadows = true;   /* s158: contact shadows (Effects menu) */
 static bool vfx_ambient = true;   /* s160: area atmosphere particles */
+static bool vfx_mist = true;      /* s192: drifting fog over remembered ground */
 static bool vfx_jolts = true;     /* s161: camera jolts from heavy impacts */
 static bool vfx_puffs = true;     /* s161: dust puffs from steps */
 static bool vfx_words = true;     /* s161: rising words (SNEAK ATTACK, LEVEL UP...) */
@@ -3635,7 +3636,8 @@ vulture_idle_bob(bool at_map)
     }
 
     if (vfog_probe_t && now - vfog_probe_t > 900 && getenv("VULTURE_SELFTEST")) { /* probe: s187 */
-        static const char *const nm[3] = { "room", "corridor", "dark" };
+        /* s192: "room_later" is the same view a little later (the mist drifts) */
+        static const char *const nm[4] = { "room", "room_later", "corridor", "dark" };
         char pp[700];
 
         levwin->force_redraw();
@@ -3643,7 +3645,7 @@ vulture_idle_bob(bool at_map)
         snprintf(pp, sizeof pp, "%s\\fog_%s.bmp", getenv("VULTURE_SELFTEST"), nm[vfog_probe_n]);
         vulture_save_frame_bmp(pp);
         vfog_probe_t = 0;
-        if (++vfog_probe_n < 3 && vfog_probe_move(vfog_probe_n))
+        if (++vfog_probe_n < 4 && (vfog_probe_n == 1 || vfog_probe_move(vfog_probe_n - 1)))
             vfog_probe_t = SDL_GetTicks();
     }
     if (vpause_probe_t && now - vpause_probe_t > 700 && getenv("VULTURE_SELFTEST")) {
@@ -9220,6 +9222,7 @@ vfxm_save(void)
             (int) vfx_jolts, (int) vfx_words);
     fprintf(f, "lighting=%d\n", (int) vl_on); /* s182 */
     fprintf(f, "gpumap=%d\n", (int) vulture_gpumap_wanted); /* s183 */
+    fprintf(f, "mist=%d\n", (int) vfx_mist);                /* s192 */
     fclose(f);
 }
 
@@ -9259,6 +9262,8 @@ vfxm_load(void)
             vl_on = v != 0;
         else if (!strcmp(ln, "gpumap")) /* s183 */
             vulture_gpumap_wanted = v != 0;
+        else if (!strcmp(ln, "mist")) /* s192 */
+            vfx_mist = v != 0;
     }
     fclose(f);
 }
@@ -9298,6 +9303,16 @@ vfx_menu(void)
             vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'l', 0,
                              vl_on ? ATR_BOLD : ATR_NONE, NO_COLOR, ll, MENU_ITEMFLAGS_NONE);
         }
+        { /* s192: the living fog */
+            static char fl[96];
+
+            snprintf(fl, sizeof fl, "Drifting fog over remembered ground  -  %s  (with lighting)",
+                     vfx_mist ? "ON" : "off");
+            any = cg.zeroany;
+            any.a_int = 10;
+            vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 'o', 0,
+                             vfx_mist ? ATR_BOLD : ATR_NONE, NO_COLOR, fl, MENU_ITEMFLAGS_NONE);
+        }
         { /* s183: the map drawn on the GPU (needs GPU presentation; lit too since s185) */
             extern SDL_Renderer *vulture_gpu;
             static char ml[120];
@@ -9335,6 +9350,14 @@ vfx_menu(void)
             vulture_sfx("ui_click");
             pline("GPU presentation %s - restart the game for it to take effect.",
                   vulture_opts.gpu ? "on" : "off");
+            continue;
+        }
+        if (pick == 10) { /* s192 */
+            vfx_mist = !vfx_mist;
+            vfxm_save();
+            vulture_sfx("ui_click");
+            if (levwin)
+                levwin->force_redraw();
             continue;
         }
         if (pick == 9) { /* s183 */
@@ -9837,6 +9860,7 @@ vl_rockish(mapdata *md, int x, int y) /* wall or rock, as known */
 #define VL_FOG_G 0.040f  /* 0.050 0.100 - the user: a bit darker) */
 #define VL_FOG_B 0.080f
 static SDL_Surface *vl_low = NULL, *vl_full = NULL;
+static SDL_Surface *vl_fogm = NULL; /* s192: the fog of war per light-grid sample (R = G = B = F) */
 struct vl_flash_t {
     int x, y;
     Uint32 t0, dur;
@@ -10735,6 +10759,204 @@ vl_apply(SDL_Surface *low, int mx, int my, int mw, int mh, int ox, int oy, int F
         SDL_UnlockSurface(s);
 }
 
+/*
+ * IMPLEMENTATION_LOG s192: living fog.  Over remembered ground (the fog of
+ * war - vl_F, on its own grid vl_fogm beside the light grid) a slow mist
+ * drifts: two layers of tiling noise, anchored to the map so it pans with
+ * it and crawling at their own speeds, thicken into wisps of cold grey; it
+ * thins out with the fog at the edge of your light and spills a little into
+ * the dark beyond the edge of what you know.  Per pixel, after the light
+ * layer (vl_mist here, vgl_fs on the GPU - the same arithmetic).  Visual
+ * effects: "Drifting fog over remembered ground".
+ */
+#define VL_MIST_K 0.32f /* the thickest it gets */
+static const float vl_mist_rgb[3] = { 62.0f, 72.0f, 92.0f };
+
+/* 256 x 256 tiling value noise, 0..255 (made once, the same for the GPU) */
+static const Uint8 *
+vl_noise(void)
+{
+    static std::vector<Uint8> n;
+
+    if (n.empty()) {
+        static const int cell[4] = { 64, 32, 16, 8 };
+        static const float wt[4] = { 0.45f, 0.28f, 0.17f, 0.10f };
+        std::vector<float> acc(65536, 0.0f);
+        Uint32 seed = 0x2545F491u;
+        float lo = 1e9f, hi = -1e9f;
+        size_t q;
+        int o, x, y;
+
+        for (o = 0; o < 4; o++) {
+            int c = cell[o], g = 256 / c;
+            std::vector<float> lat((size_t) g * g);
+
+            for (q = 0; q < lat.size(); q++) {
+                seed = seed * 1664525u + 1013904223u; /* its own generator: no game rolls */
+                lat[q] = (float) (seed >> 8) / 16777216.0f;
+            }
+            for (y = 0; y < 256; y++)
+                for (x = 0; x < 256; x++) {
+                    int x0 = x / c, y0 = y / c, x1 = (x0 + 1) % g, y1 = (y0 + 1) % g;
+                    float fx = (float) (x % c) / c, fy = (float) (y % c) / c, a, b;
+
+                    fx = fx * fx * (3.0f - 2.0f * fx), fy = fy * fy * (3.0f - 2.0f * fy);
+                    a = lat[y0 * g + x0] + (lat[y0 * g + x1] - lat[y0 * g + x0]) * fx;
+                    b = lat[y1 * g + x0] + (lat[y1 * g + x1] - lat[y1 * g + x0]) * fx;
+                    acc[(size_t) y * 256 + x] += wt[o] * (a + (b - a) * fy);
+                }
+        }
+        for (q = 0; q < acc.size(); q++)
+            lo = acc[q] < lo ? acc[q] : lo, hi = acc[q] > hi ? acc[q] : hi;
+        n.resize(65536);
+        for (q = 0; q < acc.size(); q++)
+            n[q] = (Uint8) (255.0f * (acc[q] - lo) / (hi - lo > 1e-6f ? hi - lo : 1.0f));
+    }
+    return &n[0];
+}
+
+/* the noise at (s, t) noise tiles - as GL_LINEAR with GL_REPEAT samples it */
+static inline float
+vl_noise_at(const Uint8 *n, float s, float t)
+{
+    float x = s * 256.0f - 0.5f, y = t * 256.0f - 0.5f, fx, fy, a, b;
+    int x0 = (int) floorf(x), y0 = (int) floorf(y), x1, y1;
+
+    fx = x - (float) x0, fy = y - (float) y0;
+    x0 &= 255, y0 &= 255, x1 = (x0 + 1) & 255, y1 = (y0 + 1) & 255;
+    a = n[y0 * 256 + x0] + (n[y0 * 256 + x1] - n[y0 * 256 + x0]) * fx;
+    b = n[y1 * 256 + x0] + (n[y1 * 256 + x1] - n[y1 * 256 + x0]) * fx;
+    return (a + (b - a) * fy) / 255.0f;
+}
+
+/* how thick the mist is at map-anchored pixel (qx, qy), time t s */
+static inline float
+vl_mist_d(const Uint8 *n, float qx, float qy, float t)
+{
+    /* ~10 and ~7 px a second, different ways (vgl_fs: the same) */
+    float n1 = vl_noise_at(n, qx / 230.0f + t * 0.045f, qy / 230.0f + t * 0.016f);
+    float n2 = vl_noise_at(n, qx / 97.0f - t * 0.07f, qy / 97.0f + t * 0.035f);
+    float d = (0.62f * n1 + 0.38f * n2 - 0.38f) / 0.42f;
+
+    d = d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d;
+    return d * d * (3.0f - 2.0f * d);
+}
+
+/* this frame's mist: the map's anchor on the screen, the time, how thick,
+   its colour */
+static void
+vl_mist_params(int cx, int cy, int vx, int vy, float *mp)
+{
+    int ox, oy;
+
+    vfx_square_screen(0, 0, cx, cy, vx, vy, &ox, &oy);
+    mp[0] = (float) ox, mp[1] = (float) oy;
+    mp[2] = (float) (SDL_GetTicks() % 3600000u) / 1000.0f;
+    mp[3] = vfx_mist ? VL_MIST_K : 0.0f;
+    mp[4] = vl_mist_rgb[0], mp[5] = vl_mist_rgb[1], mp[6] = vl_mist_rgb[2], mp[7] = 0.0f;
+}
+
+/* the software pass: the mist is smooth at the light grid's scale, so it is
+   worked out once per grid sample (vl_mist) and blended between samples
+   like the light - per pixel it cost ~18 ms a frame over a mapped level */
+static void
+vl_mist_band(const std::vector<float> &Mg, int lw, int lh, int mx, int my, int mw, int mh, int ox,
+             int oy, int FS, int by0, int by1, const float *mp)
+{
+    SDL_Surface *s = vulture_screen;
+    std::vector<float> rM;
+    int x, y, x0, y0, x1, y1, rs, gs, bs;
+    Uint32 mask;
+
+    x0 = mx < 0 ? 0 : mx, y0 = my < 0 ? 0 : my;
+    x1 = mx + mw > s->w ? s->w : mx + mw;
+    y1 = my + mh > s->h ? s->h : my + mh;
+    if (y0 < by0)
+        y0 = by0;
+    if (y1 > by1)
+        y1 = by1;
+    if (x1 <= x0 || y1 <= y0)
+        return;
+    rs = s->format->Rshift, gs = s->format->Gshift, bs = s->format->Bshift;
+    mask = ~(((Uint32) 255 << rs) | ((Uint32) 255 << gs) | ((Uint32) 255 << bs));
+    rM.resize(lw);
+    for (y = y0; y < y1; y++) {
+        int fy = y - oy, j = fy >= 0 ? fy / FS : -1, i;
+        float t = fy >= 0 ? (float) (fy % FS) / FS : 0.0f, any = 0.0f;
+        Uint32 *row = (Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch);
+        const float *m0, *m1;
+
+        if (j < 0)
+            j = 0, t = 0.0f;
+        if (j >= lh - 1)
+            j = lh - 2, t = 1.0f;
+        m0 = &Mg[(size_t) j * lw], m1 = &Mg[(size_t) (j + 1) * lw];
+        for (i = 0; i < lw; i++) {
+            rM[i] = m0[i] + (m1[i] - m0[i]) * t;
+            any = rM[i] > any ? rM[i] : any;
+        }
+        if (any < 0.002f)
+            continue;
+        for (x = x0; x < x1; x++) {
+            int fx = x - ox, ci = fx >= 0 ? fx / FS : 0, r, g, b2;
+            float off = fx >= 0 ? (float) (fx % FS) / FS : 0.0f, m;
+            Uint32 p;
+
+            if (ci >= lw - 1)
+                ci = lw - 2, off = 1.0f;
+            m = rM[ci] + (rM[ci + 1] - rM[ci]) * off;
+            if (m < 0.002f)
+                continue;
+            p = row[x];
+            r = (int) ((p >> rs) & 255), g = (int) ((p >> gs) & 255), b2 = (int) ((p >> bs) & 255);
+            r = (int) ((float) r + (mp[4] - (float) r) * m + 0.5f);
+            g = (int) ((float) g + (mp[5] - (float) g) * m + 0.5f);
+            b2 = (int) ((float) b2 + (mp[6] - (float) b2) * m + 0.5f);
+            row[x] = (p & mask) | ((Uint32) r << rs) | ((Uint32) g << gs) | ((Uint32) b2 << bs);
+        }
+    }
+}
+
+static void
+vl_mist(SDL_Surface *fog, int mx, int my, int mw, int mh, int ox, int oy, int FS, const float *mp)
+{
+    static std::vector<float> Mg;
+    SDL_Surface *s = vulture_screen;
+    const Uint8 *nz = vl_noise();
+    int lw, lh, i, j;
+
+    if (!s || !fog || mp[3] <= 0.0f || s->format->BytesPerPixel != 4 || fog->w < 2 || fog->h < 2)
+        return;
+    lw = fog->w, lh = fog->h;
+    Mg.assign((size_t) lw * lh, 0.0f);
+    SDL_LockSurface(fog);
+    vpar_rows(0, lh, [&](int ja, int jz) { /* the grid's rows on every core too */
+        int jj, ii;
+
+        for (jj = ja; jj < jz; jj++) {
+            const Uint32 *g = (const Uint32 *) ((Uint8 *) fog->pixels + (size_t) jj * fog->pitch);
+
+            for (ii = 0; ii < lw; ii++) {
+                float f = (float) ((g[ii] >> 16) & 255) / 255.0f;
+
+                if (f >= 0.004f)
+                    Mg[(size_t) jj * lw + ii] = f * mp[3]
+                                                * vl_mist_d(nz, (float) (ox + ii * FS) - mp[0],
+                                                            (float) (oy + jj * FS) - mp[1], mp[2]);
+            }
+        }
+    });
+    SDL_UnlockSurface(fog);
+    nhUse(i), nhUse(j);
+    if (SDL_MUSTLOCK(s))
+        SDL_LockSurface(s);
+    vpar_rows(my < 0 ? 0 : my, my + mh > s->h ? s->h : my + mh, [&](int a, int z) {
+        vl_mist_band(Mg, lw, lh, mx, my, mw, mh, ox, oy, FS, a, z, mp);
+    });
+    if (SDL_MUSTLOCK(s))
+        SDL_UnlockSurface(s);
+}
+
 static void
 vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, int h)
 {
@@ -10754,6 +10976,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     int max0 = ax, may0 = ay, mw0 = w, mh0 = h; /* s145: the map's own rect */
     static int c_gx0 = 0, c_gy0 = 0;              /* s145: where grid cell 0,0 was */
     static std::vector<float> Lg, Sg; /* s187: Sg - the sources' light alone */
+    float mistp[8]; /* s192 */
 
     if (!vl_on || !u.ux || w < 32 || h < 32 || u.uswallow)
         return;
@@ -10770,8 +10993,11 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         && (vtw_animating || now - c_when < (vl_magic ? 50u : 120u)) && vl_flashes.empty()) {
         dst.x = ax - M + sox, dst.y = ay - M + soy;
         vl_pl_project(cx, cy, vx, vy, max0, may0, mw0, mh0, c_gx0 + sox, c_gy0 + soy, FS); /* s190 */
+        vl_mist_params(cx, cy, vx, vy, mistp); /* s192 */
         if (vl_gpu_frame) { /* s185: the same grids and origins, lit by the GPU */
             SDL_Rect ar = { max0, may0, mw0, mh0 };
+
+            vulture_gpulit_mist(vl_fogm, false, vl_noise(), mistp); /* s192 */
 
             vulture_gpulit_frame(vl_low, dst.x, dst.y, FS, vr_kw.empty() ? NULL : &vr_kw[0],
                                  vr_sw.empty() ? NULL : &vr_sw[0], vr_lw, vr_lh, c_gx0 + sox,
@@ -10782,6 +11008,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
         }
         vl_relief(max0, may0, mw0, mh0, c_gx0 + sox, c_gy0 + soy, FS); /* s186 */
         vl_apply(vl_low, max0, may0, mw0, mh0, dst.x, dst.y, FS); /* s153 */
+        vl_mist(vl_fogm, max0, may0, mw0, mh0, dst.x, dst.y, FS, mistp); /* s192 */
         return;
     }
     c_cx = cx, c_cy = cy, c_vx = vx, c_vy = vy, c_ux = u.ux, c_uy = u.uy;
@@ -10795,17 +11022,24 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
             SDL_FreeSurface(vl_low);
         vl_low = SDL_CreateRGBSurfaceWithFormat(0, lw, lh, 32, SDL_PIXELFORMAT_ARGB8888);
     }
+    if (!vl_fogm || vl_fogm->w != lw || vl_fogm->h != lh) { /* s192 */
+        if (vl_fogm)
+            SDL_FreeSurface(vl_fogm);
+        vl_fogm = SDL_CreateRGBSurfaceWithFormat(0, lw, lh, 32, SDL_PIXELFORMAT_ARGB8888);
+    }
     if (vl_full) { /* s153: no full-size layer any more */
         SDL_FreeSurface(vl_full);
         vl_full = NULL;
     }
-    if (!vl_low)
+    if (!vl_low || !vl_fogm)
         return;
     Lg.assign((size_t) lw * lh, 0.0f);
     Sg.assign((size_t) lw * lh, 0.0f); /* s187 */
     SDL_LockSurface(vl_low);
+    SDL_LockSurface(vl_fogm); /* s192 */
     for (j = 0; j < lh; j++) {
         Uint32 *row = (Uint32 *) ((Uint8 *) vl_low->pixels + j * vl_low->pitch);
+        Uint32 *frow = (Uint32 *) ((Uint8 *) vl_fogm->pixels + j * vl_fogm->pitch); /* s192 */
 
         for (i = 0; i < lw; i++) {
             /* screen -> view -> map (inverse of vfx_square_screen) */
@@ -10825,6 +11059,11 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
                 L = 0;
             Lg[(size_t) j * lw + i] = L; /* s145 */
             Sg[(size_t) j * lw + i] = S; /* s187 */
+            {
+                Uint32 f8 = (Uint32) (255.0f * (F < 0.0f ? 0.0f : F > 1.0f ? 1.0f : F));
+
+                frow[i] = 0xFF000000u | (f8 << 16) | (f8 << 8) | f8; /* s192 */
+            }
             dark = (1.0f - (L > 1.0f ? 1.0f : L)) * VL_DMAX; /* s187: was 0.80 */
             cr = cg = cb = 1.0f;
             if (L > 0.01f)
@@ -10857,6 +11096,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
             }
         }
     }
+    SDL_UnlockSurface(vl_fogm);
     SDL_UnlockSurface(vl_low);
     Uint32 vt_g = SDL_GetTicks(); /* probe: s147 */
     nhUse(src);
@@ -10864,8 +11104,11 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     vl_relief_dirs(Lg, Sg, lw, lh); /* s145, s187 */
     c_gx0 = ax - FS / 2, c_gy0 = ay - FS / 2; /* cell i covers ax+i*FS +- FS/2 */
     vl_pl_project(cx, cy, vx, vy, max0, may0, mw0, mh0, c_gx0, c_gy0, FS); /* s190 */
+    vl_mist_params(cx, cy, vx, vy, mistp); /* s192 */
     if (vl_gpu_frame) { /* s185: rebuilt grids - the GPU uploads and lights */
         SDL_Rect ar = { max0, may0, mw0, mh0 };
+
+        vulture_gpulit_mist(vl_fogm, true, vl_noise(), mistp); /* s192 */
 
         vulture_gpulit_frame(vl_low, ax, ay, FS, vr_kw.empty() ? NULL : &vr_kw[0],
                              vr_sw.empty() ? NULL : &vr_sw[0], vr_lw, vr_lh, c_gx0, c_gy0,
@@ -10877,6 +11120,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     vl_relief(max0, may0, mw0, mh0, c_gx0, c_gy0, FS);
     Uint32 vt_r = SDL_GetTicks(); /* probe: s147 */
     vl_apply(vl_low, max0, may0, mw0, mh0, ax, ay, FS); /* s153 */
+    vl_mist(vl_fogm, max0, may0, mw0, mh0, ax, ay, FS, mistp); /* s192 */
     if (getenv("VULTURE_SELFTEST")) /* probe: s147 cost of a fresh lighting layer */
         vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
                           "light: fresh %u ms = compute %u grid %u stretch %u relief %u blit %u\n",

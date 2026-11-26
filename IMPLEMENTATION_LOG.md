@@ -3952,6 +3952,27 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   give each shadow's light, weight and darkness once a second.  Both paths
   darken the expected silhouettes (software: 3483 px by more than 20).
 
+### 192. Living fog
+
+- The user: living fog of war.  Over remembered ground a slow mist drifts:
+  two layers of a 256x256 tiling value noise (vl_noise, its own generator -
+  no game rolls), anchored to the map (the screen position of square 0,0)
+  so it pans with it, crawling ~10 and ~7 px a second in different
+  directions; smoothstepped into wisps and blended up to 0.32 towards a cold
+  grey (62, 72, 92).  Its weight is the fog of war itself (vl_F), now kept
+  on its own grid beside the light grid (vl_fogm, R = G = B = F, sliding
+  with it), so it thins out at the edge of your light and spills a little
+  into the dark beyond the edge of what you know (the void's borrowed fog).
+- GPU: vgl_fs mixes it in after the light layer, per pixel - the noise as a
+  repeating texture (unit 4), the fog grid bilinear (unit 5), inputs set by
+  `vulture_gpulit_mist`.  Software (vl_mist): the mist worked out once per
+  grid sample on every core, then blended between samples like the light -
+  per pixel it cost ~18 ms a frame over a magic-mapped level, now the light
+  layer's apply + mist is 5-8 ms there.
+- Visual effects: "Drifting fog over remembered ground" (effects.txt
+  "mist=", on by default; with lighting).  Probe: VULTURE_SELFTEST_FOG now
+  also shoots fog_room_later (the same view 0.9 s on - the mist has moved).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

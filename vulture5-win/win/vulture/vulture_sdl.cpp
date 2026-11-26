@@ -490,12 +490,19 @@ static struct {
 static int vgl_state = -1; /* -1 untried, 0 can't, 1 ready */
 static vgl_uint vgl_prog = 0;
 enum { VGL_U_MAP, VGL_U_NRM, VGL_U_LIGHT, VGL_U_DIRS, VGL_U_SIZE, VGL_U_LG, VGL_U_LGS, VGL_U_DG,
-       VGL_U_DGS, VGL_U_AREA, VGL_U_PL, VGL_U_PLI, VGL_U_RKA, VGL_U_RKB, VGL_U_N };
+       VGL_U_DGS, VGL_U_AREA, VGL_U_PL, VGL_U_PLI, VGL_U_RKA, VGL_U_RKB, VGL_U_NOISE, VGL_U_FOG,
+       VGL_U_MIST, VGL_U_MCOL, VGL_U_N };
 static vgl_int vgl_loc[VGL_U_N];
 static SDL_Texture *vgm_nrm = NULL;   /* the normal layer */
 static SDL_Texture *vgm_lit = NULL;   /* the lit map */
 static SDL_Texture *vgl_light = NULL; /* the light grid: A darkness, RGB tint */
 static SDL_Texture *vgl_dirs = NULL;  /* per cell: light direction and strength */
+static SDL_Texture *vgl_fogt = NULL;  /* s192: the fog of war per light-grid sample */
+static SDL_Texture *vgl_noiset = NULL; /* s192: the mist's noise */
+static SDL_Surface *vgl_fogsrc = NULL;
+static bool vgl_fogfresh = false;
+static const Uint8 *vgl_noisesrc = NULL;
+static float vgl_mistp[8];
 static bool vgm_lit_valid = false;    /* vgm_lit is this frame's map */
 struct vgm_nrec {
 	SDL_Surface *s;
@@ -532,6 +539,10 @@ uniform vec4 u_pl[72]; /* s190: 24 point lights, 3 each: (x, y, y raised, height
 uniform vec4 u_pli;   /* 1 / V_MAP_XMOD, 1 / V_MAP_YMOD, how many lights, - */
 uniform vec4 u_rka;   /* the key's direction, how much facing away from a height counts */
 uniform vec4 u_rkb;   /* the relief's strength, the glint's */
+uniform sampler2D u_noise; /* s192: the mist's noise (repeating) */
+uniform sampler2D u_fog;   /* s192: the fog of war, beside the light grid */
+uniform vec4 u_mist;  /* the map's anchor x, y, time, thickness */
+uniform vec4 u_mcol;  /* the mist's colour (0..255) */
 void main()
 {
     vec2 tc = gl_TexCoord[0].xy;
@@ -609,6 +620,20 @@ void main()
 
         rgb = mix(rgb, L.rgb * 255.0, L.a);
     }
+    if (u_mist.w > 0.0) { /* s192: vl_mist */
+        vec2 gf = (px - u_lg.xy) / u_lg.z + 0.5;
+        float f = texture2D(u_fog, gf / u_lgs.xy * u_lgs.zw).r;
+
+        if (f > 0.004) {
+            vec2 q = px - u_mist.xy;
+            float n1 = texture2D(u_noise, vec2(q.x / 230.0 + u_mist.z * 0.045, q.y / 230.0 + u_mist.z * 0.016)).r;
+            float n2 = texture2D(u_noise, vec2(q.x / 97.0 - u_mist.z * 0.07, q.y / 97.0 + u_mist.z * 0.035)).r;
+            float d = clamp((0.62 * n1 + 0.38 * n2 - 0.38) / 0.42, 0.0, 1.0);
+
+            d = d * d * (3.0 - 2.0 * d);
+            rgb = mix(rgb, u_mcol.rgb, f * u_mist.w * d);
+        }
+    }
     gl_FragColor = vec4(rgb / 255.0, c.a);
 }
 )VGL";
@@ -644,8 +669,14 @@ static void vgm_drop(bool destroy)
 			SDL_DestroyTexture(vgl_light);
 		if (vgl_dirs)
 			SDL_DestroyTexture(vgl_dirs);
+		if (vgl_fogt) /* s192 */
+			SDL_DestroyTexture(vgl_fogt);
+		if (vgl_noiset)
+			SDL_DestroyTexture(vgl_noiset);
 	}
 	vgm_nrm = vgm_lit = vgl_light = vgl_dirs = NULL;
+	vgl_fogt = vgl_noiset = NULL; /* s192 */
+	vgl_fogfresh = true;
 	vgm_lit_valid = false;
 	vgl_state = -1, vgl_prog = 0; /* a new renderer is a new GL context */
 }
@@ -1267,7 +1298,8 @@ bool vulture_gpulit_ok(void)
 	vgl_uint vs, fsh;
 	vgl_int ok = 0;
 	static const char *const un[VGL_U_N] = { "u_map", "u_nrm", "u_light", "u_dirs", "u_size",
-		"u_lg", "u_lgs", "u_dg", "u_dgs", "u_area", "u_pl[0]", "u_pli", "u_rka", "u_rkb" };
+		"u_lg", "u_lgs", "u_dg", "u_dgs", "u_area", "u_pl[0]", "u_pli", "u_rka", "u_rkb",
+		"u_noise", "u_fog", "u_mist", "u_mcol" };
 	int k;
 
 	if (vgl_state >= 0)
@@ -1394,6 +1426,17 @@ static int vgl_texture(SDL_Texture **t, int w, int h, int access)
  * (dw x dh cells from gx0, gy0), relief on or off, `fresh` when the grids
  * were rebuilt (upload them), `area` the map's rectangle.
  */
+/* s192: the living fog's inputs for the next frame */
+void vulture_gpulit_mist(SDL_Surface *fog, bool fresh, const Uint8 *noise, const float *mist)
+{
+	vgl_fogsrc = fog, vgl_noisesrc = noise;
+	vgl_fogfresh = vgl_fogfresh || fresh;
+	if (mist)
+		memcpy(vgl_mistp, mist, sizeof vgl_mistp);
+	else
+		memset(vgl_mistp, 0, sizeof vgl_mistp);
+}
+
 void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const short *kw,
                           const short *sw, int dw, int dh, int gx0, int gy0, const float *pl,
                           int npl, const float *rk, float ixm, float iym, bool relief, bool fresh,
@@ -1401,6 +1444,8 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 {
 	int W, Hh, mk;
 	float tw = 1.0f, th = 1.0f, ltw = 1.0f, lth = 1.0f, dtw = 1.0f, dth = 1.0f;
+	float ntw = 1.0f, nth = 1.0f, ftw = 1.0f, fth = 1.0f; /* s192 */
+	bool mist; /* s192 */
 	size_t i;
 
 	vgm_lit_valid = false;
@@ -1442,6 +1487,34 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			}
 			SDL_UpdateTexture(vgl_dirs, NULL, &px[0], dw * 4);
 		}
+	}
+	/* s192: the fog grid (when rebuilt) and the noise (once) */
+	mist = vgl_fogsrc && vgl_noisesrc && vgl_mistp[3] > 0.0f;
+	if (mist) {
+		int mk2 = vgl_texture(&vgl_fogt, vgl_fogsrc->w, vgl_fogsrc->h, SDL_TEXTUREACCESS_STREAMING);
+
+		if (!mk2)
+			mist = false;
+		else if (vgl_fogfresh || fresh || mk2 == 2) {
+			if (SDL_MUSTLOCK(vgl_fogsrc))
+				SDL_LockSurface(vgl_fogsrc);
+			SDL_UpdateTexture(vgl_fogt, NULL, vgl_fogsrc->pixels, vgl_fogsrc->pitch);
+			if (SDL_MUSTLOCK(vgl_fogsrc))
+				SDL_UnlockSurface(vgl_fogsrc);
+			vgl_fogfresh = false;
+		}
+		if (mist && !vgl_noiset
+		    && (vgl_noiset = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888,
+		                                       SDL_TEXTUREACCESS_STATIC, 256, 256)) != NULL) {
+			std::vector<Uint32> px(65536);
+
+			for (i = 0; i < px.size(); i++)
+				px[i] = 0xFF000000u | ((Uint32) vgl_noisesrc[i] << 16)
+					| ((Uint32) vgl_noisesrc[i] << 8) | (Uint32) vgl_noisesrc[i];
+			SDL_UpdateTexture(vgl_noiset, NULL, &px[0], 256 * 4);
+		}
+		if (!vgl_noiset)
+			mist = false;
 	}
 	/* the normal layer: this frame's normal-map draws, as the map pass made them */
 	if (relief) {
@@ -1505,6 +1578,22 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MIN_FILTER, VGL_NEAREST);
 			vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MAG_FILTER, VGL_NEAREST);
 		}
+		vgl.ActiveTexture(VGL_TEXTURE0 + 4); /* s192: the mist's noise, repeating */
+		SDL_GL_BindTexture(mist ? vgl_noiset : vgl_light, &ntw, &nth);
+		if (mist) {
+			vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MIN_FILTER, VGL_LINEAR);
+			vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MAG_FILTER, VGL_LINEAR);
+			vgl.TexParameteri(VGL_TEXTURE_2D, 0x2802 /* WRAP_S */, 0x2901 /* REPEAT */);
+			vgl.TexParameteri(VGL_TEXTURE_2D, 0x2803 /* WRAP_T */, 0x2901);
+		}
+		vgl.ActiveTexture(VGL_TEXTURE0 + 5); /* s192: the fog grid */
+		SDL_GL_BindTexture(mist ? vgl_fogt : vgl_light, &ftw, &fth);
+		if (mist) {
+			vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MIN_FILTER, VGL_LINEAR);
+			vgl.TexParameteri(VGL_TEXTURE_2D, VGL_TEXTURE_MAG_FILTER, VGL_LINEAR);
+		}
+		if (mist && (ntw > 1.5f || ftw > 1.5f))
+			mist = false; /* rectangle textures: no mist */
 		if (tw > 1.5f || ltw > 1.5f) { /* rectangle textures: not this shader's kind */
 			vgl.UseProgram((vgl_uint) prev);
 			SDL_GL_UnbindTexture(vgm_tex);
@@ -1536,6 +1625,12 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			vgl.Uniform4f(vgl_loc[VGL_U_RKA], rk[0], rk[1], rk[2], rk[3]);
 			vgl.Uniform4f(vgl_loc[VGL_U_RKB], rk[4], rk[5], rk[6], rk[7]);
 		}
+		/* s192: the living fog */
+		vgl.Uniform1i(vgl_loc[VGL_U_NOISE], 4);
+		vgl.Uniform1i(vgl_loc[VGL_U_FOG], 5);
+		vgl.Uniform4f(vgl_loc[VGL_U_MIST], vgl_mistp[0], vgl_mistp[1], vgl_mistp[2],
+			mist ? vgl_mistp[3] : 0.0f);
+		vgl.Uniform4f(vgl_loc[VGL_U_MCOL], vgl_mistp[4], vgl_mistp[5], vgl_mistp[6], 0.0f);
 		vgl.Disable(VGL_BLEND);
 		vgl.Disable(VGL_SCISSOR_TEST);
 		vgl.Begin(VGL_QUADS);

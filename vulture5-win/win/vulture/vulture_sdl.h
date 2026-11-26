@@ -125,6 +125,10 @@ extern int vulture_save_frame_bmp(const char *path);
  * that does the normal-mapped relief and the light layer (vulture_sdl.cpp) */
 extern bool vulture_gpulit_ok(void);
 extern bool vulture_gpumap_shadow(SDL_Surface *s, const float *quad, const Uint8 *a4); /* s191 */
+/* s192: the living fog for the next vulture_gpulit_frame: the fog grid (beside
+   the light grid; fresh = rebuilt), 256x256 noise, mist[8] = the map's anchor
+   x, y, time s, thickness, colour r, g, b (0..255), - */
+extern void vulture_gpulit_mist(SDL_Surface *fog, bool fresh, const Uint8 *noise, const float *mist);
 extern void vulture_gpu_use_gl(bool on); /* OpenGL while lit, SDL's default otherwise */
 extern void vulture_gpumap_normal(SDL_Surface *s, int x, int y);
 extern void vulture_gpumap_normal_ex(SDL_Surface *s, int dx, int dy, double sx, double sy,
