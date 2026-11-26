@@ -26,79 +26,23 @@ mainwin::draw()
     int y = this->abs_y;
     int pos_x, pos_y;
 
-    /* Draw corners */
-    vulture_put_img(x, y, vulture_winelem.corner_tl);
-    vulture_put_img(x + w - border_right, y, vulture_winelem.corner_tr);
-    vulture_put_img(x, y + h - border_bottom, vulture_winelem.corner_bl);
-    vulture_put_img(x + w - border_right, y + h - border_bottom,
-                    vulture_winelem.corner_br);
+    /* s200: the modern panel (it was tiled stone in carved borders).  The
+     * borders' sizes stay as its padding, so every layout is unchanged. */
+    vulture_ui_panel(x, y, w, h);
 
-    /* Draw top border */
-    vulture_set_draw_region(x + border_left, y, x + w - border_right,
-                            y + border_top);
-    pos_x = x + border_left;
-
-    while (pos_x <= x + w - border_right) {
-        vulture_put_img(pos_x, y, vulture_winelem.border_top);
-        pos_x += vulture_winelem.border_top->w;
-    }
-
-    /* Draw bottom border */
-    vulture_set_draw_region(x + border_left, y + h - border_bottom,
-                            x + w - border_right, y + h);
-    pos_x = x + border_left;
-
-    while (pos_x <= x + this->w - vulture_winelem.border_right->w) {
-        vulture_put_img(pos_x, y + h - border_bottom,
-                        vulture_winelem.border_bottom);
-        pos_x += vulture_winelem.border_bottom->w;
-    }
-
-    /* Draw left border */
-    vulture_set_draw_region(x, y + border_top, x + border_left,
-                            y + h - border_bottom);
-    pos_y = y + border_top;
-
-    while (pos_y <= y + h - border_bottom) {
-        vulture_put_img(x, pos_y, vulture_winelem.border_left);
-        pos_y += vulture_winelem.border_left->h;
-    }
-
-    /* Draw right border */
-    vulture_set_draw_region(x + w - border_right, y + border_top, x + w,
-                            y + h - border_bottom);
-    pos_y = y + border_top;
-
-    while (pos_y <= y + h - border_bottom) {
-        vulture_put_img(x + w - border_right, pos_y,
-                        vulture_winelem.border_right);
-        pos_y += vulture_winelem.border_right->h;
-    }
-
-    /* Draw center area */
-    vulture_set_draw_region(x + border_left, y + border_top,
-                            x + w - border_right, y + h - border_bottom);
-    pos_y = y + border_top;
-    while (pos_y <= y + h - border_bottom) {
-        pos_x = x + border_left;
-
-        while (pos_x <= x + w - border_right) {
-            vulture_put_img(pos_x, pos_y, vulture_winelem.center);
-            pos_x += vulture_winelem.center->w;
-        }
-        pos_y += vulture_winelem.center->h;
-    }
-    vulture_set_draw_region(0, 0, vulture_screen->w - 1,
-                            vulture_screen->h - 1);
-
-    /* draw title */
+    /* draw title: gold, with a thin gold rule under it */
     pos_x = this->abs_x + border_left;
     pos_y = this->abs_y + border_top;
 
-    if (!caption.empty())
+    if (!caption.empty()) {
+        int th = vulture_text_height(V_FONT_HEADLINE, caption);
+
         vulture_put_text_shadow(V_FONT_HEADLINE, caption, vulture_screen,
-                                pos_x, pos_y, V_COLOR_TEXT,
+                                pos_x, pos_y, vulture_ui_rgb(255, 205, 90),
                                 V_COLOR_BACKGROUND);
+        vulture_ui_fill(pos_x, pos_y + th + V_UI(3), w - border_left - border_right,
+                        V_UI(1), 255, 200, 70, 90);
+    }
 
     vulture_invalidate_region(x, y, w, h);
 

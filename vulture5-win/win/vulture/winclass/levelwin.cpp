@@ -7828,6 +7828,7 @@ vselftest(void)
     case 1:
         if (getenv("VULTURE_SELFTEST_MENUKEY")) { /* probe: s197 a menu opened by its key */
             vprobe_push_key(SDLK_i);
+            vpause_probe_t = SDL_GetTicks(); /* s200: and shoot it */
             break;
         }
         if (getenv("VULTURE_SELFTEST_STATUSTIP")) { /* probe: s199 the panel's tooltips */

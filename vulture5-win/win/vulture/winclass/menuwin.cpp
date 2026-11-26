@@ -96,7 +96,17 @@ eventresult
 menuwin::handle_mousemotion_event(window *target, void *result, int xrel,
                                   int yrel, int state)
 {
+    /* s200: the option row under the pointer is lit - redraw when it changes.
+     * Only the address is kept, never followed. */
+    static const window *hov = NULL;
+    const window *now = (target && target->v_type == V_WINTYPE_OPTION) ? target : NULL;
+
     vulture_set_mcursor(V_CURSOR_NORMAL);
+    if (now != hov) {
+        hov = now;
+        need_redraw = 1;
+        return V_EVENT_HANDLED_REDRAW;
+    }
     return V_EVENT_HANDLED_NOREDRAW;
 }
 

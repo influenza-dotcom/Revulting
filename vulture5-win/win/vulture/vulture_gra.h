@@ -22,6 +22,11 @@ extern SDL_Surface *vulture_scale_surface_int(SDL_Surface *src, int factor);
 extern void vulture_scale_ui_surface(SDL_Surface **surf);
 extern void vulture_draw_raised_frame(int x1, int y1, int x2, int y2);
 extern void vulture_draw_lowered_frame(int x1, int y1, int x2, int y2);
+/* s200: the modern UI kit (vulture_gra.cpp) */
+extern Uint32 vulture_ui_rgb(int r, int g, int b);
+extern void vulture_ui_fill(int x, int y, int w, int h, int r, int g, int b, int alpha);
+extern void vulture_ui_border(int x, int y, int w, int h, int r, int g, int b);
+extern void vulture_ui_panel(int x, int y, int w, int h);
 
 extern SDL_PixelFormat * vulture_px_format;
 /* s65: title-screen image levelwin paints while no map exists (main menu) */

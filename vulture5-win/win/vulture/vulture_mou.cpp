@@ -164,7 +164,7 @@ void vulture_mouse_init(void)
 	vulture_mouse.cursor = CURTILEOFFSET;
 
 	/* slightly transparent off-white */
-	tooltipcolor = SDL_MapRGBA(vulture_px_format, 0xff, 0xff, 0xf0, 0xd0);
+	tooltipcolor = SDL_MapRGBA(vulture_px_format, 14, 12, 15, 0xf0); /* s200: dark, as the HUD */
 }
 
 
@@ -366,8 +366,8 @@ void vulture_mouse_set_tooltip(std::string str)
 				nl++;
 				a = b2 + 1;
 			}
-			length = lw + V_UI(6);
-			height = nl * vulture_get_lineheight(V_FONT_TOOLTIP) + V_UI(6);
+			length = lw + V_UI(14); /* s200: room to breathe */
+			height = nl * vulture_get_lineheight(V_FONT_TOOLTIP) + V_UI(10);
 		}
 
 		vulture_tooltip.tip = SDL_CreateRGBSurface(SDL_SWSURFACE | SDL_SRCALPHA,
@@ -378,7 +378,8 @@ void vulture_mouse_set_tooltip(std::string str)
 				vulture_px_format->Amask);
 
 		SDL_FillRect(vulture_tooltip.tip, NULL, tooltipcolor);
-		vulture_rect_surface(vulture_tooltip.tip, 0, 0, length-1, height-1, V_COLOR_BACKGROUND);
+		vulture_rect_surface(vulture_tooltip.tip, 0, 0, length-1, height-1,
+		                     SDL_MapRGBA(vulture_px_format, 150, 122, 64, 0xff)); /* s200: a dim gold edge */
 		{ /* s139: one line at a time */
 			size_t a = 0, b2;
 			int row = 0;
@@ -388,8 +389,8 @@ void vulture_mouse_set_tooltip(std::string str)
 				if (b2 == std::string::npos)
 					b2 = str.size();
 				vulture_put_text(V_FONT_TOOLTIP, str.substr(a, b2 - a), vulture_tooltip.tip,
-								V_UI(3), V_UI(3) + row * vulture_get_lineheight(V_FONT_TOOLTIP),
-								V_COLOR_BACKGROUND);
+								V_UI(7), V_UI(5) + row * vulture_get_lineheight(V_FONT_TOOLTIP),
+								SDL_MapRGBA(vulture_px_format, 240, 235, 225, 0xff)); /* s200 */
 				row++;
 				a = b2 + 1;
 			}

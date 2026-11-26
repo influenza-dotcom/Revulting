@@ -797,8 +797,8 @@ int vulture_init_graphics(void)
 	if (iflags.wc_font_text) {
 		if (access(iflags.wc_font_text, R_OK) == 0) {
 			font_loaded = 1;
-			font_loaded &= vulture_load_font(V_FONT_SMALL, iflags.wc_font_text, 0, 12);
-			font_loaded &= vulture_load_font(V_FONT_LARGE, iflags.wc_font_text, 0, 14);
+			font_loaded &= vulture_load_font(V_FONT_SMALL, iflags.wc_font_text, 0, 13); /* s200: 12 */
+			font_loaded &= vulture_load_font(V_FONT_LARGE, iflags.wc_font_text, 0, 15); /* s200: 14 */
 		}
 		else
 			printf("Could not access %s: %s\n", iflags.wc_font_text, strerror(errno));
@@ -809,8 +809,8 @@ int vulture_init_graphics(void)
 		/* add the path to the filename */
 		fullname = vulture_make_filename(V_FONTS_DIRECTORY, "", V_FILENAME_FONT);
 
-		font_loaded &= vulture_load_font(V_FONT_SMALL, fullname.c_str(), 0, 12);
-		font_loaded &= vulture_load_font(V_FONT_LARGE, fullname.c_str(), 0, 14);
+		font_loaded &= vulture_load_font(V_FONT_SMALL, fullname.c_str(), 0, 13); /* s200: 12 */
+		font_loaded &= vulture_load_font(V_FONT_LARGE, fullname.c_str(), 0, 15); /* s200: 14 */
 	}
 
 	all_ok &= font_loaded;

@@ -4200,6 +4200,44 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   VULTURE_SELFTEST_COND shows the pills (food poisoning, confused,
   levitating, hallucinating).
 
+### 200. Modern menus, inventory and dialogs
+
+- Step 1 of the user's 4-2-1-3.  Every menu, dialog, the inventory and the
+  right-click menu were 2006 Vulture: tiled grey stone in carved borders,
+  grey bevelled buttons that shifted 2 px when pressed, stone radio buttons
+  and checkboxes, item cells with etched frames (blue on hover, orange when
+  chosen), a pale yellow tooltip with black text.
+- A small kit in vulture_gra.cpp draws them now, in the newer HUD's style:
+  vulture_ui_fill (one cached pixel, blended and clipped by the draw
+  region), vulture_ui_border (ui-scale thick), vulture_ui_panel (dark,
+  97% opaque, a dim-gold frame, a gold top edge).
+  - mainwin (every menu / text window / dialog): the panel, the title in
+    gold over a thin gold rule.  The stone borders' sizes stay as padding,
+    so no layout moved.  contextmenu: the panel.
+  - button: flat - dark, a thin border, gold under the pointer (new hover,
+    via handle_mousemotion_event / MOVEOUT), deeper when pressed; sized by
+    the font it is drawn in (it measured V_FONT_MENU and drew V_FONT_BUTTON).
+  - optionwin: a drawn box instead of the stone radio/checkbox, filled gold
+    when chosen (orange with a count); the row under the pointer is lit -
+    menuwin redraws when the hovered row changes (it kept only the address).
+  - objitemwin (inventory and item menus): a flat card - gold edge and left
+    accent under the pointer, gold tint when selected, white edge on the one
+    toggled last; the icon sits in a dark well, blue-tinted and -edged when
+    known blessed, red when known cursed; "weight N" dim, "selected (all)"
+    gold, worn items green as before.  objheaderwin: category headings in
+    gold on darker cards, its item rows as objitemwin.
+  - scrollbar: a dark track, chevron buttons, a gold-edged thumb (the art's
+    sizes kept as the geometry, so clicking and dragging are unchanged).
+  - inventory: its title band dark with a gold title and rule.
+  - tooltip: dark with a dim-gold edge and light text, more padding.
+- Text: the two fonts are a point bigger - 13 / 15 (were 12 / 14).
+- Shots (MENUKEY now shoots the inventory it opens; DISCO; CLICK's pause
+  menu): inventory, discoveries, the pause menu and a tooltip all in the new
+  style.  MENUKEY + DIFFUP still 0 px missing; STATUSTIP all 17 tips right.
+- Probe script trap: menu_probe.ps1 set its VULTURE_SELFTEST_* variable in
+  the calling PowerShell, so a second probe in the same call inherited the
+  first one's (and LIT never cleared) - it clears them all first now.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

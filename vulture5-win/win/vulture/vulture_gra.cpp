@@ -238,6 +238,62 @@ void vulture_draw_lowered_frame(int x1, int y1, int x2, int y2)
 	}
 }
 
+/*
+ * IMPLEMENTATION_LOG s200: the modern UI kit.  Every menu, dialog, item card
+ * and button was carved stone with grey bevels; they are drawn with these
+ * now, in the newer HUD's style - a dark translucent panel, thin dim-gold
+ * borders, gold where the pointer is.  Fills are blits of one cached pixel
+ * (blended, clipped by the draw region), so a panel over the map lets a
+ * little of it through and nothing draws outside its window.
+ */
+Uint32 vulture_ui_rgb(int r, int g, int b)
+{
+	return 0xFF000000u | ((Uint32) (r & 255) << 16) | ((Uint32) (g & 255) << 8) | (Uint32) (b & 255);
+}
+
+void vulture_ui_fill(int x, int y, int w, int h, int r, int g, int b, int alpha)
+{
+	static SDL_Surface *px = NULL;
+	SDL_Rect d;
+
+	if (w <= 0 || h <= 0 || alpha <= 0 || !vulture_screen)
+		return;
+	if (!px) {
+		px = SDL_CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_ARGB8888);
+		if (!px)
+			return;
+		SDL_FillRect(px, NULL, 0xFFFFFFFFu);
+		SDL_SetSurfaceBlendMode(px, SDL_BLENDMODE_BLEND);
+	}
+	SDL_SetSurfaceColorMod(px, (Uint8) r, (Uint8) g, (Uint8) b);
+	SDL_SetSurfaceAlphaMod(px, (Uint8) (alpha > 255 ? 255 : alpha));
+	d.x = x, d.y = y, d.w = w, d.h = h;
+	SDL_BlitScaled(px, NULL, vulture_screen, &d);
+}
+
+/* a rectangle's outline, vulture_ui_scale thick (one render pixel would be a
+   half-intensity line after the present-time downscale) */
+void vulture_ui_border(int x, int y, int w, int h, int r, int g, int b)
+{
+	int t = vulture_ui_scale > 0 ? vulture_ui_scale : 1;
+
+	vulture_ui_fill(x, y, w, t, r, g, b, 255);
+	vulture_ui_fill(x, y + h - t, w, t, r, g, b, 255);
+	vulture_ui_fill(x, y + t, t, h - 2 * t, r, g, b, 255);
+	vulture_ui_fill(x + w - t, y + t, t, h - 2 * t, r, g, b, 255);
+}
+
+/* a window: dark and nearly opaque, a dim-gold frame, a gold top edge */
+void vulture_ui_panel(int x, int y, int w, int h)
+{
+	int t = vulture_ui_scale > 0 ? vulture_ui_scale : 1;
+
+	vulture_ui_fill(x, y, w, h, 12, 10, 13, 248);
+	vulture_ui_border(x, y, w, h, 86, 72, 48);
+	vulture_ui_fill(x + t, y + t, w - 2 * t, 2 * t, 255, 200, 70, 150);
+}
+
+
 /*--------------------------------------------------------------------------
 Bitmap handling
 --------------------------------------------------------------------------*/

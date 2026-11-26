@@ -20,7 +20,6 @@ contextmenu::contextmenu(window *p) : window(p)
 bool
 contextmenu::draw()
 {
-    int pos_x, pos_y;
     int x, y;
 
     if (!layout_done)
@@ -29,29 +28,7 @@ contextmenu::draw()
     x = abs_x;
     y = abs_y;
 
-    /* Draw center area */
-    vulture_set_draw_region(abs_x, abs_y, abs_x + w - 1, abs_y + h - 1);
-    pos_y = y;
-    while (pos_y <= y + h) {
-        pos_x = x;
-        while (pos_x <= x + w) {
-            vulture_put_img(pos_x, pos_y, vulture_winelem.center);
-            pos_x += vulture_winelem.center->w;
-        }
-        pos_y += vulture_winelem.center->h;
-    }
-
-    /* Draw black border */
-    vulture_rect(x, y, x + w - 1, y + h - 1, 0);
-
-    /* Draw edges (raised) */
-    vulture_line(x + 1, y + 1, x + w - 3, y + 1, CLR32_GRAY20);
-    vulture_line(x + 1, y + h - 2, x + w - 2, y + h - 2, CLR32_GRAY70);
-    vulture_line(x + w - 2, y + 1, x + w - 2, y + h - 2, CLR32_GRAY77);
-    vulture_line(x + 1, y + 1, x + 1, y + h - 3, CLR32_GRAY20);
-
-    vulture_set_draw_region(0, 0, vulture_screen->w - 1,
-                            vulture_screen->h - 1);
+    vulture_ui_panel(x, y, w, h); /* s200: was tiled stone, bevelled */
 
     vulture_invalidate_region(x, y, w, h);
 

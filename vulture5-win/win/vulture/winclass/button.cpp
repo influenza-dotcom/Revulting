@@ -19,12 +19,14 @@ button::button(window *p, std::string caption, int menuid, char accel)
 
     image = NULL;
     selected = false;
+    hover = false;
     autobg = true;
 
     /* the text metrics already scale (the font is opened at vulture_ui_scale);
      * the padding around them has to scale with it or buttons get cramped */
-    w = vulture_text_length(V_FONT_MENU, caption) + V_UI(14);
-    h = vulture_text_height(V_FONT_MENU, caption) + V_UI(10);
+    /* s200: sized by the font it is drawn in (V_FONT_BUTTON) */
+    w = vulture_text_length(V_FONT_BUTTON, caption) + V_UI(18);
+    h = vulture_get_lineheight(V_FONT_BUTTON) + V_UI(10);
 }
 
 button::~button()
@@ -39,51 +41,35 @@ button::draw()
 {
     int x = abs_x;
     int y = abs_y;
+    int fr, fg, fb, br, bg, bb;
 
     if (background)
         /* re-draw background: if the button just became un-pressed
          * we get messed up graphics otherwise */
         vulture_put_img(x, y, background);
 
-    int text_start_x, text_start_y;
-
-    /* Black edge (drawn scale-deep: see vulture_draw_raised_frame) */
-    for (int i = 0; i < vulture_ui_scale; i++)
-        vulture_rect(x + 1 + i, y + 1 + i, x + w - 2 - i, y + h - 2 - i,
-                     V_COLOR_BACKGROUND);
-
-    /* Outer edge (lowered) */
-    vulture_draw_lowered_frame(x, y, x + w - 1, y + h - 1);
-    /* Inner edge (raised) - inset past the outer frame AND the black edge,
-     * both of which are now vulture_ui_scale thick */
-    vulture_draw_raised_frame(x + V_UI(2), y + V_UI(2), x + w - V_UI(3),
-                              y + h - V_UI(3));
+    /* s200: a flat button - dark with a thin border, gold under the pointer,
+     * deeper when pressed (it was a grey bevel that shifted 2 px) */
+    if (selected)
+        fr = 82, fg = 62, fb = 24, br = 255, bg = 200, bb = 70;
+    else if (hover)
+        fr = 56, fg = 46, fb = 34, br = 255, bg = 200, bb = 70;
+    else
+        fr = 34, fg = 30, fb = 29, br = 104, bg = 90, bb = 66;
+    vulture_ui_fill(x, y, w, h, fr, fg, fb, 255);
+    vulture_ui_border(x, y, w, h, br, bg, bb);
 
     if (!caption.empty()) {
-        text_start_x =
-            x + (w - vulture_text_length(V_FONT_BUTTON, caption)) / 2;
-        text_start_y = y + V_UI(5);
+        int tx = x + (w - vulture_text_length(V_FONT_BUTTON, caption)) / 2;
+        int ty = y + (h - vulture_get_lineheight(V_FONT_BUTTON)) / 2;
 
-        vulture_put_text_shadow(V_FONT_BUTTON, caption, vulture_screen,
-                                text_start_x, text_start_y, V_COLOR_TEXT,
+        vulture_put_text_shadow(V_FONT_BUTTON, caption, vulture_screen, tx, ty,
+                                hover || selected ? vulture_ui_rgb(255, 232, 170)
+                                                  : vulture_ui_rgb(240, 235, 225),
                                 V_COLOR_BACKGROUND);
     } else if (image) {
         vulture_put_img(x + (w - image->w) / 2, y + (h - image->h) / 2,
                         image);
-    }
-
-    if (selected) {
-        /* shift the *entire* image of the button (including borders)
-         * 2px left and down - scaled, so the pressed-in nudge stays a 2px
-         * APPARENT nudge rather than shrinking to 1px at scale 2 */
-        SDL_Surface *buttonimage =
-            vulture_get_img(x, y, x + w - V_UI(3), y + h - V_UI(3));
-
-        vulture_fill_rect(x, y, x + w - 1, y + V_UI(1), CLR32_BLACK);
-        vulture_fill_rect(x, y, x + V_UI(1), y + h - 1, CLR32_BLACK);
-        vulture_put_img(x + V_UI(2), y + V_UI(2), buttonimage);
-
-        SDL_FreeSurface(buttonimage);
     }
 
     vulture_invalidate_region(x, y, w, h);
@@ -109,13 +95,27 @@ button::handle_other_event(window *target, void *result, SDL_Event *event)
         selected = 1;
         need_redraw = 1;
     } else if (event->type == SDL_MOUSEMOVEOUT) {
-        if (selected)
+        if (selected || hover)
             need_redraw = 1;
         selected = 0;
+        hover = false;
     }
 
     if (need_redraw)
         return V_EVENT_UNHANDLED_REDRAW;
 
+    return V_EVENT_UNHANDLED;
+}
+
+/* s200: light up under the pointer */
+eventresult
+button::handle_mousemotion_event(window *target, void *result, int xrel,
+                                 int yrel, int state)
+{
+    if (target == this && !hover) {
+        hover = true;
+        need_redraw = 1;
+        return V_EVENT_UNHANDLED_REDRAW;
+    }
     return V_EVENT_UNHANDLED;
 }

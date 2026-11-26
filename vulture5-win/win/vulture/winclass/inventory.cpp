@@ -80,23 +80,17 @@ inventory::draw()
     int headline_height = vulture_get_lineheight(V_FONT_HEADLINE);
     int headline_width = vulture_text_length(V_FONT_HEADLINE, caption);
 
-    vulture_fill_rect(inner_x_position, inner_y_position,
-                      inner_x_position + inner_width - 1,
-                      inner_y_position + headline_height * 2,
-                      CLR32_BLACK_A50);
-
-    vulture_line(inner_x_position, inner_y_position,
-                 inner_x_position + inner_width - 1, inner_y_position,
-                 CLR32_GRAY20);
-    vulture_line(inner_x_position, inner_y_position + headline_height * 2,
-                 inner_x_position + inner_width - 1,
-                 inner_y_position + headline_height * 2, CLR32_GRAY20);
+    /* s200: a gold title on a dark band with a gold rule under it */
+    vulture_ui_fill(inner_x_position, inner_y_position, inner_width,
+                    headline_height * 2, 6, 5, 7, 140);
+    vulture_ui_fill(inner_x_position, inner_y_position + headline_height * 2,
+                    inner_width, V_UI(1), 255, 200, 70, 110);
 
     vulture_put_text_shadow(V_FONT_HEADLINE, caption, vulture_screen,
                             inner_x_position
                                 + (inner_width - headline_width) / 2,
                             inner_y_position + headline_height / 2 + V_UI(2),
-                            CLR32_WHITE, CLR32_GRAY20);
+                            vulture_ui_rgb(255, 205, 90), CLR32_BLACK);
 
     if (ow_ncols > ow_vcols) {
         if (ow_firstcol + 1 == ow_firstcol + ow_vcols)
@@ -110,7 +104,7 @@ inventory::draw()
         vulture_put_text_shadow(V_FONT_MENU, label, vulture_screen,
                                 x + (w - labelwidth) / 2,
                                 y + h - V_UI(21),
-                                CLR32_BLACK, CLR32_GRAY20);
+                                vulture_ui_rgb(200, 192, 180), CLR32_BLACK);
     }
 
     return 1;

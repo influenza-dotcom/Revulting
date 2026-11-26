@@ -17,11 +17,14 @@ class button : public window
                                                    int state);
     virtual eventresult handle_other_event(window *target, void *result,
                                            SDL_Event *event);
+    virtual eventresult handle_mousemotion_event(window *target, void *result,
+                                                 int xrel, int yrel, int state);
 
     SDL_Surface *image;
 
   private:
     bool selected;
+    bool hover; /* s200: the pointer is on it */
 };
 
 #endif

@@ -36,18 +36,17 @@ objheaderwin::draw()
         if (background)
             vulture_put_img(x, y, background);
 
-        vulture_draw_lowered_frame(x, y, x + w - 1, y + h - 1);
-        vulture_draw_raised_frame(x + V_UI(1), y + V_UI(1), x + w - V_UI(2),
-                                  y + h - V_UI(2));
+        /* s200: the same flat card as objitemwin */
+        vulture_ui_fill(x, y, w, h, 28, 25, 24, 255);
+        vulture_ui_border(x, y, w, h, 64, 58, 52);
 
-        vulture_put_text_multiline(V_FONT_MENU, caption, vulture_screen, x + h,
-                                   y + V_UI(3), CLR32_WHITE, CLR32_BLACK,
-                                   w - h - V_UI(6));
+        vulture_put_text_multiline(V_FONT_MENU, caption, vulture_screen, x + h + V_UI(2),
+                                   y + V_UI(3), vulture_ui_rgb(240, 235, 225), CLR32_BLACK,
+                                   w - h - V_UI(8));
 
         vulture_set_draw_region(x + V_UI(2), y + V_UI(2), x + h - V_UI(3),
                                 y + h - V_UI(3));
-        vulture_fill_rect(x + V_UI(2), y + V_UI(2), x + h - V_UI(3),
-                          y + h - V_UI(3), CLR32_BLACK_A30);
+        vulture_ui_fill(x + V_UI(2), y + V_UI(2), h - V_UI(4), h - V_UI(4), 12, 11, 12, 255);
 
         /* Blessed/cursed wash, matching objitemwin.  There is no struct obj
          * to read bknown/blessed/cursed from, so take it from the row text
@@ -70,12 +69,13 @@ objheaderwin::draw()
                 pos = end + 1;
             }
 
-            if (blessed)
-                vulture_fill_rect(x + V_UI(2), y + V_UI(2), x + h - V_UI(3),
-                                  y + h - V_UI(3), CLR32_BLESS_BLUE);
-            else if (cursed)
-                vulture_fill_rect(x + V_UI(2), y + V_UI(2), x + h - V_UI(3),
-                                  y + h - V_UI(3), CLR32_CURSE_RED);
+            if (blessed) {
+                vulture_ui_fill(x + V_UI(2), y + V_UI(2), h - V_UI(4), h - V_UI(4), 80, 140, 255, 60);
+                vulture_ui_border(x + V_UI(2), y + V_UI(2), h - V_UI(4), h - V_UI(4), 90, 150, 255);
+            } else if (cursed) {
+                vulture_ui_fill(x + V_UI(2), y + V_UI(2), h - V_UI(4), h - V_UI(4), 230, 60, 50, 60);
+                vulture_ui_border(x + V_UI(2), y + V_UI(2), h - V_UI(4), h - V_UI(4), 230, 70, 60);
+            }
         }
 
         /* same small-icon substitution objitemwin makes */
@@ -96,14 +96,9 @@ objheaderwin::draw()
      * header cells and item cells are interleaved in the SAME
      * V_LISTITEM_WIDTH x V_LISTITEM_HEIGHT grid, so at scale > 1 an unscaled
      * header frame no longer lines up with the item frames around it. */
-    vulture_fill_rect(abs_x + V_UI(2), abs_y + V_UI(2), abs_x + w - V_UI(3),
-                      abs_y + h - V_UI(3), CLR32_BLACK_A50);
-
-    /* Outer edge */
-    vulture_draw_lowered_frame(abs_x, abs_y, abs_x + w - 1, abs_y + h - 1);
-    /* Inner edge */
-    vulture_draw_raised_frame(abs_x + V_UI(1), abs_y + V_UI(1),
-                              abs_x + w - V_UI(2), abs_y + h - V_UI(2));
+    /* s200: a category heading: a darker card, its name in gold */
+    vulture_ui_fill(abs_x, abs_y, w, h, 18, 16, 15, 255);
+    vulture_ui_border(abs_x, abs_y, w, h, 86, 72, 48);
 
     /* draw the text centered in the window */
     int txt_width = vulture_text_length(V_FONT_MENU, caption);
@@ -112,7 +107,7 @@ objheaderwin::draw()
     int text_start_y = abs_y + (h - txt_height) / 2;
 
     vulture_put_text_shadow(V_FONT_MENU, caption, vulture_screen,
-                            text_start_x, text_start_y, CLR32_WHITE,
+                            text_start_x, text_start_y, vulture_ui_rgb(255, 205, 90),
                             CLR32_BLACK);
 
     vulture_invalidate_region(abs_x, abs_y, w, h);
