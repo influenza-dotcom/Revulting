@@ -4019,6 +4019,28 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   The present log line now says how many pixels went up.  The same lit frame
   on the GPU and in software still differs by a mean of 0.2 per channel.
 
+### 195. Change keys in the game
+
+- The user: rebind keys in-game (they could only be changed in the config
+  file - NetHack 5.0's own rebinding menu exists, but deep in the options,
+  and forgets its changes when you quit).
+- Esc > Change keys (also on the Controls page): 35 everyday commands (eat,
+  quaff, read, zap, cast, wear, ..., inventory, travel) with the keys they
+  are on now; pick one, press the new key in the "press any key" dialog.
+  It is bound the way the config file's BIND= binds (bind_key), so
+  NetHack's own command table does the work, and the message names what the
+  key did before.  "All commands..." opens NetHack's own menu (any command,
+  any key, unbinding); a before/after snapshot of the table catches what it
+  changed.  "Forget my key changes" drops them.
+- Only the changes made in the game are kept - keys.txt beside effects.txt
+  (key:command, NetHack's key2txt / txt2key notation, "nothing" for
+  unbound) - and applied again at every start after the config file
+  (vkeys_load from levelwin::draw, once), so a config BIND isn't copied into
+  it and still works where the game didn't change that key.
+- Probes: VULTURE_SELFTEST_KEYS puts "eat" on E (E did eat; eat on "E or e";
+  keys.txt "E:eat"), then restores engrave and removes the file; started
+  with a keys.txt of E:eat and ^E:engrave, the log shows both applied.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

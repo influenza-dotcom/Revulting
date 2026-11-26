@@ -7,9 +7,11 @@
 #include <algorithm> /* s190: std::sort, likewise */
 extern "C" {
 #include "hack.h"
+#include "func_tab.h" /* s195: the command table, for changing keys */
 }
 
 #include "contextmenu.h"
+#include "anykeydialog.h" /* s195 */
 #include "hotspot.h"
 #include "levelwin.h"
 #include "map.h"
@@ -3397,6 +3399,7 @@ vprobe_push_key(SDL_Keycode k) /* probe: s145 */
 }
 static void vgs_probe(int stage, const char *dir); /* s145 probe */
 static void vcontrols_page(void); /* s175 */
+static void vkeys_probe(const char *dir); /* s195 probe */
 static SDL_Rect vbtn_rect[4];
 
 /* probe: s166 - VULTURE_SELFTEST_SOAK: play by itself, through real input.
@@ -6692,6 +6695,8 @@ vselftest(void)
                 || getenv("VULTURE_SELFTEST_LIT");
         if (getenv("VULTURE_SELFTEST_FLAT")) /* s185: lighting without the normal maps */
             vl_on = true, vl_relief_set(false);
+        if (getenv("VULTURE_SELFTEST_KEYS")) /* probe: s195 */
+            vkeys_probe(dir);
         if (getenv("VULTURE_SELFTEST_COND")) { /* probe: s193 */
             vcond_probe_n = 0;
             vcond_probe_set(0);
@@ -9494,6 +9499,7 @@ vcontrols_page(void)
         "",
         "Game",
         "  Esc\tthis menu: visual effects, time mode, save",
+        "  Esc, then Change keys\tput any command on another key (kept between games)",
         "  Pause\ttime mode: turn-based / real-time / real-time until combat",
         "  F9\tlighting: full / flat / off",
         "  F7\twall height",
@@ -9519,6 +9525,275 @@ vcontrols_page(void)
     vulture_destroy_nhwindow(w);
 }
 
+/*
+ * IMPLEMENTATION_LOG s195: change keys in the game.  Esc > Change keys: the
+ * everyday commands with the keys they are on now; pick one and press its
+ * new key.  It is bound the way the config file's BIND= binds (bind_key), so
+ * NetHack's own command table does the work, and whatever the key did before
+ * is named.  "All commands..." opens NetHack's own rebinding menu (any
+ * command, any key, or unbinding).  Only the changes made in the game are
+ * kept - in keys.txt beside effects.txt - and applied again at every start,
+ * over the config file's; "Forget my key changes" drops them (the defaults
+ * and the config file's come back at the next start).
+ */
+static std::map<int, std::string> vkeys_changes; /* key -> command ("nothing": unbound) */
+static const struct ext_func_tab *vkeys_on(uchar k);
+
+static std::string
+vkeys_path(void)
+{
+    const char *la = getenv("LOCALAPPDATA");
+    char buf[700];
+
+    snprintf(buf, sizeof buf, "%s\\NetHack\\5.0\\keys.txt", la ? la : ".");
+    return buf;
+}
+
+static void
+vkeys_save(void)
+{
+    std::map<int, std::string>::iterator it;
+    char kb[QBUFSZ];
+    FILE *f;
+
+    if (vkeys_changes.empty()) {
+        (void) remove(vkeys_path().c_str());
+        return;
+    }
+    if (!(f = fopen(vkeys_path().c_str(), "w")))
+        return;
+    fprintf(f, "# keys changed in the game (Esc > Change keys): key:command\n");
+    for (it = vkeys_changes.begin(); it != vkeys_changes.end(); ++it)
+        fprintf(f, "%s:%s\n", key2txt((uchar) it->first, kb), it->second.c_str());
+    fclose(f);
+}
+
+/* the game's changes, applied once at the start (over the config file's) */
+static void
+vkeys_load(void)
+{
+    static bool done = false;
+    char ln[256];
+    FILE *f;
+
+    if (done)
+        return;
+    done = true;
+    if (!(f = fopen(vkeys_path().c_str(), "r")))
+        return;
+    while (fgets(ln, sizeof ln, f)) {
+        char *e = ln + strlen(ln), *c;
+        uchar k;
+
+        while (e > ln && (e[-1] == '\n' || e[-1] == '\r'))
+            *--e = '\0';
+        if (!ln[0] || ln[0] == '#' || !(c = strchr(ln + 1, ':'))) /* the key is a character at least */
+            continue;
+        *c = '\0';
+        if ((k = txt2key(ln)) != 0 && bind_key(k, c + 1, TRUE)) {
+            vkeys_changes[k] = c + 1;
+            if (getenv("VULTURE_SELFTEST")) /* probe: s195 */
+                vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "keys: '%s' does %s now\n", ln,
+                                  vkeys_on(k) ? vkeys_on(k)->ef_txt : "nothing");
+        }
+    }
+    fclose(f);
+}
+
+static const struct ext_func_tab *
+vkeys_cmd(const char *name)
+{
+    const struct ext_func_tab *ec;
+
+    for (ec = extcmdlist; ec->ef_txt; ec++)
+        if (!strcmp(ec->ef_txt, name))
+            return ec;
+    return NULL;
+}
+
+/* what key k does now (NULL: nothing) */
+static const struct ext_func_tab *
+vkeys_on(uchar k)
+{
+    struct Cmd_bind *b;
+
+    for (b = gc.Cmd.cmdbinds; b; b = b->next)
+        if (b->key == k)
+            return b->cmd;
+    return NULL;
+}
+
+/* the keys a command is on, as NetHack writes them */
+static std::string
+vkeys_keys(const struct ext_func_tab *ec)
+{
+    struct Cmd_bind *b;
+    std::string s;
+    char kb[QBUFSZ];
+    int n = 0;
+
+    for (b = gc.Cmd.cmdbinds; b && ec; b = b->next)
+        if (b->cmd == ec && n++ < 3)
+            s += (s.empty() ? "" : "  or  ") + std::string(key2txt(b->key, kb));
+    return s;
+}
+
+/* the command on each key, all 256 */
+static void
+vkeys_snapshot(std::string *m)
+{
+    struct Cmd_bind *b;
+    int k;
+
+    for (k = 0; k < 256; k++)
+        m[k].clear();
+    for (b = gc.Cmd.cmdbinds; b; b = b->next)
+        if (b->cmd) {
+            m[b->key] = b->cmd->ef_txt;
+            if (b->param)
+                m[b->key] += std::string("(") + b->param + ")";
+        }
+}
+
+/* put a command on a key, keep it, say what changed */
+static bool
+vkeys_set(const struct ext_func_tab *ec, uchar key, bool talk)
+{
+    const struct ext_func_tab *prev = vkeys_on(key);
+    char kb[QBUFSZ];
+
+    if (!ec || !key || !bind_key(key, ec->ef_txt, TRUE))
+        return false;
+    vkeys_changes[key] = ec->ef_txt;
+    vkeys_save();
+    if (talk) {
+        if (prev && prev != ec)
+            pline("\"%s\" is on '%s' now (it was \"%s\").", ec->ef_desc, key2txt(key, kb), prev->ef_desc);
+        else
+            pline("\"%s\" is on '%s' now.", ec->ef_desc, key2txt(key, kb));
+    }
+    return true;
+}
+
+static void
+vkeys_menu(void)
+{
+    static const char *const common[] = {
+        "eat", "quaff", "read", "zap", "cast", "wear", "takeoff", "puton", "remove", "wield",
+        "swap", "twoweapon", "throw", "fire", "apply", "pickup", "drop", "loot", "open", "close",
+        "kick", "force", "untrap", "search", "rest", "pray", "offer", "chat", "pay", "engrave",
+        "sit", "look", "glance", "inventory", "travel", NULL
+    };
+
+    for (;;) {
+        std::vector<std::string> labels;
+        menu_item *sel = NULL;
+        anything any;
+        int winid, n, pick, k;
+
+        labels.reserve(64);
+        winid = vulture_create_nhwindow(NHW_MENU);
+        vulture_start_menu(winid, MENU_BEHAVE_STANDARD);
+        for (k = 0; common[k]; k++) {
+            const struct ext_func_tab *ec = vkeys_cmd(common[k]);
+            std::string keys = vkeys_keys(ec);
+
+            if (!ec)
+                continue;
+            labels.push_back(std::string(ec->ef_desc) + "\t" + (keys.empty() ? "(no key)" : keys));
+            any = cg.zeroany;
+            any.a_int = k + 1;
+            vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 0, 0, ATR_NONE, NO_COLOR,
+                             labels.back().c_str(), MENU_ITEMFLAGS_NONE);
+        }
+        any = cg.zeroany;
+        any.a_int = 100;
+        vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 0, 0, ATR_BOLD, NO_COLOR,
+                         "All commands...\tNetHack's full list: any command, any key",
+                         MENU_ITEMFLAGS_NONE);
+        if (!vkeys_changes.empty()) {
+            any.a_int = 101;
+            vulture_add_menu(winid, vulture_menu_glyph(NO_GLYPH), &any, 0, 0, ATR_NONE, NO_COLOR,
+                             "Forget my key changes\tthe defaults come back when you next start",
+                             MENU_ITEMFLAGS_NONE);
+        }
+        vulture_end_menu(winid, "Change keys  -  pick one, then press its new key");
+        n = vulture_select_menu(winid, PICK_ONE, &sel);
+        vulture_destroy_nhwindow(winid);
+        pick = (n > 0 && sel) ? sel[0].item.a_int : 0;
+        if (sel)
+            free((genericptr_t) sel);
+        if (pick <= 0)
+            return;
+        vulture_sfx("ui_click");
+        if (pick == 100) { /* NetHack's own menu; what it changes is kept too */
+            static std::string before[256], after[256];
+
+            vkeys_snapshot(before);
+            handler_rebind_keys();
+            vkeys_snapshot(after);
+            for (k = 1; k < 256; k++)
+                if (before[k] != after[k])
+                    vkeys_changes[k] = after[k].empty() ? "nothing" : after[k];
+            vkeys_save();
+            continue;
+        }
+        if (pick == 101) {
+            vkeys_changes.clear();
+            vkeys_save();
+            pline("Your key changes are forgotten - the usual keys come back when you next start.");
+            continue;
+        }
+        if (pick >= 1 && pick <= (int) (sizeof common / sizeof common[0]) - 1) {
+            const struct ext_func_tab *ec = vkeys_cmd(common[pick - 1]);
+            char q[200], response = 0;
+            anykeydialog *win;
+
+            if (!ec)
+                continue;
+            snprintf(q, sizeof q, "Press the new key for: %s   (Esc leaves it as it is)", ec->ef_desc);
+            win = new anykeydialog(ROOTWIN, q);
+            vulture_event_dispatcher(&response, V_RESPOND_CHARACTER, win);
+            delete win;
+            if (response && response != '\033')
+                (void) vkeys_set(ec, (uchar) response, true);
+        }
+    }
+}
+
+/* probe: s195 - VULTURE_SELFTEST_KEYS puts "eat" on 'E', reads keys.txt
+   back, checks the table, then puts both back */
+static void
+vkeys_probe(const char *dir)
+{
+    const struct ext_func_tab *eat = vkeys_cmd("eat"), *was = vkeys_on('E');
+    char path[700], ln[200];
+    FILE *f, *o;
+    bool ok;
+
+    snprintf(path, sizeof path, "%s\\keys_probe.txt", dir);
+    if (!(o = fopen(path, "w")))
+        return;
+    ok = vkeys_set(eat, 'E', false);
+    fprintf(o, "set eat on E: %d; E does now: %s\n", (int) ok, vkeys_on('E') ? vkeys_on('E')->ef_txt : "nothing");
+    fprintf(o, "eat is on: %s\n", vkeys_keys(eat).c_str());
+    if ((f = fopen(vkeys_path().c_str(), "r")) != NULL) {
+        while (fgets(ln, sizeof ln, f))
+            fprintf(o, "keys.txt: %s", ln);
+        fclose(f);
+    } else
+        fprintf(o, "keys.txt: missing\n");
+    vkeys_changes.clear(); /* put it all back as it was */
+    vkeys_save();
+    if (was)
+        (void) bind_key('E', was->ef_txt, FALSE);
+    fprintf(o, "restored: E does %s; keys.txt %s\n", vkeys_on('E') ? vkeys_on('E')->ef_txt : "nothing",
+            (f = fopen(vkeys_path().c_str(), "r")) != NULL ? "still there" : "gone");
+    if (f)
+        fclose(f);
+    fclose(o);
+}
+
 /* ---- s145: the pause menu (Esc during play) ----
    Nothing moves while it is open: turns only pass on commands, and the
    real-time clock never ticks inside a menu.  Game commands are queued so
@@ -9539,6 +9814,7 @@ vpause_menu(void *result)
                   { 3, 'i', "Interface options" },
                   { 4, 't', NULL },
                   { 9, 'c', "Controls" },
+                  { 10, 'k', "Change keys" },
                   { 8, 'v', "Visual effects" },
                   { 5, 'h', "Help and keys" },
                   { 6, 's', "Save and quit" },
@@ -9581,6 +9857,9 @@ vpause_menu(void *result)
         return false;
     case 9: /* s175 */
         vcontrols_page();
+        return false;
+    case 10: /* s195 */
+        vkeys_menu();
         return false;
     case 5:
         cmdq_add_ec(CQ_CANNED, dohelp);
@@ -11707,6 +11986,7 @@ levelwin::draw()
     vglint_tick();  /* s136 */
     vamb_tick();    /* s136 */
     vfxm_load(); /* s161: saved effect choices */
+    vkeys_load(); /* s195: keys changed in the game */
     vimp_tick(); /* s151 */
     {
         int jx, jy;
