@@ -122,6 +122,8 @@ extern void vulture_gpu_hd_derive(SDL_Surface *copy, SDL_Surface *orig, bool fli
                                   int alpha);
 extern void vulture_gpumap_set_view(const SDL_Rect *src, const SDL_Rect *dst);
 extern bool vulture_gpumap_hd_ok(void);
+extern void vulture_gpu_hd_derive_cut(SDL_Surface *copy, SDL_Surface *orig, SDL_Surface *mask,
+                                      bool outside); /* s203 */
 /* the frame as it would be shown (map layer + overlay), copied into out
  * (ARGB8888) from `area` of the render surface; plain copy without a GPU map */
 extern bool vulture_frame_to_surface(SDL_Surface *out, const SDL_Rect *area);
@@ -131,6 +133,8 @@ extern int vulture_save_frame_bmp(const char *path);
  * that does the normal-mapped relief and the light layer (vulture_sdl.cpp) */
 extern bool vulture_gpulit_ok(void);
 extern bool vulture_gpumap_shadow(SDL_Surface *s, const float *quad, const Uint8 *a4); /* s191 */
+extern bool vulture_gpumap_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad, int shade,
+                                int alpha); /* s203 */
 /* s192: the living fog for the next vulture_gpulit_frame: the fog grid (beside
    the light grid; fresh = rebuilt), 256x256 noise, mist[8] = the map's anchor
    x, y, time s, thickness, colour r, g, b (0..255), - */

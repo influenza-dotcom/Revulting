@@ -4045,9 +4045,15 @@ vsp_draw_waves(Uint32 now)
         vsp_waves[n++] = w;
         ea = 1.0 - (1.0 - age) * (1.0 - age) * (1.0 - age);
         rw = w.rad * 79.0 * ea, rh = w.rad * 31.0 * ea;
-        al = (int) (220 * (1.0 - age));
+        al = (int) (220 * (1.0 - age) * (rw < 30.0 ? rw / 30.0 : 1.0)); /* s203: it blooms from dim */
         vsp_screen(w.x, w.y, &sx, &sy);
         m = 48 + (int) (rw * 0.6); /* close enough to read as one ring, not dots */
+        { /* s203: and few enough that a small one doesn't pile up into a white-hot disc */
+            int lim = (int) (6.2832 * sqrt((rw * rw + rh * rh) / 2.0) / 4.0);
+
+            if (lim < m)
+                m = lim < 10 ? 10 : lim;
+        }
         for (k = 0; k < m; k++) {
             double a = 6.28318 * k / m;
 
@@ -4784,6 +4790,839 @@ vimp_probe_tick(Uint32 now)
     vimp_probe_sub = 1, vimp_probe_t = SDL_GetTicks();
 }
 
+/*
+ * IMPLEMENTATION_LOG s203: doors swing, and using things in the world
+ * shows.
+ *  - A door seen opening or shutting swings instead of popping.  The closed
+ *    door's art is split once into its stone arch and its wooden panel
+ *    (vdr_split: warm wood against grey stone, a 5x5 majority, only big
+ *    blobs kept), and the panel's two halves turn about their pillars on
+ *    the isometric floor - each an affine quad (vulture_gpumap_quad) - away
+ *    from the viewer, the way the open art shows its leaves; the open art
+ *    fades in as they arrive.  Shutting plays it back, with a rebound and a
+ *    puff of dust at the sill.  A door smashed in shudders, bursts into
+ *    splinters and falls away from you onto its planks; one conjured into
+ *    an empty doorway rises out of gathering dust.
+ *  - Fountains, sinks, altars, thrones, chests and hidden doors answer when
+ *    used or found (vulture_world_fx, from the core).
+ */
+struct vdr_split_t {
+    SDL_Surface *frame, *panel, *nframe; /* the arch, the panel (ARGB, the art's size), the arch's normals */
+    int pl, pr, pt, pb;                  /* the panel's box in the art */
+    bool ok;
+};
+static vdr_split_t vdr_splits[2]; /* the closed door arts: [0] V, [1] H */
+static bool vdr_split_tried[2] = { false, false };
+struct vdr_anim_t {
+    int x, y, from, to, kind; /* furniture as the map holds it; 1 open, 2 shut, 3 smash, 4 conjure */
+    Uint32 t0, dur;
+    float push; /* a smash: +1 it falls away from the viewer, -1 toward */
+    bool fx;    /* the slam's dust is out */
+};
+static std::vector<vdr_anim_t> vdr_anims;
+static d_level vdr_lev = { -1, -1 };
+static double vdr_freeze = -1.0; /* probe: >= 0 holds every door at this point of its swing */
+#define VDR_K (22.0 / 56.0)      /* the floor's slope on screen: V_MAP_YMOD / V_MAP_XMOD */
+
+static int
+vdr_class(int t) /* 1 shut, 2 open, 3 broken or no door, 0 not a door */
+{
+    if (t == V_MISC_VDOOR_WOOD_CLOSED || t == V_MISC_HDOOR_WOOD_CLOSED)
+        return 1;
+    if (t == V_MISC_VDOOR_WOOD_OPEN || t == V_MISC_HDOOR_WOOD_OPEN)
+        return 2;
+    return t == V_MISC_DOOR_WOOD_BROKEN ? 3 : 0;
+}
+
+/* the map's door tile t is drawn with the V art (its wall rising to the
+   right on screen) - after the view's quarter turns */
+static bool
+vdr_vart(int t)
+{
+    t = v_rot_door(t);
+    return t == V_MISC_VDOOR_WOOD_CLOSED || t == V_MISC_VDOOR_WOOD_OPEN;
+}
+
+/* the closed door art split into its arch and its panel: wood is warm (red
+   well above blue), stone grey; a 5x5 majority smooths the speckle and
+   only blobs of 150+ pixels count.  Once per art; NULL: no clear panel */
+static vdr_split_t *
+vdr_split(int tile_id)
+{
+    int idx = tile_id == V_MISC_VDOOR_WOOD_CLOSED ? 0 : tile_id == V_MISC_HDOOR_WOOD_CLOSED ? 1 : -1;
+    vulture_tile *tile;
+    SDL_Surface *src, *nm;
+    vdr_split_t *sp;
+    int w, h, x, y, k, big = 0;
+
+    if (idx < 0)
+        return NULL;
+    sp = &vdr_splits[idx];
+    if (vdr_split_tried[idx])
+        return sp->ok ? sp : NULL;
+    vdr_split_tried[idx] = true;
+    memset(sp, 0, sizeof *sp);
+    tile = vulture_get_tile(tile_id);
+    if (!tile || !tile->graphic
+        || !(src = SDL_ConvertSurfaceFormat(tile->graphic, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return NULL;
+    w = src->w, h = src->h;
+    std::vector<signed char> warm((size_t) (w * h)), m((size_t) (w * h));
+    std::vector<int> lab((size_t) (w * h), 0), sizes(1, 0), stack;
+
+    SDL_LockSurface(src);
+    for (y = 0; y < h; y++) {
+        const Uint32 *row = (const Uint32 *) ((const Uint8 *) src->pixels + y * src->pitch);
+
+        for (x = 0; x < w; x++) {
+            Uint32 p = row[x];
+            int r = (int) ((p >> 16) & 255), b = (int) (p & 255);
+
+            warm[y * w + x] = (signed char) ((p >> 24) < 128 ? -1 : r - b >= 14 ? 1 : 0);
+        }
+    }
+    for (y = 0; y < h; y++) /* the majority, over the opaque pixels */
+        for (x = 0; x < w; x++) {
+            int s = 0, c = 0, dx, dy;
+
+            m[y * w + x] = 0;
+            if (warm[y * w + x] < 0)
+                continue;
+            for (dy = -2; dy <= 2; dy++)
+                for (dx = -2; dx <= 2; dx++) {
+                    int xx = x + dx, yy = y + dy;
+
+                    if (xx >= 0 && xx < w && yy >= 0 && yy < h && warm[yy * w + xx] >= 0)
+                        s += warm[yy * w + xx], c++;
+                }
+            m[y * w + x] = (signed char) (s * 2 > c);
+        }
+    for (k = 0; k < w * h; k++) { /* the blobs */
+        int id, cnt = 0;
+
+        if (!m[k] || lab[k])
+            continue;
+        id = (int) sizes.size();
+        lab[k] = id;
+        stack.push_back(k);
+        while (!stack.empty()) {
+            int q = stack.back(), qx = q % w, qy = q / w;
+
+            stack.pop_back();
+            cnt++;
+            if (qx > 0 && m[q - 1] && !lab[q - 1])
+                lab[q - 1] = id, stack.push_back(q - 1);
+            if (qx < w - 1 && m[q + 1] && !lab[q + 1])
+                lab[q + 1] = id, stack.push_back(q + 1);
+            if (qy > 0 && m[q - w] && !lab[q - w])
+                lab[q - w] = id, stack.push_back(q - w);
+            if (qy < h - 1 && m[q + w] && !lab[q + w])
+                lab[q + w] = id, stack.push_back(q + w);
+        }
+        sizes.push_back(cnt);
+    }
+    sp->frame = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+    sp->panel = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (!sp->frame || !sp->panel) {
+        SDL_UnlockSurface(src);
+        SDL_FreeSurface(src);
+        if (sp->frame)
+            SDL_FreeSurface(sp->frame);
+        if (sp->panel)
+            SDL_FreeSurface(sp->panel);
+        sp->frame = sp->panel = NULL;
+        return NULL;
+    }
+    sp->pl = w, sp->pr = 0, sp->pt = h, sp->pb = 0;
+    SDL_LockSurface(sp->frame);
+    SDL_LockSurface(sp->panel);
+    for (y = 0; y < h; y++) {
+        const Uint32 *row = (const Uint32 *) ((const Uint8 *) src->pixels + y * src->pitch);
+        Uint32 *fr = (Uint32 *) ((Uint8 *) sp->frame->pixels + y * sp->frame->pitch);
+        Uint32 *pa = (Uint32 *) ((Uint8 *) sp->panel->pixels + y * sp->panel->pitch);
+
+        for (x = 0; x < w; x++) {
+            int l = lab[y * w + x];
+            bool in = l && sizes[l] >= 150;
+
+            if (in) { /* wood (warm for its brightness) or the dark seams between the
+                         planks - not the arch's lit bevel the smoothing took in */
+                Uint32 p = row[x];
+                int r = (int) ((p >> 16) & 255), g = (int) ((p >> 8) & 255), b = (int) (p & 255);
+
+                in = (r - b >= 14 && (r - b) * 100 >= 18 * (r > 0 ? r : 1)) || (r * 3 + g * 6 + b) / 10 < 75;
+            }
+            fr[x] = in ? 0 : row[x];
+            pa[x] = in ? row[x] : 0;
+            if (in) {
+                big++;
+                if (x < sp->pl)
+                    sp->pl = x;
+                if (x + 1 > sp->pr)
+                    sp->pr = x + 1;
+                if (y < sp->pt)
+                    sp->pt = y;
+                if (y + 1 > sp->pb)
+                    sp->pb = y + 1;
+            }
+        }
+    }
+    SDL_UnlockSurface(sp->panel);
+    SDL_UnlockSurface(sp->frame);
+    SDL_UnlockSurface(src);
+    SDL_FreeSurface(src);
+    SDL_SetSurfaceBlendMode(sp->frame, SDL_BLENDMODE_BLEND);
+    SDL_SetSurfaceBlendMode(sp->panel, SDL_BLENDMODE_BLEND);
+    if (big < 400 || sp->pr - sp->pl < 12 || sp->pb - sp->pt < 20) { /* not this kind of art: cross-fade it */
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "door art %d: no panel found (%d px)\n", tile_id, big);
+        SDL_FreeSurface(sp->frame);
+        SDL_FreeSurface(sp->panel);
+        sp->frame = sp->panel = NULL;
+        return NULL;
+    }
+    /* the arch's normals alone (the panel's would light the open doorway) */
+    nm = vulture_get_tile_normal(tile_id, false);
+    if (nm && nm->w == w && nm->h == h
+        && (sp->nframe = SDL_ConvertSurfaceFormat(nm, SDL_PIXELFORMAT_ARGB8888, 0)) != NULL) {
+        SDL_LockSurface(sp->nframe);
+        SDL_LockSurface(sp->panel);
+        for (y = 0; y < h; y++) {
+            Uint32 *nr = (Uint32 *) ((Uint8 *) sp->nframe->pixels + y * sp->nframe->pitch);
+            const Uint32 *pa = (const Uint32 *) ((const Uint8 *) sp->panel->pixels + y * sp->panel->pitch);
+
+            for (x = 0; x < w; x++)
+                if (pa[x] >> 24)
+                    nr[x] = 0;
+        }
+        SDL_UnlockSurface(sp->panel);
+        SDL_UnlockSurface(sp->nframe);
+        SDL_SetSurfaceBlendMode(sp->nframe, SDL_BLENDMODE_BLEND);
+    }
+    /* zoomed in: the HD art cut the same way, the two adding up to it */
+    vulture_gpu_hd_derive_cut(sp->frame, tile->graphic, sp->panel, true);
+    vulture_gpu_hd_derive_cut(sp->panel, tile->graphic, sp->panel, false);
+    sp->ok = true;
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "door art %d: panel %d px, box x %d-%d y %d-%d\n", tile_id,
+                      big, sp->pl, sp->pr, sp->pt, sp->pb);
+    return sp;
+}
+
+/* src of s laid into the quad q (corners TL, TR, BR, BL; its sides upright,
+   as a turning door's are), shaded and faded: on the GPU's map layer, or in
+   2 px strips into the frame */
+static void
+vdr_quad(SDL_Surface *s, const SDL_Rect &src, const float *q, int shade, int alpha)
+{
+    int c;
+
+    if (!s || alpha <= 0 || src.w <= 0 || src.h <= 0)
+        return;
+    alpha = alpha > 255 ? 255 : alpha;
+    shade = shade < 0 ? 0 : shade > 255 ? 255 : shade;
+    if (vulture_gpumap_on) {
+        vulture_gpumap_quad(s, &src, q, shade, alpha);
+        return;
+    }
+    SDL_SetSurfaceColorMod(s, (Uint8) shade, (Uint8) shade, (Uint8) shade);
+    SDL_SetSurfaceAlphaMod(s, (Uint8) alpha);
+    for (c = 0; c < src.w; c++) {
+        double f = (c + 0.5) / src.w;
+        double tx = q[0] + (q[2] - q[0]) * f, ty = q[1] + (q[3] - q[1]) * f, by = q[7] + (q[5] - q[7]) * f;
+        SDL_Rect sr, dr;
+
+        sr.x = src.x + c, sr.y = src.y, sr.w = 1, sr.h = src.h;
+        dr.x = (int) floor(tx), dr.y = (int) floor(ty + 0.5), dr.w = 2, dr.h = (int) (by - ty + 0.5);
+        if (dr.h > 0)
+            SDL_BlitScaled(s, &sr, vulture_screen, &dr);
+    }
+    SDL_SetSurfaceColorMod(s, 255, 255, 255);
+    SDL_SetSurfaceAlphaMod(s, 255);
+}
+
+/* s (a door piece, or a whole door tile) with its top-left at (x, y),
+   faded; nm: its normals, for the light */
+static void
+vdr_img(SDL_Surface *s, SDL_Surface *nm, int x, int y, int alpha)
+{
+    if (!s || alpha <= 0)
+        return;
+    alpha = alpha > 255 ? 255 : alpha;
+    SDL_SetSurfaceAlphaMod(s, (Uint8) alpha);
+    vulture_put_img(x, y, s);
+    SDL_SetSurfaceAlphaMod(s, 255);
+    if (!nm || !vulture_normal_capture)
+        return;
+    if (vulture_gpumap_on) {
+        vulture_gpumap_normal_ex(nm, x, y, 1.0, 1.0, 0.0, alpha);
+    } else if (vulture_normal_buf && alpha >= 128) {
+        SDL_Rect r;
+
+        r.x = x, r.y = y, r.w = nm->w, r.h = nm->h;
+        SDL_BlitSurface(nm, NULL, vulture_normal_buf, &r);
+    }
+}
+
+static void
+vdr_tile(int tile_id, int x, int y, int alpha) /* a door tile on the square at (x, y), faded */
+{
+    vulture_tile *t = vulture_get_tile(tile_id);
+
+    if (t && t->graphic)
+        vdr_img(t->graphic, vulture_get_tile_normal(tile_id, false), x + t->xmod, y + t->ymod, alpha);
+}
+
+/* half the panel - columns c0..c1 of the art - turned th radians about its
+   pillar at column hx: (cx, cy) the way it runs from the pillar shut,
+   (ax, ay) the way it lies open, in screen px per px across.  On the
+   isometric floor that is an affine map, so the half stays a quad: its
+   columns slide along the turned direction, each keeping its height */
+static void
+vdr_leaf(vdr_split_t *sp, int ox, int oy, int hx, int c0, int c1, double cx, double cy, double ax,
+         double ay, double th, int shade, int alpha)
+{
+    double kx = cos(th) * cx + sin(th) * ax, ky = cos(th) * cy + sin(th) * ay - cy;
+    double d0 = fabs((double) (c0 - hx)), d1 = fabs((double) (c1 - hx));
+    float q[8];
+    SDL_Rect r;
+
+    if (c1 <= c0 || alpha <= 0)
+        return;
+    r.x = c0, r.y = sp->pt, r.w = c1 - c0, r.h = sp->pb - sp->pt;
+    q[0] = (float) (ox + hx + d0 * kx), q[1] = (float) (oy + sp->pt + d0 * ky);
+    q[2] = (float) (ox + hx + d1 * kx), q[3] = (float) (oy + sp->pt + d1 * ky);
+    q[4] = q[2], q[5] = (float) (oy + sp->pb + d1 * ky);
+    q[6] = q[0], q[7] = (float) (oy + sp->pb + d0 * ky);
+    vdr_quad(sp->panel, r, q, shade, alpha);
+}
+
+/* step 2 of the map: the door on (j, i) part way through opening, shutting,
+   breaking or appearing, drawn at (x, y) instead of its tile `cur` (the
+   map's furniture there); false: none */
+static bool
+vdr_draw(int x, int y, int j, int i, int cur)
+{
+    vdr_anim_t *a = NULL;
+    vdr_split_t *sp;
+    vulture_tile *ct;
+    double t, K = VDR_K;
+    size_t k;
+    int ox, oy;
+    bool vd;
+
+    if (vdr_anims.empty())
+        return false;
+    for (k = 0; k < vdr_anims.size(); k++)
+        if (vdr_anims[k].x == j && vdr_anims[k].y == i)
+            a = &vdr_anims[k];
+    if (!a || cur != a->to) /* none, or it has changed again since */
+        return false;
+    t = vdr_freeze >= 0.0 ? vdr_freeze : (double) (SDL_GetTicks() - a->t0) / a->dur;
+    if (t >= 1.0)
+        return false;
+    if (t < 0.0)
+        t = 0.0;
+    if (a->kind == 4) { /* conjured: the planks go, the door rises out of the dust */
+        double u = (t - 0.15) / 0.7, e;
+        int al;
+
+        u = u < 0.0 ? 0.0 : u > 1.0 ? 1.0 : u;
+        e = 1.0 - (1.0 - u) * (1.0 - u) * (1.0 - u);
+        al = (int) (255 * (u < 0.6 ? u / 0.6 : 1.0));
+        if (t < 0.45 && vdr_class(a->from) == 3)
+            vdr_tile(a->from, x, y, (int) (255 * (1.0 - t / 0.45)));
+        if (al > 0)
+            vtw_put_tile_x(x, y, v_rot_door(a->to), 0, 1.0, 0.5 + 0.5 * e, 0.0, false, al);
+        return true;
+    }
+    if (a->kind == 3) { /* smashed: it shudders, topples and goes; the planks show */
+        int C = v_rot_door(a->from), pa, fa;
+        double jx, u, ph, H, dx, dy, Dx, Dy;
+        float q[8];
+        SDL_Rect r;
+
+        vdr_tile(a->to, x, y, t < 0.25 ? 0 : t > 0.8 ? 255 : (int) (255 * (t - 0.25) / 0.55));
+        if (vdr_class(a->from) != 1 || !(sp = vdr_split(C)) || !(ct = vulture_get_tile(C))) {
+            vdr_tile(C, x, y, t < 0.1 ? 255 : t > 0.6 ? 0 : (int) (255 * (0.6 - t) / 0.5));
+            return true;
+        }
+        vd = vdr_vart(a->from);
+        ox = x + ct->xmod, oy = y + ct->ymod;
+        jx = t < 0.14 ? 2.5 * sin(t * 140.0) * (1.0 - t / 0.14) : 0.0;
+        u = (t - 0.08) / 0.5;
+        u = u < 0.0 ? 0.0 : u > 1.0 ? 1.0 : u;
+        ph = 1.35 * u * u; /* radians: it topples, faster as it goes */
+        H = sp->pb - sp->pt;
+        Dx = a->push * (vd ? -1.0 : 1.0), Dy = a->push * -K;
+        dx = H * 0.55 * sin(ph) * Dx, dy = H * (1.0 - cos(ph)) + H * 0.55 * sin(ph) * Dy;
+        pa = t < 0.15 ? 255 : t > 0.6 ? 0 : (int) (255 * (0.6 - t) / 0.45);
+        fa = t < 0.15 ? 255 : t > 0.78 ? 0 : (int) (255 * (0.78 - t) / 0.63);
+        r.x = sp->pl, r.y = sp->pt, r.w = sp->pr - sp->pl, r.h = sp->pb - sp->pt;
+        q[0] = (float) (ox + sp->pl + jx + dx), q[1] = (float) (oy + sp->pt + dy);
+        q[2] = (float) (ox + sp->pr + jx + dx), q[3] = q[1];
+        q[4] = (float) (ox + sp->pr + jx), q[5] = (float) (oy + sp->pb);
+        q[6] = (float) (ox + sp->pl + jx), q[7] = q[5];
+        if (a->push > 0.0f) /* falling away: behind the arch */
+            vdr_quad(sp->panel, r, q, 255 - (int) (70 * u), pa);
+        vdr_img(sp->frame, sp->nframe, ox, oy, fa);
+        if (a->push <= 0.0f)
+            vdr_quad(sp->panel, r, q, 255 - (int) (70 * u), pa);
+        return true;
+    }
+    { /* opening (1) or shutting (2): the leaves turn about their pillars */
+        int C = v_rot_door(a->kind == 1 ? a->from : a->to), O = v_rot_door(a->kind == 1 ? a->to : a->from);
+        int fade, la, shade, mid;
+        double th, lcy, lax;
+
+        if (a->kind == 1) {
+            double u = t - 1.0;
+
+            th = (1.0 + 2.3 * u * u * u + 1.3 * u * u) * 1.5708; /* a touch past, then it settles */
+            fade = t < 0.7 ? 0 : t > 0.9 ? 255 : (int) (255 * (t - 0.7) / 0.2);
+            la = t < 0.85 ? 255 : (int) (255 * (1.0 - t) / 0.15);
+        } else {
+            double u = t / 0.78;
+
+            th = t < 0.78 ? (1.0 - u * u) * 1.5708                  /* gathering speed */
+                          : 0.1 * sin(3.14159 * (t - 0.78) / 0.22); /* the rebound */
+            fade = t < 0.2 ? (int) (255 * (1.0 - t / 0.2)) : 0;
+            la = t < 0.1 ? (int) (255 * t / 0.1) : 255;
+        }
+        if (!(sp = vdr_split(C)) || !(ct = vulture_get_tile(C))) { /* no panel found: a cross-fade */
+            int oa = a->kind == 1 ? (int) (255 * t) : (int) (255 * (1.0 - t));
+
+            vdr_tile(C, x, y, 255 - oa);
+            vdr_tile(O, x, y, oa);
+            return true;
+        }
+        vd = vdr_vart(a->kind == 1 ? a->from : a->to);
+        ox = x + ct->xmod, oy = y + ct->ymod, mid = (sp->pl + sp->pr) / 2;
+        shade = (int) (255 * (1.0 - 0.22 * fabs(sin(2.0 * th))));
+        lcy = vd ? -K : K, lax = vd ? -1.0 : 1.0;
+        /* both leaves open away from the viewer: up-left (V art) / up-right (H) */
+        vdr_leaf(sp, ox, oy, sp->pl, sp->pl, mid, 1.0, lcy, lax, -K, th, shade, la);
+        vdr_leaf(sp, ox, oy, sp->pr, mid, sp->pr, -1.0, -lcy, lax, -K, th, shade, la);
+        vdr_img(sp->frame, sp->nframe, ox, oy, 255);
+        if (fade > 0)
+            vdr_tile(O, x, y, fade);
+        return true;
+    }
+}
+
+static void
+vdr_wave(int x, int y, float rad, int r, int g, int b, Uint32 dur)
+{
+    vsp_wave_t w;
+
+    w.x = x, w.y = y, w.t0 = SDL_GetTicks(), w.dur = dur, w.rad = rad;
+    w.r = (Uint8) r, w.g = (Uint8) g, w.b = (Uint8) b;
+    if (vsp_waves.size() < 16)
+        vsp_waves.push_back(w);
+}
+
+/* dust along a door's sill (n puffs), and a little shaken off its lintel */
+static void
+vdr_dust(int x, int y, int tile, int n)
+{
+    double sy = vdr_vart(tile) ? -VDR_K : VDR_K;
+    int k;
+
+    for (k = 0; k < n; k++) {
+        double s = (vsp_frand() * 2.0 - 1.0) * 20.0;
+
+        vsp_spawn(x, y, s, s * sy + vsp_frand() * 4 - 2, 2, vsp_frand() * 16 - 8, 6 + vsp_frand() * 8,
+                  6 + vsp_frand() * 6, 0, 0.9, 3.5, 10, 650 + rand() % 300, 160, 145, 120, 3, 85);
+    }
+    for (k = 0; k < (n + 1) / 2; k++) {
+        double s = (vsp_frand() * 2.0 - 1.0) * 16.0;
+
+        vsp_spawn(x, y, s, s * sy, 70 + vsp_frand() * 10, 0, 0, -10, -120, 0.5, 0.9, 0, 700 + rand() % 300,
+                  175, 160, 135, 5, 170);
+    }
+    vsp_live_t = SDL_GetTicks();
+}
+
+/* a door smashed in: splinters thrown the way it falls, dust, grit off the arch */
+static void
+vdr_burst(int x, int y, int from, float push)
+{
+    bool vd = vdr_vart(from);
+    double ax = push * (vd ? -1.0 : 1.0), ay = push * -VDR_K, sy = vd ? -VDR_K : VDR_K;
+    int k;
+
+    for (k = 0; k < 26; k++) {
+        double s = (vsp_frand() * 2.0 - 1.0) * 18.0, sp = 40 + vsp_frand() * 110;
+        int sh = rand() % 50;
+
+        vsp_spawn(x, y, s, s * sy, 10 + vsp_frand() * 60, ax * sp + vsp_frand() * 40 - 20,
+                  ay * sp + vsp_frand() * 20 - 10, 40 + vsp_frand() * 110, -400, 0.6, 1.2 + vsp_frand() * 1.1, 0,
+                  600 + rand() % 500, 115 + sh, 78 + sh / 2, 45 + sh / 3, 5, 235);
+    }
+    for (k = 0; k < 8; k++) {
+        double s = (vsp_frand() * 2.0 - 1.0) * 22.0;
+
+        vsp_spawn(x, y, s, s * sy, 4 + vsp_frand() * 20, ax * 20 + vsp_frand() * 20 - 10,
+                  ay * 20 + vsp_frand() * 10 - 5, 10 + vsp_frand() * 10, 0, 0.8, 5, 14, 900 + rand() % 400, 160,
+                  145, 122, 3, 75);
+    }
+    for (k = 0; k < 6; k++) {
+        double s = (vsp_frand() * 2.0 - 1.0) * 20.0;
+
+        vsp_spawn(x, y, s, s * sy, 75 + vsp_frand() * 12, vsp_frand() * 30 - 15, vsp_frand() * 14 - 7, 10, -380,
+                  0.4, 1.3, 0, 600 + rand() % 300, 175, 168, 155, 5, 220);
+    }
+    vsp_jolt(x, y, 3.0);
+    vsp_live_t = SDL_GetTicks();
+}
+
+/* a door conjured into an empty doorway: dust gathers in, a glimmer */
+static void
+vdr_gather(int x, int y)
+{
+    int k;
+
+    for (k = 0; k < 16; k++) {
+        double a = vsp_frand() * 6.2832, r = 30 + vsp_frand() * 18, px = cos(a) * r, py = sin(a) * r * 0.45;
+
+        vsp_spawn(x, y, px, py, 6 + vsp_frand() * 56, -px * 1.5, -py * 1.5, 0, 0, 0.2, 4, 4, 600 + rand() % 200,
+                  170, 155, 130, 3, 95);
+    }
+    for (k = 0; k < 8; k++)
+        vsp_spawn(x, y, vsp_frand() * 30 - 15, vsp_frand() * 12 - 6, 10 + vsp_frand() * 60, 0, 0, 8, 0, 0.3, 1.3,
+                  0, 700 + rand() % 300, 255, 245, 220, 4, 230);
+    vl_flash(x, y, 0.95f, 0.88f, 0.75f, 0.35f, 1.6f, 650);
+    vsp_live_t = SDL_GetTicks();
+}
+
+/* mapdata::set_glyph: the furniture shown on (x, y) is changing */
+void
+vdr_furniture(int x, int y, int from, int to)
+{
+    int cf = vdr_class(from), ct = vdr_class(to), kind;
+    Uint32 now = SDL_GetTicks();
+    vdr_anim_t a;
+    size_t k, n = 0;
+
+    if (!cf || !ct || cf == ct || !levwin || !u.ux || !iflags.window_inited || !isok(x, y) || !cansee(x, y)
+        || u.uswallow)
+        return;
+    if (!on_level(&vdr_lev, &u.uz)) {
+        vdr_lev = u.uz;
+        vdr_anims.clear();
+    }
+    kind = cf == 1 && ct == 2 ? 1 : cf == 2 && ct == 1 ? 2 : ct == 3 ? 3 : 4;
+    for (k = 0; k < vdr_anims.size(); k++) /* one at a time on a square */
+        if (vdr_anims[k].x != x || vdr_anims[k].y != y)
+            vdr_anims[n++] = vdr_anims[k];
+    vdr_anims.resize(n);
+    if (n >= 12)
+        return;
+    a.x = x, a.y = y, a.from = from, a.to = to, a.kind = kind, a.t0 = now, a.fx = false, a.push = 1.0f;
+    a.dur = kind == 1 ? 400 : kind == 2 ? 380 : kind == 3 ? 650 : 720;
+    if (kind == 3) { /* it falls away from you */
+        int hx, hy, dx, dy;
+
+        vsp_screen(u.ux, u.uy, &hx, &hy);
+        vsp_screen(x, y, &dx, &dy);
+        a.push = ((dx - hx) * (vdr_vart(from) ? -1.0 : 1.0) + (dy - hy) * -VDR_K) >= 0.0 ? 1.0f : -1.0f;
+        vdr_burst(x, y, from, a.push);
+    } else if (kind == 4) {
+        vdr_gather(x, y);
+    } else if (kind == 1) {
+        vdr_dust(x, y, to, 2);
+    }
+    vdr_anims.push_back(a);
+    vsp_live_t = now;
+}
+
+/* the core: something in the world used or found on (x, y) - 1 a fountain
+   drunk from, 2 dipped into, 3 a sink's tap, 4 / 5 an altar's amber / black
+   flash, 6 a thing landing on an altar, 7 an altar's flash seen
+   hallucinating, 8 a throne sat on, 9 a chest or box opened, 10 a hidden
+   door or passage found */
+extern "C" void
+vulture_world_fx(int x, int y, int kind)
+{
+    static const Uint8 amber[3] = { 255, 185, 70 };
+    static const Uint8 hal[6][3] = { { 255, 80, 200 }, { 80, 255, 120 }, { 90, 160, 255 },
+                                     { 255, 240, 70 }, { 255, 120, 40 }, { 170, 90, 255 } };
+    int k, n;
+
+    if (!levwin || !u.ux || !isok(x, y) || !cansee(x, y))
+        return;
+    switch (kind) {
+    case 1: /* water wells up and falls back */
+    case 2: /* a bigger splash */
+        n = kind == 2 ? 20 : 11;
+        for (k = 0; k < n; k++) {
+            double a = vsp_frand() * 6.2832, sp = 8 + vsp_frand() * (kind == 2 ? 60 : 34);
+
+            vsp_spawn(x, y, cos(a) * 5, sin(a) * 2.5, 28, cos(a) * sp, sin(a) * sp * 0.45,
+                      60 + vsp_frand() * (kind == 2 ? 100 : 60), -400, 0.3, 1.2 + vsp_frand() * 0.8, 0,
+                      550 + rand() % 350, 140 + rand() % 50, 185 + rand() % 45, 255, 5, 215);
+        }
+        for (k = 0; k < 4; k++) /* glints on it */
+            vsp_spawn(x, y, vsp_frand() * 16 - 8, vsp_frand() * 8 - 4, 30 + vsp_frand() * 20, 0, 0, 10, 0, 0.3, 1.2,
+                      0, 500 + rand() % 300, 210, 235, 255, 4, 230);
+        vdr_wave(x, y, 0.4f, 120, 175, 255, 520);
+        if (kind == 2)
+            vdr_wave(x, y, 0.75f, 100, 160, 255, 700);
+        vsp_spawn(x, y, 0, 0, 22, 0, 0, 6, 0, 0.3, 6, 10, 800, 150, 195, 255, 1, 34); /* a breath of mist */
+        break;
+    case 3: /* the tap runs */
+        for (k = 0; k < 9; k++)
+            vsp_spawn(x, y, vsp_frand() * 4 - 2, vsp_frand() * 2 - 1, 36 + vsp_frand() * 6, vsp_frand() * 10 - 5,
+                      vsp_frand() * 4 - 2, -20 - vsp_frand() * 30, -420, 0.2, 1.1, 0, 300 + k * 60, 150, 195, 255, 5,
+                      210);
+        vdr_wave(x, y, 0.3f, 120, 175, 255, 420);
+        break;
+    case 4: /* amber */
+    case 7: { /* hallucinating: any colour at all */
+        const Uint8 *c = kind == 4 ? amber : hal[rand() % 6];
+
+        vl_flash(x, y, c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f, 0.85f, 2.6f, 520);
+        for (k = 0; k < 14; k++) {
+            double a = vsp_frand() * 6.2832, r = vsp_frand() * 14;
+
+            vsp_spawn(x, y, cos(a) * r, sin(a) * r * 0.5, 14 + vsp_frand() * 10, cos(a) * 12, sin(a) * 6,
+                      30 + vsp_frand() * 40, 0, 0.6, 1.3, 0, 700 + rand() % 400, c[0], c[1], c[2], 4, 255);
+        }
+        vsp_spawn(x, y, 0, 0, 18, 0, 0, 10, 0, 0.3, 8, 22, 500, c[0], c[1], c[2], 1, 110);
+        vdr_wave(x, y, 0.7f, c[0], c[1], c[2], 480);
+        break;
+    }
+    case 5: /* black: darkness puffs out of it */
+        for (k = 0; k < 12; k++) {
+            double a = vsp_frand() * 6.2832, sp = 20 + vsp_frand() * 40;
+
+            vsp_spawn(x, y, 0, 0, 16 + vsp_frand() * 8, cos(a) * sp, sin(a) * sp * 0.5, 14 + vsp_frand() * 20, 0,
+                      1.0, 5, 14, 700 + rand() % 300, 0, 0, 0, 2, 150);
+        }
+        vsp_spawn(x, y, 0, 0, 16, 0, 0, 0, 0, 0.5, 10, 36, 450, 0, 0, 0, 2, 170);
+        break;
+    case 6: /* it lands: a little dust */
+        for (k = 0; k < 3; k++)
+            vsp_spawn(x, y, vsp_frand() * 12 - 6, vsp_frand() * 6 - 3, 16, vsp_frand() * 16 - 8, vsp_frand() * 8 - 4,
+                      8, 0, 0.8, 3, 8, 600, 160, 150, 135, 3, 70);
+        break;
+    case 8: /* a throne: a golden shimmer */
+        vl_flash(x, y, 1.0f, 0.84f, 0.45f, 0.5f, 2.2f, 650);
+        for (k = 0; k < 16; k++) {
+            double a = vsp_frand() * 6.2832, r = 6 + vsp_frand() * 16;
+
+            vsp_spawn(x, y, cos(a) * r, sin(a) * r * 0.5, 8 + vsp_frand() * 50, 0, 0, 14 + vsp_frand() * 24, 0, 0.5,
+                      1.3, 0, 800 + rand() % 500, 255, 215 + rand() % 30, 110 + rand() % 60, 4, 240);
+        }
+        vsp_spawn(x, y, 0, 0, 28, 0, 0, 6, 0, 0.3, 9, 14, 700, 255, 210, 120, 1, 70);
+        break;
+    case 9: /* a lid lifts: dust */
+        for (k = 0; k < 4; k++)
+            vsp_spawn(x, y, vsp_frand() * 14 - 7, vsp_frand() * 6 - 3, 14 + vsp_frand() * 6, vsp_frand() * 14 - 7,
+                      vsp_frand() * 6 - 3, 14 + vsp_frand() * 10, 0, 0.8, 3.5, 10, 700 + rand() % 300, 165, 150,
+                      125, 3, 80);
+        for (k = 0; k < 6; k++)
+            vsp_spawn(x, y, vsp_frand() * 16 - 8, vsp_frand() * 8 - 4, 16, vsp_frand() * 24 - 12,
+                      vsp_frand() * 12 - 6, 30 + vsp_frand() * 30, -200, 0.6, 0.9, 0, 700 + rand() % 300, 190, 175,
+                      150, 5, 170);
+        break;
+    case 10: /* found: grit trickles down, dust, a glint */
+        for (k = 0; k < 14; k++)
+            vsp_spawn(x, y, vsp_frand() * 30 - 15, vsp_frand() * 12 - 6, 40 + vsp_frand() * 45,
+                      vsp_frand() * 10 - 5, vsp_frand() * 4 - 2, -vsp_frand() * 10, -300, 0.4,
+                      1.1 + vsp_frand() * 0.6, 0, 700 + rand() % 400, 170, 160, 145, 5, 210);
+        for (k = 0; k < 6; k++)
+            vsp_spawn(x, y, vsp_frand() * 28 - 14, vsp_frand() * 10 - 5, 20 + vsp_frand() * 40,
+                      vsp_frand() * 10 - 5, vsp_frand() * 4 - 2, 4, 0, 0.6, 4, 12, 900 + rand() % 400, 165, 155,
+                      140, 3, 80);
+        for (k = 0; k < 3; k++)
+            vsp_spawn(x, y, vsp_frand() * 20 - 10, vsp_frand() * 8 - 4, 30 + vsp_frand() * 30, 0, 0, 6, 0, 0.3,
+                      1.4, 0, 600, 255, 255, 240, 4, 255);
+        vl_flash(x, y, 0.95f, 0.95f, 1.0f, 0.3f, 1.4f, 320);
+        break;
+    default:
+        return;
+    }
+    vsp_live_t = SDL_GetTicks();
+}
+
+/* the overlay pass: swings that have run their course go; a shutting door's
+   slam raises its dust */
+static void
+vdr_tick(Uint32 now)
+{
+    size_t k, n = 0;
+
+    if (!on_level(&vdr_lev, &u.uz)) {
+        vdr_lev = u.uz;
+        vdr_anims.clear();
+    }
+    for (k = 0; k < vdr_anims.size(); k++) {
+        vdr_anim_t a = vdr_anims[k];
+        double t = vdr_freeze >= 0.0 ? vdr_freeze : (double) (now - a.t0) / a.dur;
+
+        if (a.kind == 2 && !a.fx && t >= 0.78) {
+            a.fx = true;
+            vdr_dust(a.x, a.y, a.to, 7);
+        }
+        if (t >= 1.0 && vdr_freeze < 0.0)
+            continue;
+        vdr_anims[n++] = a;
+    }
+    vdr_anims.resize(n);
+    if (n)
+        vsp_live_t = now; /* frames keep coming */
+}
+
+/* probe: s203 - VULTURE_SELFTEST_DOOR: the nearest door (then one with the
+   other art) opened, shut, smashed and conjured back as the core would set
+   it, the swings shot held at set points; then each world effect */
+static Uint32 vdr_probe_t = 0;
+static int vdr_probe_n = 0, vdr_probe_sub = 0, vdr_probe_shots = 0, vdr_probe_dx = 0, vdr_probe_dy = 0;
+static int vdr_probe_art = -1;
+
+static void
+vdr_probe_shot(const char *tag)
+{
+    const char *dir = getenv("VULTURE_SELFTEST");
+    char p[700];
+    SDL_Surface *o;
+    SDL_Rect a;
+    int hx, hy, ex, ey;
+
+    if (!dir || vdr_probe_shots >= 70 || !vulture_screen || vulture_screen->w < 960 || vulture_screen->h < 540)
+        return;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    vsp_screen(u.ux, u.uy, &hx, &hy);
+    vsp_screen(vdr_probe_dx ? vdr_probe_dx : u.ux, vdr_probe_dx ? vdr_probe_dy : u.uy, &ex, &ey);
+    a.w = 480, a.h = 320, a.x = (hx + ex) / 2 - 240, a.y = (hy + ey) / 2 - 200;
+    a.x = a.x < 0 ? 0 : a.x + a.w > vulture_screen->w ? vulture_screen->w - a.w : a.x;
+    a.y = a.y < 0 ? 0 : a.y + a.h > vulture_screen->h ? vulture_screen->h - a.h : a.y;
+    if (!(o = SDL_CreateRGBSurfaceWithFormat(0, a.w, a.h, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return;
+    snprintf(p, sizeof p, "%s\\door%02d_%s_%02d.bmp", dir, vdr_probe_n, tag, vdr_probe_shots++);
+    if (vulture_frame_to_surface(o, &a))
+        SDL_SaveBMP(o, p);
+    SDL_FreeSurface(o);
+}
+
+/* the nearest door with a room floor square beside it (other: one whose
+   art lies the other way); you are put on that square */
+static bool
+vdr_probe_pick(bool other)
+{
+    static const int ox4[4] = { 1, -1, 0, 0 }, oy4[4] = { 0, 0, 1, -1 };
+    int x, y, k, best = 9999, bx = 0, by = 0, bfx = 0, bfy = 0;
+
+    for (x = 1; x < COLNO; x++)
+        for (y = 0; y < ROWNO; y++) {
+            if (levl[x][y].typ != DOOR
+                || (other && ((int) levl[x][y].horizontal == vdr_probe_art || (x == vdr_probe_dx && y == vdr_probe_dy))))
+                continue;
+            for (k = 0; k < 4; k++) {
+                int fx = x + ox4[k], fy = y + oy4[k], d;
+
+                if (!isok(fx, fy) || levl[fx][fy].typ != ROOM || m_at(fx, fy) || t_at(fx, fy))
+                    continue;
+                d = distmin(u.ux, u.uy, fx, fy);
+                if (d < best)
+                    best = d, bx = x, by = y, bfx = fx, bfy = fy;
+            }
+        }
+    if (best == 9999)
+        return false;
+    vdr_probe_dx = bx, vdr_probe_dy = by, vdr_probe_art = (int) levl[bx][by].horizontal;
+    if (bfx != u.ux || bfy != u.uy)
+        teleds(bfx, bfy, TELEDS_NO_FLAGS);
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "door probe: door %d,%d (%s), you at %d,%d\n", bx, by,
+                      vdr_probe_art ? "horizontal" : "vertical", u.ux, u.uy);
+    return true;
+}
+
+static void
+vdr_probe_set(int mask) /* the probe door's state, as the core sets it */
+{
+    levl[vdr_probe_dx][vdr_probe_dy].doormask = mask;
+    recalc_block_point(vdr_probe_dx, vdr_probe_dy);
+    gv.vision_full_recalc = 1;
+    newsym(vdr_probe_dx, vdr_probe_dy);
+    flush_screen(1);
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "door probe: mask %d, %d swinging\n", mask,
+                      (int) vdr_anims.size());
+}
+
+static void
+vdr_probe_tick(Uint32 now)
+{
+    static const double hold[2][5] = { { 0.12, 0.3, 0.5, 0.7, 0.88 }, { 0.12, 0.35, 0.6, 0.8, 0.9 } };
+    static const int live[2][5] = { { 30, 120, 260, 430, 720 }, { 100, 260, 420, 600, 800 } };
+    int step = vdr_probe_n;
+
+    if (vdr_probe_sub > 0) { /* this step's frames */
+        int s = vdr_probe_sub - 1;
+
+        if (step == 1 || step == 2 || step == 6 || step == 7) { /* the swing, held */
+            vdr_freeze = hold[step == 2 || step == 7][s];
+            vdr_probe_shot(step == 1 || step == 6 ? "open" : "shut");
+            if (++vdr_probe_sub > 5)
+                vdr_freeze = -1.0, vdr_probe_sub = 0, vdr_probe_n++, vdr_probe_t = now;
+            return;
+        }
+        if (step == 3 || step == 4) {
+            if (now - vdr_probe_t < (Uint32) live[step == 4][s])
+                return;
+            vdr_probe_shot(step == 3 ? "smash" : "conjure");
+            if (++vdr_probe_sub > 5)
+                vdr_probe_sub = 0, vdr_probe_n++, vdr_probe_t = now;
+            return;
+        }
+        if (now - vdr_probe_t < (Uint32) (s == 0 ? 90 : 330))
+            return;
+        vdr_probe_shot("world");
+        if (++vdr_probe_sub > 2)
+            vdr_probe_sub = 0, vdr_probe_n++, vdr_probe_t = now;
+        return;
+    }
+    if (now - vdr_probe_t < 650)
+        return;
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "door probe %d\n", step);
+    switch (step) {
+    case 0:
+    case 5: /* a door, you beside it, shut */
+        if (!vdr_probe_pick(step == 5)) {
+            vdr_probe_n = 8, vdr_probe_t = now;
+            return;
+        }
+        vdr_probe_set(D_CLOSED);
+        vdr_probe_n++, vdr_probe_t = SDL_GetTicks();
+        return;
+    case 1:
+    case 6:
+        vdr_probe_set(D_ISOPEN);
+        break;
+    case 2:
+    case 4:
+    case 7:
+        vdr_probe_set(D_CLOSED);
+        break;
+    case 3:
+        vdr_probe_set(D_BROKEN);
+        break;
+    default:
+        if (step >= 8 && step <= 17) {
+            int k = step - 7, wx = u.ux, wy = u.uy;
+
+            if (k == 10 && vdr_probe_dx)
+                wx = vdr_probe_dx, wy = vdr_probe_dy;
+            vulture_world_fx(wx, wy, k);
+            break;
+        }
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "door probe: done, %d shots\n", vdr_probe_shots);
+        vdr_probe_t = 0;
+        return;
+    }
+    vdr_probe_sub = 1, vdr_probe_t = SDL_GetTicks();
+}
+
 /* the overlay pass, after vfx_draw */
 static void
 vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
@@ -4823,6 +5662,7 @@ vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
             }
     if (vsp_on_count < 0)
         vsp_on_count = 0;
+    vdr_tick(now); /* s203 */
     vsp_draw_waves(now);
     vsp_draw_parts(now, t, dt);
     vfl_draw(now);    /* s202 */
@@ -5299,6 +6139,8 @@ vulture_idle_bob(bool at_map)
         vsp_probe_tick(now);
     if (vimp_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s202 */
         vimp_probe_tick(now);
+    if (vdr_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s203 */
+        vdr_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -8538,6 +9380,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_IMPACT")) { /* probe: s202 blows, a flight, a shatter */
             vimp_probe_t = SDL_GetTicks(), vimp_probe_n = 0, vimp_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
+            vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_ITEM")) { /* probe: s136 pulse + glint */
@@ -14413,10 +15259,14 @@ levelwin::draw()
             /* shortcut for unmapped case */
             if (map_back != V_MISC_UNMAPPED_AREA || map_obj != V_TILE_NONE) {
                 /* 2. Furniture (s62: a quarter turn swaps the door
-                   arch art between the two wall directions) */
-                vulture_put_tile(x, y,
-                                 v_rot_door(map_data->get_glyph(
-                                     MAP_FURNITURE, j, i)));
+                   arch art between the two wall directions; s203: a door
+                   part way through a swing is drawn by vdr_draw) */
+                {
+                    int furn = map_data->get_glyph(MAP_FURNITURE, j, i);
+
+                    if (!vdr_draw(x, y, j, i, furn))
+                        vulture_put_tile(x, y, v_rot_door(furn));
+                }
 
                 /* s93: blood stains on the floor */
                 vst_draw(j, i, x, y);

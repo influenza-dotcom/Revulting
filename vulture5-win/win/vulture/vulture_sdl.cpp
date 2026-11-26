@@ -446,6 +446,8 @@ struct vgm_hdkey {   /* where a surface's HD art comes from */
 	bool flip;       /* mirrored */
 	int rgb;         /* colour scale, of 256 (a shaded copy) */
 	int alpha;       /* alpha scale, of 256 (see-through walls, the invisible hero) */
+	SDL_Surface *cut; /* s203: kept only where this 1x mask is opaque - or, cutout, clear */
+	bool cutout;
 };
 static std::unordered_map<SDL_Surface *, vgm_hdkey> vgm_hd_src;
 static std::unordered_map<std::string, SDL_Texture *> vgm_hd_cache; /* by vgm_hd_name */
@@ -819,7 +821,7 @@ static std::string vgm_hd_name(const vgm_hdkey &k)
 {
 	char b[48];
 
-	snprintf(b, sizeof b, "|%d|%d|%d", (int) k.flip, k.rgb, k.alpha);
+	snprintf(b, sizeof b, "|%d|%d|%d|%p%c", (int) k.flip, k.rgb, k.alpha, (void *) k.cut, k.cutout ? 'o' : 'i');
 	return k.path + b;
 }
 
@@ -896,6 +898,17 @@ static SDL_Texture *vgm_hd_texture(SDL_Surface *s)
 						| (G > 255 ? 255 : G) << 8 | (B > 255 ? 255 : B);
 				}
 		}
+		if (k.cut && k.cut->w * 2 == c->w && k.cut->h * 2 == c->h && SDL_LockSurface(k.cut) == 0) {
+			for (y = 0; y < c->h; y++) { /* s203: a part of the art (a door's arch, its panel) */
+				Uint32 *row = (Uint32 *) ((Uint8 *) c->pixels + (size_t) y * c->pitch);
+				const Uint32 *m = (const Uint32 *) ((const Uint8 *) k.cut->pixels + (size_t) (y / 2) * k.cut->pitch);
+
+				for (x = 0; x < c->w; x++)
+					if ((m[x / 2] >> 24) ? k.cutout : !k.cutout)
+						row[x] = 0;
+			}
+			SDL_UnlockSurface(k.cut);
+		}
 		vgm_dilate(c);
 		SDL_UnlockSurface(c);
 	}
@@ -924,6 +937,7 @@ void vulture_gpu_hd_register(SDL_Surface *s, const char *file_1x, double alpha)
 		return;
 	k.path = f.substr(0, p) + "tiles_hd/" + f.substr(p + 6);
 	k.flip = false, k.rgb = 256, k.alpha = (int) (alpha * 256.0 + 0.5);
+	k.cut = NULL, k.cutout = false;
 	vgm_hd_src[s] = k;
 	if (vgm_hd_state < 0) { /* is the HD art installed at all? */
 		FILE *fp = fopen(k.path.c_str(), "rb");
@@ -950,6 +964,21 @@ void vulture_gpu_hd_derive(SDL_Surface *copy, SDL_Surface *orig, bool flip, int 
 	k.flip = k.flip != flip;
 	k.rgb = k.rgb * rgb / 256;
 	k.alpha = k.alpha * alpha / 256;
+	vgm_hd_src[copy] = k;
+}
+
+/* s203: a copy holding part of a registered surface's art - where the 1x
+   mask (ARGB, its size) is opaque, or with outside where it is clear -
+   uses that part of its HD art */
+void vulture_gpu_hd_derive_cut(SDL_Surface *copy, SDL_Surface *orig, SDL_Surface *mask, bool outside)
+{
+	std::unordered_map<SDL_Surface *, vgm_hdkey>::iterator it = vgm_hd_src.find(orig);
+	vgm_hdkey k;
+
+	if (!copy || !mask || it == vgm_hd_src.end())
+		return;
+	k = it->second;
+	k.cut = mask, k.cutout = outside;
 	vgm_hd_src[copy] = k;
 }
 
@@ -1606,6 +1635,46 @@ bool vulture_gpumap_shadow(SDL_Surface *s, const float *quad, const Uint8 *a4)
 
 		if (ht)
 			t = ht;
+	}
+	SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+	SDL_SetTextureColorMod(t, 255, 255, 255);
+	SDL_SetTextureAlphaMod(t, 255);
+	SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+	return SDL_RenderGeometry(vulture_gpu, t, v, 4, idx, 6) == 0;
+}
+
+/* s203: src of a surface (NULL: all of it) laid on the map layer as a quad
+   - quad: the screen corners of src's top-left, top-right, bottom-right
+   and bottom-left (a door leaf turning on its hinge) - shaded (rgb of 255)
+   and faded */
+bool vulture_gpumap_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad, int shade, int alpha)
+{
+	static const int idx[6] = { 0, 1, 2, 0, 2, 3 };
+	SDL_Vertex v[4];
+	SDL_Texture *t;
+	float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+	Uint8 sh = (Uint8) (shade < 0 ? 0 : shade > 255 ? 255 : shade);
+	Uint8 al = (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha);
+	int k;
+
+	if (!vulture_gpumap_on || !s || !(t = vgm_texture(s)))
+		return false;
+	if (vgm_view) { /* s201: the HD art, if there is some */
+		SDL_Texture *ht = vgm_hd_texture(s);
+
+		if (ht)
+			t = ht;
+	}
+	if (src && s->w > 0 && s->h > 0) {
+		u0 = (float) src->x / s->w, v0 = (float) src->y / s->h;
+		u1 = (float) (src->x + src->w) / s->w, v1 = (float) (src->y + src->h) / s->h;
+	}
+	for (k = 0; k < 4; k++) {
+		v[k].position.x = vgm_view ? vgm_vx(quad[2 * k]) : quad[2 * k];
+		v[k].position.y = vgm_view ? vgm_vy(quad[2 * k + 1]) : quad[2 * k + 1];
+		v[k].color.r = v[k].color.g = v[k].color.b = sh, v[k].color.a = al;
+		v[k].tex_coord.x = (k == 1 || k == 2) ? u1 : u0;
+		v[k].tex_coord.y = k >= 2 ? v1 : v0;
 	}
 	SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
 	SDL_SetTextureColorMod(t, 255, 255, 255);

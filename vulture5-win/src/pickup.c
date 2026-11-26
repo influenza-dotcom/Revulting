@@ -3164,6 +3164,8 @@ use_container(
     }
 
     gc.current_container = obj; /* for use by in/out_container */
+    if (!held && obj->where == OBJ_FLOOR) /* Vulture s203: the lid lifts */
+        vulture_world_fx(obj->ox, obj->oy, 9);
     /*
      * From here on out, all early returns go through 'containerdone:'.
      */

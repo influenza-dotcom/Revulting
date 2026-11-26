@@ -378,12 +378,18 @@ doaltarobj(struct obj *obj)
     }
 
     if (obj->blessed || obj->cursed) {
+        /* Vulture s203: the flash, where it lands (a monster's drop: bhitpos) */
+        vulture_world_fx(svc.context.mon_moving ? gb.bhitpos.x : u.ux,
+                         svc.context.mon_moving ? gb.bhitpos.y : u.uy,
+                         Hallucination ? 7 : obj->blessed ? 4 : 5);
         There("is %s flash as %s %s the altar.",
               an(hcolor(obj->blessed ? NH_AMBER : NH_BLACK)), doname(obj),
               otense(obj, "hit"));
         if (!Hallucination)
             obj->bknown = 1; /* ok to bypass set_bknown() */
     } else {
+        vulture_world_fx(svc.context.mon_moving ? gb.bhitpos.x : u.ux,
+                         svc.context.mon_moving ? gb.bhitpos.y : u.uy, 6); /* Vulture s203 */
         pline("%s %s on the altar.", Doname2(obj), otense(obj, "land"));
         if (obj->oclass != COIN_CLASS)
             obj->bknown = 1; /* ok to bypass set_bknown() */

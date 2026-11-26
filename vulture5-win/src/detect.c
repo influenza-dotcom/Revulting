@@ -2052,6 +2052,7 @@ dosearch0(int aflag) /* intrinsic autosearch vs explicit searching */
                     nomul(0);
                     feel_location(x, y); /* make sure it shows up */
                     set_msg_xy(x, y);
+                    vulture_world_fx(x, y, 10); /* Vulture s203 */
                     You("find a hidden door.");
                 } else if (levl[x][y].typ == SCORR) {
                     if (rnl(7 - fund))
@@ -2062,6 +2063,7 @@ dosearch0(int aflag) /* intrinsic autosearch vs explicit searching */
                     nomul(0);
                     feel_newsym(x, y); /* make sure it shows up */
                     set_msg_xy(x, y);
+                    vulture_world_fx(x, y, 10); /* Vulture s203 */
                     You("find a hidden passage.");
                 } else {
                     /* Be careful not to find anything in an SCORR or SDOOR */

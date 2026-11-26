@@ -250,6 +250,7 @@ drinkfountain(void)
         floating_above("fountain");
         return;
     }
+    vulture_world_fx(u.ux, u.uy, 1); /* Vulture s203: water wells up */
 
     if (mgkftn && u.uluck >= 0 && fate >= 10) {
         int i, ii, littleluck = (u.uluck < 4);
@@ -400,6 +401,7 @@ dipfountain(struct obj *obj)
         floating_above("fountain");
         return;
     }
+    vulture_world_fx(u.ux, u.uy, 2); /* Vulture s203: a splash */
 
     if (obj->otyp == LONG_SWORD && u.ulevel >= 5
         && !rn2(Role_if(PM_KNIGHT) ? 6 : 30)
@@ -601,6 +603,7 @@ drinksink(void)
         floating_above("sink");
         return;
     }
+    vulture_world_fx(u.ux, u.uy, 3); /* Vulture s203: the tap runs */
     switch (rn2(20)) {
     case 0:
         You("take a sip of very cold %s.", hliquid("water"));
@@ -719,6 +722,7 @@ dipsink(struct obj *obj)
             not_looted_yet = (levl[u.ux][u.uy].looted & S_LRING) == 0,
             is_hands = (obj == &hands_obj || (uarmg && obj == uarmg));
 
+    vulture_world_fx(u.ux, u.uy, 3); /* Vulture s203: the tap runs */
     if (!rn2(not_looted_yet ? 25 : 15)) {
         /* can't rely on using sink for unlimited scroll blanking; however,
            since sink will be converted into a fountain, hero can dip again */

@@ -555,6 +555,7 @@ dosit(void)
         You(sit_message, "drawbridge");
     } else if (IS_THRONE(typ)) {
         You(sit_message, defsyms[S_throne].explanation);
+        vulture_world_fx(u.ux, u.uy, 8); /* Vulture s203: a golden shimmer */
         throne_sit_effect();
     } else if (lays_eggs(gy.youmonst.data)) {
         return lay_an_egg();

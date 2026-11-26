@@ -399,6 +399,7 @@ mapdata::set_tileidx(int x, int y, short tileidx, short bktileidx)
 }
 
 extern void vsp_glyph(int x, int y, int glyph); /* s198: levelwin.cpp */
+extern void vdr_furniture(int x, int y, int from, int to); /* s203: levelwin.cpp */
 
 void
 mapdata::set_glyph(int x, int y, int glyph)
@@ -793,6 +794,8 @@ mapdata::set_glyph(int x, int y, int glyph)
     set_map_data(MAP_OBJ, x, y, map_obj, force_update);
     set_map_data(MAP_TRAP, x, y, map_trap, force_update);
     set_map_data(MAP_SPECIAL, x, y, map_special, force_update);
+    if (map_furniture != this->map_furniture[y][x]) /* s203: a door swings, breaks, appears */
+        vdr_furniture(x, y, this->map_furniture[y][x], map_furniture);
     set_map_data(MAP_FURNITURE, x, y, map_furniture, force_update);
     set_map_data(MAP_BACK, x, y, map_back, force_update);
     set_map_data(MAP_DARKNESS, x, y, darkness, force_update);

@@ -4322,6 +4322,59 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   killing blow, two bites back, a dagger flown into a wall through tmp_at,
   a potion shattering - each shot as it plays.
 
+### 203. Doors swing; using things in the world shows
+
+- The user: "add special effects for when you use objects in the game world
+  such as doors, im thinking you could do simple inbetweens with code for
+  things like doors".  A door popped from one sprite to the other.
+- levelwin.cpp "s203" (vdr_*):
+  - The closed door art is split once, at runtime, into its stone arch and
+    its wooden panel (vdr_split: red well above blue = wood; a 5x5 majority
+    over the opaque pixels removes the speckle of the rendered stone; only
+    blobs of 150+ pixels count).  Both door arts are double doors whose
+    leaves open AWAY from the viewer (the open art shows them so), so each
+    half of the panel turns 90 degrees about its own pillar on the
+    isometric floor.  In an orthographic iso view that is an affine map -
+    every column slides along the turned direction and keeps its height -
+    so each leaf is one textured quad (vulture_gpumap_quad, SDL_RenderGeometry;
+    2 px strips in software).  The floor slope is V_MAP_YMOD / V_MAP_XMOD
+    (22/56), not 2:1.
+  - Opening: an ease-out with a 6% overshoot (it swings a touch past and
+    settles), the open art fading in over the last 30%, the leaves fading
+    out under it at the end.  Shutting: the open art fades out, the leaves
+    gather speed shut, rebound 6 degrees, and a puff of dust rises along the
+    sill.  Smashed in (closed -> broken): it shudders, splinters fly the way
+    it falls, it topples away from you (or toward the viewer if you stand
+    behind it) and fades, the arch with it (the broken art has none), the
+    planks fading in.  Conjured (broken -> closed, a locking spell on an
+    empty doorway): dust gathers in and the door rises out of it.
+  - The hook: mapdata::set_glyph calls vdr_furniture when a square's
+    furniture tile changes; only door-to-door changes in sight animate (a
+    door simply coming into view does not).  vdr_draw replaces the tile at
+    the map's furniture step, so walls and creatures in front still cover it.
+  - Zoomed in, the arch and the panel use the HD art cut the same way
+    (vulture_gpu_hd_derive_cut: the arch keeps everything outside the panel
+    mask, so the two add up to the whole HD door - no pop at either end).
+    The arch's normal map, minus the panel, goes to the light layer.
+- vulture_world_fx (from the core): a fountain drunk from or dipped into
+  (water wells up, ripples, glints), a sink's tap, an altar's amber or black
+  flash where the message says one (a random colour while hallucinating -
+  the message's colour is random then too), a thing landing on an altar
+  (dust), a throne sat on (a golden shimmer), a chest or box opened on the
+  floor (dust off the lid), a hidden door or passage found by searching
+  (grit trickling down, a glint).
+- The split's membership test also drops the H art's lit inner bevel that
+  the smoothing took in (wood must be warm FOR ITS BRIGHTNESS - (r-b) at
+  least 18% of r - or dark, a plank seam): without it a ragged notch opened
+  in the arch while the panel was away.
+- Waves (s198/s202 rings): one blooms from dim (alpha ramps up to 30 px
+  across) and a small one uses fewer dots (about one per 4 px of its
+  circumference) - they used to pile up into a white-hot disc at the start.
+  Big explosion rings are unchanged.
+- Probe VULTURE_SELFTEST_DOOR: the nearest door, then one with the other
+  art, opened / shut / smashed / conjured as the core would set it, the
+  swings shot held at set points (vdr_freeze); then each world effect.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
