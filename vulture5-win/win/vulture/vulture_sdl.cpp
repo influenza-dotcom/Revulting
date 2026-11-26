@@ -273,7 +273,9 @@ void vulture_wait_input(SDL_Event * event, int wait_timeout)
 			continue;
 		}
 #else
-		if (!SDL_WaitEvent(event))
+		if (vte_stashed) /* s196: a key or click held back behind a middle-drag (s186) */
+			*event = vte_stash, vte_stashed = 0;
+		else if (!SDL_WaitEvent(event))
 			continue;
 #endif
 
@@ -312,7 +314,9 @@ void vulture_wait_key(SDL_Event * event)
 			continue;
 		}
 #else
-		if (!SDL_WaitEvent(event))
+		if (vte_stashed) /* s196: as in vulture_wait_input */
+			*event = vte_stash, vte_stashed = 0;
+		else if (!SDL_WaitEvent(event))
 			continue;
 #endif
 
@@ -759,6 +763,48 @@ static SDL_Texture *vgm_texture(SDL_Surface *s)
 	return t;
 }
 
+/*
+ * IMPLEMENTATION_LOG s196: the window is made for OpenGL from the start.
+ * Lighting draws with SDL's OpenGL renderer, and SDL puts that only on a
+ * window made for it: on any other it hides the window, destroys it and
+ * makes a new one (SDL_RecreateWindow).  With lighting on that happened as
+ * every game started - for about 0.2 s the game had no window, Windows gave
+ * the keyboard to another program, and it doesn't hand it back to a window
+ * that appears afterwards - so keys went to whatever was behind and the menus
+ * wouldn't open until an alt-tab.  Direct3D draws on such a window as well.
+ */
+static bool vgpu_gl_allowed(void)
+{
+	return vulture_opts.gpu && !getenv("VULTURE_GPU_SOFT") && !getenv("SDL_RENDER_DRIVER")
+		&& !getenv("VULTURE_NO_GL");
+}
+
+/* the OpenGL renderer can go on this window without SDL remaking it */
+static bool vgpu_window_gl(void)
+{
+	return vulture_sdl_window && (SDL_GetWindowFlags(vulture_sdl_window) & SDL_WINDOW_OPENGL);
+}
+
+static SDL_Window *vgpu_create_window(int w, int h, Uint32 flags)
+{
+	SDL_Window *win = NULL;
+
+	if (vgpu_gl_allowed()) {
+		win = SDL_CreateWindow("Vulture NetHack", SDL_WINDOWPOS_UNDEFINED,
+			SDL_WINDOWPOS_UNDEFINED, w, h, flags | SDL_WINDOW_OPENGL);
+		if (!win) /* no OpenGL here: a plain window, lighting in software */
+			vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+				"gpu: no window for OpenGL (%s) - lighting will run in software\n", SDL_GetError());
+	}
+	if (!win)
+		win = SDL_CreateWindow("Vulture NetHack", SDL_WINDOWPOS_UNDEFINED,
+			SDL_WINDOWPOS_UNDEFINED, w, h, flags);
+	if (win)
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "gpu: window %dx%d%s\n", w, h,
+			(SDL_GetWindowFlags(win) & SDL_WINDOW_OPENGL) ? ", made for OpenGL" : "");
+	return win;
+}
+
 static bool vgpu_reattach(int want)
 {
 	int ow = 0, oh = 0, rw, rh;
@@ -773,8 +819,7 @@ static bool vgpu_reattach(int want)
 		Uint32 fl = getenv("VULTURE_GPU_SOFT") ? SDL_RENDERER_SOFTWARE : SDL_RENDERER_ACCELERATED;
 		/* s185: OpenGL while lit - its textures can be lent to the lighting
 		   shader; SDL's choice otherwise (Direct3D presents ~6 ms faster) */
-		bool gl = vgpu_gl_wanted && !getenv("VULTURE_GPU_SOFT") && !getenv("SDL_RENDER_DRIVER")
-			&& !getenv("VULTURE_NO_GL");
+		bool gl = vgpu_gl_wanted && vgpu_gl_allowed() && vgpu_window_gl(); /* s196 */
 
 		if (gl)
 			SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
@@ -1483,6 +1528,15 @@ void vulture_gpu_use_gl(bool on)
 	if (!vulture_gpu || getenv("VULTURE_GPU_SOFT") || getenv("SDL_RENDER_DRIVER")
 	    || getenv("VULTURE_NO_GL"))
 		return;
+	if (on && !vgpu_window_gl()) { /* s196: SDL would remake the window (and lose the keys) */
+		static bool told = false;
+
+		if (!told)
+			vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__,
+				"gpu: the window isn't made for OpenGL - lighting stays in software\n");
+		told = true;
+		return;
+	}
 	is_gl = SDL_GetRendererInfo(vulture_gpu, &ri) == 0 && !strcmp(ri.name, "opengl");
 	if (is_gl == on)
 		return;
@@ -2039,9 +2093,8 @@ static void vulture_set_fullscreen(void)
 		SDL_SetWindowFullscreen(vulture_sdl_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
 		vulture_reattach_render_surface();
 	} else {
-		vulture_sdl_window = SDL_CreateWindow("Vulture NetHack",
-			SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-			newwidth, newheight, SDL_WINDOW_FULLSCREEN_DESKTOP);
+		vulture_sdl_window = vgpu_create_window(newwidth, newheight,
+			SDL_WINDOW_FULLSCREEN_DESKTOP); /* s196 */
 		if (vulture_sdl_window)
 			vulture_reattach_render_surface();
 	}
@@ -2063,10 +2116,9 @@ static void vulture_set_windowed()
 		SDL_SetWindowSize(vulture_sdl_window, vulture_opts.width, vulture_opts.height);
 		vulture_reattach_render_surface();
 	} else {
-		vulture_sdl_window = SDL_CreateWindow("Vulture NetHack",
-			SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-			vulture_opts.width, vulture_opts.height, SDL_WINDOW_RESIZABLE
-			| (getenv("VULTURE_HIDDEN_WINDOW") ? SDL_WINDOW_HIDDEN : 0)); /* s183: GPU probes */
+		vulture_sdl_window = vgpu_create_window(vulture_opts.width, vulture_opts.height,
+			SDL_WINDOW_RESIZABLE
+			| (getenv("VULTURE_HIDDEN_WINDOW") ? SDL_WINDOW_HIDDEN : 0)); /* s183: GPU probes; s196 */
 		if (vulture_sdl_window)
 			vulture_reattach_render_surface();
 	}
@@ -2438,10 +2490,8 @@ void vulture_enter_graphics_mode()
 	/* no screen: maybe the configured video mode didn't work */
 	if (!vulture_screen) {
 		vulture_sdl_error(__FILE__, __LINE__, "Failed to set configured video mode, trying to fall back to 800x600 windowed");
-		vulture_sdl_window = SDL_CreateWindow("Vulture NetHack",
-			SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-			800, 600, SDL_WINDOW_RESIZABLE
-			| (getenv("VULTURE_HIDDEN_WINDOW") ? SDL_WINDOW_HIDDEN : 0)); /* s183 */
+		vulture_sdl_window = vgpu_create_window(800, 600, SDL_WINDOW_RESIZABLE
+			| (getenv("VULTURE_HIDDEN_WINDOW") ? SDL_WINDOW_HIDDEN : 0)); /* s183; s196 */
 		if (vulture_sdl_window)
 			vulture_reattach_render_surface();
 		vulture_opts.fullscreen = 0;

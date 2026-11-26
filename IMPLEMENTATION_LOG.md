@@ -4041,6 +4041,37 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   keys.txt "E:eat"), then restores engrave and removes the file; started
   with a keys.txt of E:eat and ^E:engrave, the log shows both applied.
 
+### 196. Keys reach the game after the switch to OpenGL
+
+- The user: "i cant open menus without having to alt tab back into the game
+  first".
+- Cause: lighting runs on SDL's OpenGL renderer (s185), and with lighting on
+  (the default since s189) every game start swaps Direct3D for OpenGL.  SDL
+  puts the OpenGL renderer only on a window made for OpenGL; on any other it
+  hides the window, destroys it and makes a new one (SDL_RecreateWindow),
+  loading OpenGL in between.  For ~0.18 s the game had no window, Windows
+  gave the foreground to another program, and it doesn't hand the keyboard
+  to a window that appears afterwards (the foreground lock): keys went to
+  whatever was behind until an alt-tab.  Hover kept working (the mouse goes
+  to the window under it), so it looked like only the menus were broken.
+- Seen with a probe that watches the process's SDL_app windows (EnumWindows)
+  and the log line at each change: before, the game's window handle changed
+  inside the call that made the OpenGL renderer; after, one window lives
+  through the switch and back (the only short-lived windows are SDL's own
+  OpenGL setup windows, at start-up, before the game window exists).
+- Fix: the window is made with SDL_WINDOW_OPENGL from the start
+  (vgpu_create_window) - a plain one if that fails, or with gpu=0,
+  VULTURE_NO_GL, SDL_RENDER_DRIVER or VULTURE_GPU_SOFT.  Direct3D draws on it
+  as well: unlit presents measured the same (median 1.49 vs 1.47 ms against
+  a plain window, VULTURE_NO_GL).  The OpenGL renderer is never asked for on
+  a window not made for it (vgpu_window_gl): lighting stays in software
+  rather than SDL remaking the window.
+- Also: vulture_wait_input and vulture_wait_key wait on SDL directly, so
+  they skipped a key or click held back behind a middle-drag (s186's
+  vte_stash); they take it first now.
+- Probes: scratchpad window_watch.ps1 (hidden window; game windows seen,
+  when, and the log line at each change); PAN still 1 move of (300, 0).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
