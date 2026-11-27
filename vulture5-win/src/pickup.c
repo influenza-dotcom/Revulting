@@ -3164,8 +3164,10 @@ use_container(
     }
 
     gc.current_container = obj; /* for use by in/out_container */
-    if (!held && obj->where == OBJ_FLOOR) /* Vulture s203: the lid lifts */
+    if (!held && obj->where == OBJ_FLOOR) { /* Vulture s203, s207: the lid lifts */
         vulture_world_fx(obj->ox, obj->oy, 9);
+        vulture_lid(obj->ox, obj->oy, 1);
+    }
     /*
      * From here on out, all early returns go through 'containerdone:'.
      */
@@ -3359,6 +3361,7 @@ use_container(
     }
 
  containerdone:
+    vulture_lid(-1, -1, 0); /* Vulture s207: the lid swings shut */
     if (used) {
         /* Not completely correct; if we put something in without knowing
            whatever was already inside, now we suddenly do.  That can't

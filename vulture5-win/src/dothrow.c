@@ -1674,6 +1674,7 @@ throwit(
         if (Underwater)
             range = 1;
 
+        vulture_flight_range(range, ammo_and_launcher(obj, uwep), u.ux, u.uy); /* Vulture s207 */
         mon = bhit(u.dx, u.dy, range,
                    tethered_weapon ? THROWN_TETHERED_WEAPON : THROWN_WEAPON,
                    (int (*)(MONST_P, OBJ_P)) 0,
@@ -2708,6 +2709,7 @@ throw_gold(struct obj *obj)
             gb.bhitpos.x = u.ux;
             gb.bhitpos.y = u.uy;
         } else {
+            vulture_flight_range(range, 0, u.ux, u.uy); /* Vulture s207 */
             mon = bhit(u.dx, u.dy, range, THROWN_WEAPON,
                        (int (*)(MONST_P, OBJ_P)) 0,
                        (int (*)(OBJ_P, OBJ_P)) 0, &obj);

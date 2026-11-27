@@ -908,6 +908,8 @@ static bool vdth_draw(int j, int i, int x, int y);                              
 static int vdth_object_alpha(int j, int i);                                     /* s204 */
 static bool vbr_draw(int j, int i, int x, int y, int tile_id);                  /* s204 */
 static bool vbr_offset(int j, int i, int *ox, int *oy);                         /* s204 */
+static bool vlid_draw(int j, int i, int x, int y, int tile_id);                 /* s207 */
+static bool vfl_hides(int j, int i, int tile_id);                               /* s207 */
 static int vanim_ax, vanim_ay, vanim_tx, vanim_ty;
 static double vanim_t = 0.0;
 struct vanim_death {
@@ -1127,6 +1129,10 @@ vanim_draw_object(int j, int i, int x, int y, int tile_id)
     int ha;
 
     if (vbr_draw(j, i, x, y, tile_id)) /* s204: a boulder rolling in */
+        return;
+    if (vlid_draw(j, i, x, y, tile_id)) /* s207: a lid up */
+        return;
+    if (vfl_hides(j, i, tile_id)) /* s207: in flight - drawn in the air by vfl_draw */
         return;
     ha = vdth_object_alpha(j, i); /* s204: a corpse waits for its body to land */
     if (ha < 255) {
@@ -4165,6 +4171,11 @@ struct vfl_pt_t {
 static std::vector<vfl_pt_t> vfl_pts; /* the flight in the air, or just over */
 static bool vfl_on = false;
 static int vfl_style = VIMP_GENERIC, vfl_mat = 0; /* 0 other, 1 metal, 2 wood, 3 stone, 4 glass */
+/* s207: the arc - the range it was given, its height, whether fired from a
+   launcher (flat), the thrower's square (-1: not told), the thing's tile */
+static int vfl_next_range = 0, vfl_next_fired = 0, vfl_next_sx = -1, vfl_next_sy = -1;
+static double vfl_arc_r = 6.0, vfl_arc_h = 20.0, vfl_step_ms = 45.0;
+static int vfl_fired = 0, vfl_start_x = -1, vfl_start_y = -1, vfl_tile = -1;
 static Uint32 vfl_end_t = 0;
 static int vfl_end_x = -1, vfl_end_y = -1;
 static float vfl_end_dx = 0.0f, vfl_end_dy = 0.0f;
@@ -4432,8 +4443,17 @@ vulture_flight_begin(int glyph)
     vfl_pts.clear();
     vfl_on = true;
     vfl_style = VIMP_GENERIC, vfl_mat = 0;
+    vfl_tile = -1, vfl_step_ms = 45.0;
+    /* s207: the arc it will fly (told by the thrower just before, or a guess) */
+    vfl_arc_r = vfl_next_range > 0 ? vfl_next_range : 6;
+    vfl_arc_r = vfl_arc_r < 2.0 ? 2.0 : vfl_arc_r > 20.0 ? 20.0 : vfl_arc_r;
+    vfl_fired = vfl_next_fired, vfl_start_x = vfl_next_sx, vfl_start_y = vfl_next_sy;
+    vfl_next_range = 0, vfl_next_fired = 0, vfl_next_sx = vfl_next_sy = -1;
     if (glyph_is_object(glyph)) {
         int otyp = glyph_to_obj(glyph);
+
+        if (otyp >= 0 && otyp < NUM_OBJECTS)
+            vfl_tile = OBJECT_TO_VTILE(otyp);
 
         if (otyp >= 0 && otyp < NUM_OBJECTS) {
             const struct objclass *oc = &objects[otyp];
@@ -4449,6 +4469,22 @@ vulture_flight_begin(int glyph)
                 vfl_style = VIMP_BLUNT; /* rocks, gems, anything thrown */
         }
     }
+    /* s207: fired - nearly flat; lobbed glass - high; thrown weapons and
+       stones in between; longer throws higher */
+    vfl_arc_h = vfl_fired ? 3.0 + 0.8 * vfl_arc_r
+                : vfl_mat == 4 ? 12.0 + 3.0 * vfl_arc_r
+                : vfl_style == VIMP_BLUNT ? 10.0 + 2.6 * vfl_arc_r : 8.0 + 2.2 * vfl_arc_r;
+    if (vfl_arc_h > 40.0)
+        vfl_arc_h = 40.0;
+}
+
+/* the core (throwit, m_throw): the flight about to start - its range, fired
+   from a launcher or not, the thrower's square */
+extern "C" void
+vulture_flight_range(int range, int fired, int x, int y)
+{
+    vfl_next_range = range, vfl_next_fired = fired ? 1 : 0;
+    vfl_next_sx = isok(x, y) ? x : -1, vfl_next_sy = isok(x, y) ? y : -1;
 }
 
 extern "C" void
@@ -4532,19 +4568,130 @@ vulture_shatter_fx(int x, int y, int otyp)
     vsp_live_t = now;
 }
 
+/*
+ * IMPLEMENTATION_LOG s207 (flights): a thrown or fired thing flies on an
+ * arc.  The core shows it a square at a time; it is drawn here instead,
+ * gliding between the core's squares one step behind (the step's own
+ * length), up off the floor - from hand height, over a rise sized by the
+ * range the thrower gave it (flat for arrows and bolts off a launcher,
+ * high for a lobbed flask), down to the floor at full range - with its
+ * shadow on the floor under it, tumbling if thrown (not fired), and the
+ * streak follows the arc.
+ */
+static double
+vfl_lift(double s) /* how high the thing is, s squares out from the thrower */
+{
+    double f = s / vfl_arc_r;
+
+    f = f < 0.0 ? 0.0 : f > 1.0 ? 1.0 : f;
+    return 26.0 * (1.0 - f) + 6.0 * f + vfl_arc_h * 4.0 * f * (1.0 - f);
+}
+
+/* the floor point (screen) s squares along the path: the thrower's square
+   is 0 (if told), the core's first square 1 */
+static void
+vfl_path(double s, int *px, int *py)
+{
+    size_t n = vfl_pts.size();
+    int ax, ay, bx, by, k;
+    double u;
+
+    if (s <= 1.0) {
+        vsp_screen(vfl_pts[0].x, vfl_pts[0].y, &bx, &by);
+        if (vfl_start_x < 0 || s >= 1.0) {
+            *px = bx, *py = by;
+            return;
+        }
+        vsp_screen(vfl_start_x, vfl_start_y, &ax, &ay);
+        u = s < 0.0 ? 0.0 : s;
+    } else {
+        k = (int) floor(s) - 1;
+        if (k >= (int) n - 1) {
+            vsp_screen(vfl_pts[n - 1].x, vfl_pts[n - 1].y, px, py);
+            return;
+        }
+        vsp_screen(vfl_pts[k].x, vfl_pts[k].y, &ax, &ay);
+        vsp_screen(vfl_pts[k + 1].x, vfl_pts[k + 1].y, &bx, &by);
+        u = s - floor(s);
+    }
+    *px = ax + (int) floor((bx - ax) * u + 0.5), *py = ay + (int) floor((by - ay) * u + 0.5);
+}
+
+/* where the head is along the path now: a step behind the core, gliding */
+static double
+vfl_head_s(Uint32 now)
+{
+    size_t n = vfl_pts.size();
+    double u;
+
+    if (n >= 2) {
+        vfl_step_ms = (double) (vfl_pts[n - 1].t - vfl_pts[n - 2].t);
+        vfl_step_ms = vfl_step_ms < 20.0 ? 20.0 : vfl_step_ms > 120.0 ? 120.0 : vfl_step_ms;
+    } else if (vfl_start_x < 0) {
+        return 1.0;
+    }
+    u = (now - vfl_pts[n - 1].t) / vfl_step_ms;
+    u = u < 0.0 ? 0.0 : u > 1.0 ? 1.0 : u;
+    return (double) (n - 1) + u;
+}
+
+/* the object step: the thing is in the air over this square - vfl_draw
+   draws it there (and a moment after it lands, till its glide arrives) */
+static bool
+vfl_hides(int j, int i, int tile_id)
+{
+    size_t n = vfl_pts.size();
+
+    if (!n || vfl_tile < 0 || tile_id != vfl_tile || vfl_pts[n - 1].x != j || vfl_pts[n - 1].y != i)
+        return false;
+    return vfl_on || SDL_GetTicks() - vfl_pts[n - 1].t < (Uint32) vfl_step_ms + 10;
+}
+
+static void
+vfl_draw_arc(Uint32 now, Uint8 r, Uint8 g, Uint8 b)
+{
+    size_t n = vfl_pts.size();
+    double s, lift;
+    int px, py, k;
+    bool flying;
+
+    if (!n)
+        return;
+    s = vfl_head_s(now);
+    flying = vfl_on || now - vfl_pts[n - 1].t < (Uint32) vfl_step_ms + 10;
+    for (k = 48; k >= 0; k--) { /* the streak, along the arc behind the head */
+        double ss = s - k * 0.05, fade = 1.0 - k / 49.0;
+        int tx, ty;
+
+        if (ss < (vfl_start_x < 0 ? 1.0 : 0.0))
+            continue;
+        if (!vfl_on)
+            fade *= 1.0 - (double) (now - vfl_end_t) / 200.0;
+        if (fade <= 0.0)
+            continue;
+        vfl_path(ss, &tx, &ty);
+        ty -= (int) vfl_lift(ss);
+        vsp_blob(tx, ty, 3.5, r, g, b, (int) (26 * fade), true);
+        vsp_blob(tx, ty, 1.2, r, g, b, (int) (120 * fade), true);
+    }
+    if (!flying || vfl_tile < 0)
+        return;
+    vfl_path(s, &px, &py);
+    lift = vfl_lift(s);
+    vsp_blob(px, py + 3, 8.5 - lift / 16.0, 0, 0, 0, (int) (125 * (1.0 - lift / 70.0)), false, 0.45); /* its shadow */
+    vtw_put_tile_x(px, py - (int) lift, vfl_tile, 0, 1.0, 1.0,
+                   vfl_fired ? 0.0 : s * (vfl_style == VIMP_BLUNT ? 200.0 : 300.0), false, 255);
+}
+
 /* the streak behind a flying thing */
 static void
 vfl_draw(Uint32 now)
 {
-    size_t n = vfl_pts.size(), k;
-    int sx0, sy0, sx1, sy1;
+    size_t n = vfl_pts.size();
     Uint8 r = 235, g = 240, b = 255;
 
-    if (n < 2) {
-        if (!vfl_on && now - vfl_end_t > 200)
-            vfl_pts.clear();
+    if (!n)
         return;
-    }
     if (!vfl_on && now - vfl_end_t > 200) {
         vfl_pts.clear();
         return;
@@ -4553,17 +4700,7 @@ vfl_draw(Uint32 now)
         r = 215, g = 195, b = 165;
     else if (vfl_mat == 4)
         r = 200, g = 230, b = 255;
-    for (k = n - 1; k > 0 && n - 1 - k < 3; k--) { /* the last legs, fading back */
-        double age = (double) (now - vfl_pts[k].t) / 280.0, fade;
-
-        if (age >= 1.0)
-            break;
-        fade = (1.0 - age) * (1.0 - (double) (n - 1 - k) / 3.0);
-        vsp_screen(vfl_pts[k].x, vfl_pts[k].y, &sx1, &sy1);
-        vsp_screen(vfl_pts[k - 1].x, vfl_pts[k - 1].y, &sx0, &sy0);
-        vsp_line(sx0, sy0 - 26, sx1, sy1 - 26, 4.0, r, g, b, (int) (55 * fade), true, 3.0);
-        vsp_line(sx0, sy0 - 26, sx1, sy1 - 26, 1.4, r, g, b, (int) (210 * fade), true, 2.0);
-    }
+    vfl_draw_arc(now, r, g, b); /* s207: in the air, on its arc */
 }
 
 /* the impact flashes, and the flinches' upkeep */
@@ -6772,6 +6909,444 @@ vlife_probe_tick(Uint32 now)
     vlife_probe_sub = 1, vlife_probe_t = SDL_GetTicks();
 }
 
+/*
+ * IMPLEMENTATION_LOG s207 (lids): opening a chest, a large box or an ice
+ * box on the floor lifts its lid on its back hinge in the room's
+ * perspective - the lid cut from the body along its top face, turned about
+ * the hinge (an affine quad: the lid treated as the plate of the top face,
+ * its depth swinging up off the floor) - showing the dark inside.  The lift
+ * plays before the loot menu covers the map; the lid stays up while you
+ * rummage and swings shut with a puff of dust when you are done.
+ */
+struct vlid_art_t {
+    SDL_Surface *lid, *body, *nlid, *nbody;
+    int lx0, ly0, lx1, ly1; /* the lid's box in the art */
+    bool ok, tried;
+};
+static const struct {
+    int otyp;
+    float c[8]; /* the top face in the art: front-left, front-right, back-right, back-left */
+    int th;     /* the lid's own depth below the front and side top edges */
+} vlid_fit[3] = {
+    { CHEST, { 0, 17, 28, 28, 51, 19, 23, 8 }, 2 },
+    { LARGE_BOX, { 3, 9, 38, 21, 60, 12, 25, 0 }, 3 },
+    { ICE_BOX, { 3, 15, 33, 28, 70, 15, 40, 2 }, 5 },
+};
+static vlid_art_t vlid_art[3];
+struct vlid_t {
+    int x, y, tile, kind, state; /* state 1 lifting, 2 up, 3 shutting */
+    Uint32 t0;
+};
+static vlid_t vlid_cur = { 0, 0, -1, 0, 0, 0 };
+static double vlid_freeze = -1.0; /* probe: >= 0 holds the lid at this much of open */
+static SDL_Surface *vlid_inside = NULL;
+#define VLID_OPEN 1.25 /* radians the lid stands open */
+#define VLID_VR 1.3    /* screen px up per screen-x px of floor (the lid's depth stood up) */
+
+static int
+vlid_kind(int tile) /* which of the lidded boxes the tile is; -1: none */
+{
+    int k;
+
+    for (k = 0; k < 3; k++)
+        if (tile == OBJECT_TO_VTILE(vlid_fit[k].otyp))
+            return k;
+    return -1;
+}
+
+static vlid_art_t *
+vlid_split(int kind, int tile)
+{
+    vlid_art_t *a = &vlid_art[kind];
+    const float *c = vlid_fit[kind].c;
+    vulture_tile *t;
+    SDL_Surface *src, *nm;
+    int x, y, n = 0, th = vlid_fit[kind].th;
+
+    if (a->tried)
+        return a->ok ? a : NULL;
+    a->tried = true;
+    if (!(t = vulture_get_tile(tile)) || !t->graphic
+        || !(src = SDL_ConvertSurfaceFormat(t->graphic, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return NULL;
+    a->lid = SDL_CreateRGBSurfaceWithFormat(0, src->w, src->h, 32, SDL_PIXELFORMAT_ARGB8888);
+    a->body = SDL_CreateRGBSurfaceWithFormat(0, src->w, src->h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (!a->lid || !a->body) {
+        SDL_FreeSurface(src);
+        if (a->lid)
+            SDL_FreeSurface(a->lid);
+        if (a->body)
+            SDL_FreeSurface(a->body);
+        a->lid = a->body = NULL;
+        return NULL;
+    }
+    a->lx0 = src->w, a->ly0 = src->h, a->lx1 = 0, a->ly1 = 0;
+    SDL_LockSurface(src);
+    SDL_LockSurface(a->lid);
+    SDL_LockSurface(a->body);
+    for (y = 0; y < src->h; y++) {
+        const Uint32 *row = (const Uint32 *) ((const Uint8 *) src->pixels + y * src->pitch);
+        Uint32 *lr = (Uint32 *) ((Uint8 *) a->lid->pixels + y * a->lid->pitch);
+        Uint32 *br = (Uint32 *) ((Uint8 *) a->body->pixels + y * a->body->pitch);
+
+        for (x = 0; x < src->w; x++) {
+            /* above the front top edge (left of its front-right corner) or the
+               side top edge, by the lid's own depth: the lid */
+            double yb = x <= c[2] ? c[1] + (x - c[0]) * (c[3] - c[1]) / (c[2] - c[0])
+                                  : c[3] + (x - c[2]) * (c[5] - c[3]) / (c[4] - c[2]);
+            bool in = y < yb + th;
+
+            lr[x] = in ? row[x] : 0;
+            br[x] = in ? 0 : row[x];
+            if (in && (row[x] >> 24)) {
+                n++;
+                if (x < a->lx0)
+                    a->lx0 = x;
+                if (x + 1 > a->lx1)
+                    a->lx1 = x + 1;
+                if (y < a->ly0)
+                    a->ly0 = y;
+                if (y + 1 > a->ly1)
+                    a->ly1 = y + 1;
+            }
+        }
+    }
+    SDL_UnlockSurface(a->body);
+    SDL_UnlockSurface(a->lid);
+    SDL_UnlockSurface(src);
+    SDL_FreeSurface(src);
+    SDL_SetSurfaceBlendMode(a->lid, SDL_BLENDMODE_BLEND);
+    SDL_SetSurfaceBlendMode(a->body, SDL_BLENDMODE_BLEND);
+    if (n < 60) {
+        SDL_FreeSurface(a->lid);
+        SDL_FreeSurface(a->body);
+        a->lid = a->body = NULL;
+        return NULL;
+    }
+    nm = vulture_get_tile_normal(tile, false); /* the normals cut the same way */
+    if (nm && nm->w == a->lid->w && nm->h == a->lid->h
+        && (a->nlid = SDL_ConvertSurfaceFormat(nm, SDL_PIXELFORMAT_ARGB8888, 0)) != NULL
+        && (a->nbody = SDL_ConvertSurfaceFormat(nm, SDL_PIXELFORMAT_ARGB8888, 0)) != NULL) {
+        SDL_LockSurface(a->nlid);
+        SDL_LockSurface(a->nbody);
+        SDL_LockSurface(a->lid);
+        for (y = 0; y < nm->h; y++) {
+            Uint32 *nl = (Uint32 *) ((Uint8 *) a->nlid->pixels + y * a->nlid->pitch);
+            Uint32 *nb = (Uint32 *) ((Uint8 *) a->nbody->pixels + y * a->nbody->pitch);
+            const Uint32 *lr = (const Uint32 *) ((const Uint8 *) a->lid->pixels + y * a->lid->pitch);
+
+            for (x = 0; x < nm->w; x++)
+                if (lr[x] >> 24)
+                    nb[x] = 0;
+                else
+                    nl[x] = 0;
+        }
+        SDL_UnlockSurface(a->lid);
+        SDL_UnlockSurface(a->nbody);
+        SDL_UnlockSurface(a->nlid);
+        SDL_SetSurfaceBlendMode(a->nlid, SDL_BLENDMODE_BLEND);
+        SDL_SetSurfaceBlendMode(a->nbody, SDL_BLENDMODE_BLEND);
+    } else if (a->nlid) {
+        SDL_FreeSurface(a->nlid);
+        a->nlid = NULL;
+    }
+    vulture_gpu_hd_derive_cut(a->lid, t->graphic, a->lid, false); /* zoomed: the HD art, cut the same way */
+    vulture_gpu_hd_derive_cut(a->body, t->graphic, a->lid, true);
+    a->ok = true;
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "lid art %d: lid %d px, box x %d-%d y %d-%d\n", kind, n,
+                      a->lx0, a->lx1, a->ly0, a->ly1);
+    return a;
+}
+
+static SDL_Surface *
+vlid_make_inside(void) /* the dark of a box's inside: the back wall caught by the light */
+{
+    int w = 16, h = 32, x, y;
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+
+    if (!s)
+        return NULL;
+    SDL_LockSurface(s);
+    for (y = 0; y < h; y++) {
+        Uint32 *row = (Uint32 *) ((Uint8 *) s->pixels + y * s->pitch);
+        double f = (double) y / (h - 1);
+        Uint32 r = (Uint32) (56 - 44 * f), g = (Uint32) (40 - 32 * f), b = (Uint32) (28 - 22 * f);
+
+        for (x = 0; x < w; x++)
+            row[x] = 0xFF000000u | r << 16 | g << 8 | b;
+    }
+    SDL_UnlockSurface(s);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    return s;
+}
+
+static double
+vlid_angle(Uint32 now) /* how far up the lid is (radians); < 0: it has shut */
+{
+    double t;
+
+    if (vlid_freeze >= 0.0)
+        return VLID_OPEN * vlid_freeze;
+    if (vlid_cur.state == 2)
+        return VLID_OPEN;
+    if (vlid_cur.state == 1) { /* up, a touch past, back */
+        double u;
+
+        t = (now - vlid_cur.t0) / 360.0;
+        if (t >= 1.0)
+            return VLID_OPEN;
+        u = t - 1.0;
+        return VLID_OPEN * (1.0 + 2.2 * u * u * u + 1.2 * u * u);
+    }
+    if (vlid_cur.state == 3) { /* down under its weight, a small bounce */
+        t = (now - vlid_cur.t0) / 280.0;
+        if (t >= 1.0)
+            return -1.0;
+        return t < 0.85 ? VLID_OPEN * (1.0 - (t / 0.85) * (t / 0.85)) : 0.07 * sin(3.14159 * (t - 0.85) / 0.15);
+    }
+    return -1.0;
+}
+
+/* the object step: the box on (j, i) with its lid up (or lifting, shutting) */
+static bool
+vlid_draw(int j, int i, int x, int y, int tile_id)
+{
+    Uint32 now;
+    vlid_art_t *a;
+    vulture_tile *t;
+    const float *c;
+    double ph, ax, ay, fx, fy, gx, gy, det;
+    int ix, iy, k, sh;
+    float q[8];
+    SDL_Rect r;
+
+    if (!vlid_cur.state || j != vlid_cur.x || i != vlid_cur.y || tile_id != vlid_cur.tile)
+        return false;
+    now = SDL_GetTicks();
+    if ((ph = vlid_angle(now)) < 0.0) { /* shut: a puff, and the box as it is */
+        vlid_cur.state = 0;
+        vulture_world_fx(j, i, 9);
+        return false;
+    }
+    if (!(a = vlid_split(vlid_cur.kind, tile_id)) || !(t = vulture_get_tile(tile_id)) || !t->graphic)
+        return false;
+    vsp_live_t = now;
+    c = vlid_fit[vlid_cur.kind].c;
+    ix = x + t->xmod, iy = y + t->ymod;
+    vdr_img(a->body, a->nbody, ix, iy, 255);
+    /* the hinge (the top face's back edge) and its depth to the front */
+    ax = c[4] - c[6], ay = c[5] - c[7]; /* back-left to back-right */
+    fx = c[0] - c[6], fy = c[1] - c[7]; /* back-left to front-left */
+    if (ph > 0.02) { /* the dark inside */
+        if (!vlid_inside)
+            vlid_inside = vlid_make_inside();
+        if (vlid_inside) {
+            r.x = 0, r.y = 0, r.w = vlid_inside->w, r.h = vlid_inside->h;
+            q[0] = (float) (ix + c[6]), q[1] = (float) (iy + c[7]);
+            q[2] = (float) (ix + c[4]), q[3] = (float) (iy + c[5]);
+            q[4] = (float) (ix + c[4] + fx), q[5] = (float) (iy + c[5] + fy);
+            q[6] = (float) (ix + c[0]), q[7] = (float) (iy + c[1]);
+            vdr_quad_rgb(vlid_inside, r, q, 255, 255, 255, (int) (255 * (ph < 0.25 ? ph / 0.25 : 1.0)));
+        }
+    }
+    /* the lid: each corner of its box as a point on the top face's plate
+       (along the hinge, toward the front), its depth turned up off the floor */
+    gx = cos(ph) * fx, gy = cos(ph) * fy - sin(ph) * VLID_VR * fabs(fx);
+    det = ax * fy - ay * fx;
+    if (fabs(det) < 1e-6)
+        return true;
+    for (k = 0; k < 4; k++) {
+        double qx = (k == 1 || k == 2 ? a->lx1 : a->lx0) - c[6], qy = (k >= 2 ? a->ly1 : a->ly0) - c[7];
+        double e = (qx * fy - qy * fx) / det, d = (ax * qy - ay * qx) / det;
+
+        q[2 * k] = (float) (ix + c[6] + e * ax + d * gx);
+        q[2 * k + 1] = (float) (iy + c[7] + e * ay + d * gy);
+    }
+    r.x = a->lx0, r.y = a->ly0, r.w = a->lx1 - a->lx0, r.h = a->ly1 - a->ly0;
+    { /* its top turning from the light; past edge-on (where the turned depth
+         lies along the hinge on screen) its underside, in shadow */
+        double edge = atan2(det, ax * VLID_VR * fabs(fx));
+
+        sh = ph < edge ? 255 - (int) (40 * ph / edge) : 170;
+    }
+    vdr_quad_rgb(a->lid, r, q, sh, sh, sh, 255);
+    vdr_quad_normal(a->nlid, r, q, 255);
+    return true;
+}
+
+/* the core (use_container): a box on (x, y) opened (open), or the one open
+   done with (x, y unused) */
+extern "C" void
+vulture_lid(int x, int y, int open)
+{
+    Uint32 t0;
+    int tile, kind;
+
+    if (!open) { /* done: it swings shut */
+        if (vlid_cur.state == 1 || vlid_cur.state == 2)
+            vlid_cur.state = 3, vlid_cur.t0 = SDL_GetTicks(), vsp_live_t = vlid_cur.t0;
+        return;
+    }
+    if (!levwin || !map_data || !u.ux || !isok(x, y) || !cansee(x, y) || vulture_windows_inited != TRUE
+        || (kind = vlid_kind(tile = map_data->get_glyph(MAP_OBJ, x, y))) < 0 || !vlid_split(kind, tile))
+        return;
+    vlid_cur.x = x, vlid_cur.y = y, vlid_cur.tile = tile, vlid_cur.kind = kind;
+    vlid_cur.state = 1, vlid_cur.t0 = t0 = SDL_GetTicks();
+    /* the lift plays now, before the menu covers the map; a waiting key
+       hurries it */
+    while (!vtw_animating && !vanim_kind) {
+        Uint32 now = SDL_GetTicks();
+
+        if (now - t0 >= 380 || vanim_input_waiting())
+            break;
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        vulture_refresh_window_region();
+        SDL_Delay(1);
+    }
+    vlid_cur.state = 2;
+    levwin->force_redraw();
+}
+
+/* probe: s207 - VULTURE_SELFTEST_LID: a chest, a large box and an ice box
+   beside you, each lid held at points of opening, then let shut (on the
+   clock); VULTURE_SELFTEST_ARC: a dagger thrown, an arrow fired, a rock
+   lobbed through the core's tmp_at, shot along the way */
+static Uint32 vlid_probe_t = 0;
+static int vlid_probe_n = 0, vlid_probe_sub = 0, vlid_probe_shots = 0, vlid_probe_x = 0, vlid_probe_y = 0;
+
+static void
+vlid_probe_shot(const char *tag)
+{
+    const char *dir = getenv("VULTURE_SELFTEST");
+    char p[700];
+    SDL_Surface *o;
+    SDL_Rect a;
+    int hx, hy;
+
+    if (!dir || vlid_probe_shots >= 60 || !vulture_screen || vulture_screen->w < 960 || vulture_screen->h < 540)
+        return;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    vsp_screen(u.ux, u.uy, &hx, &hy);
+    a.w = 560, a.h = 360, a.x = hx - 280, a.y = hy - 220;
+    a.x = a.x < 0 ? 0 : a.x + a.w > vulture_screen->w ? vulture_screen->w - a.w : a.x;
+    a.y = a.y < 0 ? 0 : a.y + a.h > vulture_screen->h ? vulture_screen->h - a.h : a.y;
+    if (!(o = SDL_CreateRGBSurfaceWithFormat(0, a.w, a.h, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return;
+    snprintf(p, sizeof p, "%s\\lid%02d_%s_%02d.bmp", dir, vlid_probe_n, tag, vlid_probe_shots++);
+    if (vulture_frame_to_surface(o, &a))
+        SDL_SaveBMP(o, p);
+    SDL_FreeSurface(o);
+}
+
+static void
+vlid_probe_tick(Uint32 now)
+{
+    static const int boxes[3] = { CHEST, LARGE_BOX, ICE_BOX };
+    static const double hold[4] = { 0.15, 0.4, 0.7, 1.0 };
+    static const int shut_at[3] = { 90, 180, 400 };
+    int step = vlid_probe_n;
+
+    if (getenv("VULTURE_SELFTEST_ARC")) { /* the flights */
+        static const int ddx[8] = { 1, 1, 0, -1, -1, -1, 0, 1 }, ddy[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+        static const int what[3] = { DAGGER, ARROW, ROCK };
+        int best = 0, bl = 0, l, k, x, y;
+
+        if (now - vlid_probe_t < 900)
+            return;
+        if (step >= 3) {
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "arc probe: done, %d shots\n", vlid_probe_shots);
+            vlid_probe_t = 0;
+            return;
+        }
+        for (k = 0; k < 8; k++) { /* the most open way */
+            for (l = 0, x = u.ux + ddx[k], y = u.uy + ddy[k];
+                 isok(x, y) && ACCESSIBLE(levl[x][y].typ) && !m_at(x, y) && l < 9; l++)
+                x += ddx[k], y += ddy[k];
+            if (l > bl)
+                bl = l, best = k;
+        }
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "arc probe %d: %d squares\n", step, bl);
+        vulture_flight_range(bl, step == 1, u.ux, u.uy);
+        tmp_at(DISP_FLASH, objnum_to_glyph(what[step]));
+        for (l = 1; l <= bl; l++) {
+            tmp_at(u.ux + ddx[best] * l, u.uy + ddy[best] * l);
+            nh_delay_output();
+            vlid_probe_shot(step == 0 ? "dagger" : step == 1 ? "arrow" : "rock");
+        }
+        tmp_at(DISP_END, 0);
+        vlid_probe_n++, vlid_probe_t = SDL_GetTicks();
+        return;
+    }
+    if (vlid_probe_sub > 0) { /* this box's frames */
+        int s = vlid_probe_sub - 1;
+
+        if (s < 4) { /* held at points of opening */
+            vlid_freeze = hold[s];
+            vlid_probe_shot("open");
+            if (s == 3) /* then it shuts on the clock */
+                vlid_freeze = -1.0, vlid_cur.state = 2, vulture_lid(-1, -1, 0), vlid_probe_t = now;
+            vlid_probe_sub++;
+            return;
+        }
+        if (now - vlid_probe_t < (Uint32) shut_at[s - 4])
+            return;
+        vlid_probe_shot("shut");
+        if (++vlid_probe_sub > 7)
+            vlid_probe_sub = 0, vlid_probe_n++, vlid_probe_t = now;
+        return;
+    }
+    if (now - vlid_probe_t < 700)
+        return;
+    if (step >= 3) {
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "lid probe: done, %d shots\n", vlid_probe_shots);
+        vlid_probe_t = 0;
+        return;
+    }
+    if (!vlid_probe_x) { /* a free floor square beside you */
+        static const int ddx[8] = { 1, 1, 0, -1, -1, -1, 0, 1 }, ddy[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+        int k;
+
+        for (k = 0; k < 16 && !vlid_probe_x; k++) { /* beside you, else a square further */
+            int x = u.ux + ddx[k % 8] * (k / 8 + 1), y = u.uy + ddy[k % 8] * (k / 8 + 1);
+
+            if (isok(x, y) && levl[x][y].typ == ROOM && !m_at(x, y) && !OBJ_AT(x, y) && cansee(x, y))
+                vlid_probe_x = x, vlid_probe_y = y;
+        }
+        if (!vlid_probe_x) {
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "lid probe: no room beside you\n");
+            vlid_probe_t = 0;
+            return;
+        }
+    }
+    {
+        struct obj *o, *on;
+
+        for (o = svl.level.objects[vlid_probe_x][vlid_probe_y]; o; o = on) { /* the last box goes */
+            on = o->nexthere;
+            obj_extract_self(o);
+            obfree(o, (struct obj *) 0);
+        }
+    }
+    (void) mksobj_at(boxes[step], vlid_probe_x, vlid_probe_y, FALSE, FALSE);
+    newsym(vlid_probe_x, vlid_probe_y);
+    flush_screen(1);
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "lid probe %d: box %d at %d,%d, tile %d\n", step, boxes[step],
+                      vlid_probe_x, vlid_probe_y, map_data->get_glyph(MAP_OBJ, vlid_probe_x, vlid_probe_y));
+    vlid_freeze = 0.0; /* no clip: held from the start */
+    vlid_cur.state = 0;
+    {
+        int tile = map_data->get_glyph(MAP_OBJ, vlid_probe_x, vlid_probe_y), kind = vlid_kind(tile);
+
+        if (kind >= 0 && vlid_split(kind, tile)) {
+            vlid_cur.x = vlid_probe_x, vlid_cur.y = vlid_probe_y, vlid_cur.tile = tile, vlid_cur.kind = kind;
+            vlid_cur.state = 2, vlid_cur.t0 = now;
+        }
+    }
+    vlid_probe_sub = 1, vlid_probe_t = SDL_GetTicks();
+}
+
 /* the overlay pass, after vfx_draw */
 static void
 vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
@@ -7313,6 +7888,8 @@ vulture_idle_bob(bool at_map)
         vfall_probe_tick(now);
     if (vlife_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s206 */
         vlife_probe_tick(now);
+    if (vlid_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s207 */
+        vlid_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -10556,6 +11133,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_LID") || getenv("VULTURE_SELFTEST_ARC")) { /* probe: s207 lids, arcs */
+            vlid_probe_t = SDL_GetTicks(), vlid_probe_n = 0, vlid_probe_sub = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_LIFE")) { /* probe: s206 creatures and furniture alive */

@@ -4481,6 +4481,43 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   you stand on the jackal's other side (on screen) and it turns.
   VULTURE_LIFE_BUSY makes the fidgets come every 0.3-0.8 s.
 
+### 207. Lids lift; thrown things arc
+
+- The user: "do those too" - the two follow-ups from 204: chest lids and
+  missiles flying on an arc with a shadow.
+- Lids (levelwin.cpp vlid_*): a chest, a large box or an ice box opened on
+  the floor (use_container: vulture_lid(x, y, 1) where s203 puffs the
+  dust; vulture_lid(-1, -1, 0) at containerdone, the one exit) lifts its
+  lid on its back hinge.  Each art's top face is four hand-fitted corners
+  (vlid_fit: front-left, front-right, back-right, back-left) plus the lid's
+  own depth below the front/side top edges; the lid is cut off the body
+  along those edges.  The lid is taken as the plate of the top face: each
+  corner of its box is solved into (along the hinge, toward the front)
+  and its depth swung up off the floor - one affine quad again; the dark
+  inside fills the top face.  VLID_VR 1.3 (px up per screen-x px of floor)
+  matches the projection: the floor's 22/56 squash is a 23-degree camera.
+  At that camera a lid hinged along a floor axis goes edge-on at ~31
+  degrees (tan = det / (ax * VR * |fx|)), and past it you see its
+  underside - shaded 170.
+  The lift plays as a short blocking clip (<= 380 ms, a waiting key
+  hurries it) because the loot menu is modal and the map doesn't animate
+  under it; the lid stays up while you rummage and shuts on the clock -
+  down under its weight, a small bounce, a puff of dust.
+- Arcs (vfl_draw_arc, the s202 flight): throwit and m_throw tell Vulture
+  the range, whether the thing is fired from its launcher, and the thrower's
+  square (vulture_flight_range) just before bhit / tmp_at.  The thing is
+  drawn in the air instead of the core's glyph (vfl_hides at the object
+  step), gliding between the core's squares one step behind - the step's
+  own length - up off the floor: hand height (26 px) to 6 px at full
+  range, plus a rise of 3 + 0.8 R (fired), 12 + 3 R (glass, lobbed),
+  10 + 2.6 R (stones) or 8 + 2.2 R (thrown weapons), capped at 40 - so a
+  thing that hits early hits a body, not feet.  Its shadow on the floor
+  under it; thrown things tumble (fired ones fly straight); the streak
+  follows the arc (dense, 0.05-square samples - 0.15 came out dotted).
+- Probes: VULTURE_SELFTEST_LID (each box held at points of opening, then
+  shutting on the clock), VULTURE_SELFTEST_ARC (dagger, arrow, rock through
+  the core's tmp_at, shot each step).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

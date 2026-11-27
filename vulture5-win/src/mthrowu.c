@@ -589,6 +589,7 @@ m_throw(
     gb.bhitpos.x = x;
     gb.bhitpos.y = y;
     gn.notonhead = FALSE; /* reset potentially stale value */
+    vulture_flight_range(range, ammo_and_launcher(obj, MON_WEP(mon)), x, y); /* Vulture s207 */
 
     if (obj->quan == 1L) {
         /*
