@@ -18,6 +18,7 @@ extern point vulture_get_mouse_prev_pos(void);
 extern void vulture_set_mouse_pos(int x, int y);
 
 extern void vulture_mouse_draw(void);
+extern void vulture_mouse_draw_noflush(void); /* s215 */
 extern void vulture_mouse_refresh(void);
 extern void vulture_mouse_restore_bg();
 

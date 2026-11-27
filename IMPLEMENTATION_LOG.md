@@ -4694,6 +4694,55 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   (full-height front walls hid the first pool), pours eight squares of
   pool in front of you and puts a giant eel in it.
 
+### 214. Floors with a history
+
+- Cosmetic decals in the floor pass (vdecal_draw, after the floor edges):
+  cracks, pebbles, a puddle, moss, a few old bones - procedural 44 x 20
+  sprites, 4 variants a kind - on about one room square in six (one in
+  eight in corridors), picked by vsp_hash of the square and the level and
+  weighted by the room's floor style (moss rooms mossy, marble finely
+  cracked, corridors pebbly); never under furniture or a rug.  Nothing to
+  pick up; lit and fogged with the floor.  VULTURE_DECALS_ALL (probe) puts
+  one on every square.
+- Torch flames on white marble vanished: an added orange over white is
+  white.  The flame's body is blended now (vsp_disc[1]); only the glow and
+  the halo stay additive.
+
+### 215. A solid rock mass; the hover tooltip flicker
+
+- The user: "i dont like the lack of ceilings, it looks weird like
+  everything is a weird 2d paper diorama and not a 3d model"; asked, they
+  chose "Solid rock mass" (thick walls with tops, known rock capped).
+- Walls are blocks (vrock_*): a wall's north / west faces look away, so
+  step 1 draws nothing now (the s209 thin-wall conversion is kept behind
+  vrock_on for the old look), and every wall gets a stone top at its
+  height.
+- The band: every square you have NOT mapped within 3 of one you have is
+  a rock block with a top, fading into the dark (255 / 150 / 70) - map
+  knowledge only, so it reveals nothing about the real level.  A block
+  shows rough rock faces toward open ground in front of it or toward a
+  lower block in front.
+- Corridors would vanish behind the rock in front of them (a 1-square
+  trench 75 px deep is invisible at a 23 degree camera), so open ground
+  has a "reach": 5 rows forward, a row less per step, stopped by a wall or
+  a full block; a block in reach is a low shelf (18 px).  Corridors read as
+  trenches, doors as notches; a room's band in front of its walls stays
+  full (the wall hid that floor anyway).  Worked out in drawing order
+  before the second pass (vrock_prepare: a square's back neighbours come
+  first in that loop).
+- Tops: a 112 x 44 diamond, flat normal map (no false relief), see-through
+  round you, an occluder for the outlines (vxr cap = a diamond).  First
+  cut had rims per top and drew a grid of tiles, and soft edges let the
+  black through as seams: no rims, hard edges a pixel over; a light lip is
+  drawn only on a top's far edges where the rock drops away behind it.
+  The void's dust is off: the dark is rock now.
+- The user: "it flickers when u hover over your player".  The idle
+  redraw presented the windows, THEN drew the tooltip and presented again
+  - one frame in two went out without it.  Over a monster the hover card
+  is drawn into the map itself, but over your own square the plain
+  tooltip shows - hence only there.  vulture_mouse_draw_noflush draws it
+  before the one present.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -228,7 +228,22 @@ void vulture_set_mouse_pos(int x, int y)
 }
 
 
+/* s215: flush - present the tooltip's rectangle at once; the idle redraw
+   draws it unflushed and presents everything once, so no frame goes out
+   without it (the tooltip over your hero flickered) */
+static void vmouse_draw(bool flush);
+
 void vulture_mouse_draw(void)
+{
+	vmouse_draw(true);
+}
+
+void vulture_mouse_draw_noflush(void)
+{
+	vmouse_draw(false);
+}
+
+static void vmouse_draw(bool flush)
 {
 	int new_x, new_y;
 	struct vulture_cursor_geom cursor;
@@ -264,6 +279,7 @@ void vulture_mouse_draw(void)
 		vulture_mouse_get_tt_bg();
 
 		vulture_put_img(vulture_tooltip.cur.x,vulture_tooltip.cur.y,vulture_tooltip.tip);
+		if (flush)
 		vulture_refresh_region(vulture_tooltip.cur.x, vulture_tooltip.cur.y,
 						vulture_tooltip.cur.x + vulture_tooltip.tip->w,
 						vulture_tooltip.cur.y + vulture_tooltip.tip->h);

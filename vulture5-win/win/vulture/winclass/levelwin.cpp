@@ -7360,11 +7360,14 @@ vlid_probe_tick(Uint32 now)
  *  - Doors: a door in a wall in front of you is see-through round you like
  *    the wall it stands in (vhole_put, which vwall_draw now shares).
  */
+static bool vrock_on = true; /* s215: the solid rock mass (vrock_*) */
+
 struct vxr_face_t {
     float x0, y0, k; /* its foot: y = y0 + k (X - x0), X in [x0, x0 + 56] */
     int h;           /* how high it stands above its foot */
     int seq;         /* drawn after anything with a smaller seq */
     int amin;        /* 255, or how solid its middle was in the see-through circle */
+    bool cap;        /* s215: a block's top instead - a diamond round (x0, y0) */
 };
 struct vxr_mon_t {
     int tile, face, tx, ty, seq;
@@ -7541,6 +7544,7 @@ vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1
         fc.h = -t->ymod;
         fc.seq = ++vxr_seq;
         fc.amin = amin;
+        fc.cap = false;
         vxr_faces.push_back(fc);
     }
 }
@@ -7577,6 +7581,8 @@ vvoid_draw(mapdata *md, double t)
     int ox, oy, k, layer, W, H;
 
     if (!md || !vfx_ambient || !u.ux || u.uswallow || Underwater || !vulture_screen)
+        return;
+    if (vrock_on) /* s215: the dark is rock now, not a void */
         return;
     W = vulture_screen->w + 240, H = vulture_screen->h + 240;
     vsp_screen(0, 0, &ox, &oy); /* where the map lies: the dust follows it, slower */
@@ -7771,6 +7777,13 @@ vxr_draw(void)
             const vxr_face_t &f = vxr_faces[q];
             float ylo = f.k > 0 ? f.y0 : f.y0 + f.k * 56.0f, yhi = f.k > 0 ? f.y0 + f.k * 56.0f : f.y0;
 
+            if (f.cap) { /* s215: a top, a diamond round (x0, y0) */
+                if (f.seq < c.seq || f.x0 - V_MAP_XMOD > bx1 || f.x0 + V_MAP_XMOD < bx0
+                    || f.y0 - V_MAP_YMOD > by1 || f.y0 + V_MAP_YMOD < by0)
+                    continue;
+                cov[nf++] = (int) q;
+                continue;
+            }
             if (f.seq < c.seq || f.x0 > bx1 || f.x0 + 56.0f < bx0 || yhi < by0 || ylo - f.h > by1)
                 continue;
             cov[nf++] = (int) q;
@@ -7791,11 +7804,16 @@ vxr_draw(void)
                     const vxr_face_t &f = vxr_faces[cov[k]];
                     float foot, a = 1.0f, e;
 
-                    if (X < f.x0 || X > f.x0 + 56.0f)
-                        continue;
-                    foot = f.y0 + f.k * (X - f.x0);
-                    if (Y > foot || Y < foot - f.h)
-                        continue;
+                    if (f.cap) { /* s215 */
+                        if (fabsf(X - f.x0) / V_MAP_XMOD + fabsf(Y - f.y0) / V_MAP_YMOD > 1.0f)
+                            continue;
+                    } else {
+                        if (X < f.x0 || X > f.x0 + 56.0f)
+                            continue;
+                        foot = f.y0 + f.k * (X - f.x0);
+                        if (Y > foot || Y < foot - f.h)
+                            continue;
+                    }
                     if (f.amin < 255) { /* see-through round you: it shows there already */
                         float hx = X - vwall_hx, hy = Y - (vwall_hy - VWALL_BODY);
                         float d = sqrtf(hx * hx + hy * hy), g;
@@ -7970,16 +7988,17 @@ vtorch_glow(int x, int y, int r, int g, int b, int alpha) /* the flame's light o
 }
 
 static void
-vtorch_blob(int x, int y, int ir, int r, int g, int b, int alpha) /* additive, on the map layer */
+vtorch_blob(int x, int y, int ir, int r, int g, int b, int alpha, bool add = true) /* on the map layer */
 {
     SDL_Surface *s;
+    int k = add ? 0 : 1; /* s214: blended, a flame shows on white marble too */
 
     ir = ir < 1 ? 1 : ir > 8 ? 8 : ir;
     if (alpha <= 2)
         return;
-    if (!vsp_disc[0][ir] && !(vsp_disc[0][ir] = vsp_make_disc(ir, true)))
+    if (!vsp_disc[k][ir] && !(vsp_disc[k][ir] = vsp_make_disc(ir, add)))
         return;
-    s = vsp_disc[0][ir];
+    s = vsp_disc[k][ir];
     SDL_SetSurfaceColorMod(s, (Uint8) r, (Uint8) g, (Uint8) b);
     SDL_SetSurfaceAlphaMod(s, (Uint8) (alpha > 255 ? 255 : alpha));
     vulture_put_img(x - ir, y - ir, s);
@@ -8025,10 +8044,12 @@ vtorch_draw(int x, int y, int j, int i, int fj, int fi, int tile, bool eface)
 
         vtorch_glow(tx, fy, 255, 125, 40, (int) (52 * fl)); /* its light on the wall round it */
         vtorch_blob(tx, fy - 2, 7, 255, 125, 35, (int) (115 * fl));
-        vtorch_blob(tx, fy, 4, 255, 150, 50, (int) (235 * fl));
-        vtorch_blob(tx + lean, fy - 3, 3, 255, 200, 90, (int) (240 * fl));
-        vtorch_blob(tx + lean, fy - 7 - (int) (2.5 * fl), 2, 255, 170, 60, (int) (190 * fl));
-        vtorch_blob(tx, fy - 1, 2, 255, 248, 215, 255);
+        /* the flame's body blended, not added: on white marble an added
+           orange is white (s214) */
+        vtorch_blob(tx, fy, 4, 240, 120, 30, (int) (230 * fl), false);
+        vtorch_blob(tx + lean, fy - 3, 3, 255, 185, 70, (int) (235 * fl), false);
+        vtorch_blob(tx + lean, fy - 7 - (int) (2.5 * fl), 2, 250, 150, 45, (int) (200 * fl), false);
+        vtorch_blob(tx, fy - 1, 2, 255, 245, 200, 255, false);
     }
 }
 
@@ -8351,6 +8372,513 @@ vrefl_probe_tick(Uint32 now)
     if (++vrefl_probe_n >= 3) {
         vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "water probe: done\n");
         vrefl_probe_t = 0;
+    }
+}
+
+/*
+ * IMPLEMENTATION_LOG s214: floors with a history.  Cosmetic only - nothing
+ * to pick up, nothing the rules see: on about one floor square in six (one
+ * in eight in corridors) a small decal drawn in the floor pass, under
+ * everything that stands there - cracks, pebbles, a puddle, moss, a few
+ * old bones - picked from the square, the level and the room's floor
+ * style (moss rooms mossy, marble finely cracked, corridors pebbly); not
+ * under furniture or a rug.  Procedural, 4 variants a kind, lit and fogged
+ * with the floor.
+ */
+enum { VDC_CRACK, VDC_PEBBLES, VDC_PUDDLE, VDC_MOSS, VDC_BONES, VDC_KINDS };
+#define VDC_W 44
+#define VDC_H 20
+
+static void
+vdc_px(SDL_Surface *s, int x, int y, int r, int g, int b, int a) /* over what is there */
+{
+    Uint32 *q, c;
+    int oa, na;
+
+    if (x < 0 || y < 0 || x >= s->w || y >= s->h || a <= 0)
+        return;
+    q = (Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch) + x;
+    c = *q, oa = (int) (c >> 24);
+    na = a + oa * (255 - a) / 255;
+    if (na <= 0)
+        return;
+    r = (r * a + (int) ((c >> 16) & 255) * oa * (255 - a) / 255) / na;
+    g = (g * a + (int) ((c >> 8) & 255) * oa * (255 - a) / 255) / na;
+    b = (b * a + (int) (c & 255) * oa * (255 - a) / 255) / na;
+    *q = (Uint32) na << 24 | (Uint32) r << 16 | (Uint32) g << 8 | (Uint32) b;
+}
+
+static double
+vdc_rnd(unsigned *st) /* 0..1 */
+{
+    *st = *st * 1103515245u + 12345u;
+    return ((*st >> 8) & 0xFFFF) / 65536.0;
+}
+
+static SDL_Surface *
+vdc_make(int kind, int var)
+{
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, VDC_W, VDC_H, 32, SDL_PIXELFORMAT_ARGB8888);
+    unsigned st = 977u + (unsigned) kind * 7919u + (unsigned) var * 104729u;
+    const double cx = VDC_W / 2.0, cy = VDC_H / 2.0;
+    int k, n, x, y;
+
+    if (!s)
+        return NULL;
+    SDL_FillRect(s, NULL, 0);
+    SDL_LockSurface(s);
+    switch (kind) {
+    case VDC_CRACK: { /* a jagged line or two, a lit lip under each */
+        int branches = 1 + (int) (vdc_rnd(&st) * 2.0), b2;
+
+        for (b2 = 0; b2 < branches; b2++) {
+            double px = cx + (vdc_rnd(&st) - 0.5) * 10.0, py = cy + (vdc_rnd(&st) - 0.5) * 4.0;
+            double dir = vdc_rnd(&st) * 6.2832;
+
+            n = 3 + (int) (vdc_rnd(&st) * 3.0);
+            for (k = 0; k < n; k++) {
+                double len = 3.0 + vdc_rnd(&st) * 5.0, s2;
+
+                dir += (vdc_rnd(&st) - 0.5) * 1.6;
+                for (s2 = 0.0; s2 <= len; s2 += 0.5) {
+                    x = (int) (px + cos(dir) * s2), y = (int) (py + sin(dir) * s2 * 0.42);
+                    vdc_px(s, x, y, 28, 22, 18, 175);
+                    vdc_px(s, x, y + 1, 200, 190, 172, 55);
+                }
+                px += cos(dir) * len, py += sin(dir) * len * 0.42;
+            }
+        }
+        break;
+    }
+    case VDC_PEBBLES: /* small stones, lit from above left, each with its shadow */
+        n = 5 + (int) (vdc_rnd(&st) * 4.0);
+        for (k = 0; k < n; k++) {
+            double a = vdc_rnd(&st) * 6.2832, d = sqrt(vdc_rnd(&st));
+            int sx = (int) (cx + cos(a) * d * 15.0), sy = (int) (cy + sin(a) * d * 6.0);
+            int w = 2 + (int) (vdc_rnd(&st) * 2.0), h = 1 + (int) (vdc_rnd(&st) * 2.0);
+            int gr = 95 + (int) (vdc_rnd(&st) * 60.0);
+
+            for (y = 0; y < h; y++)
+                for (x = 0; x < w; x++)
+                    vdc_px(s, sx + x + 1, sy + y + 1, 0, 0, 0, 90);
+            for (y = 0; y < h; y++)
+                for (x = 0; x < w; x++) {
+                    int l = (x == 0 && y == 0) ? 40 : (x == w - 1 || y == h - 1) ? -25 : 0;
+
+                    vdc_px(s, sx + x, sy + y, gr + l + 8, gr + l + 4, gr + l, 235);
+                }
+        }
+        break;
+    case VDC_PUDDLE: { /* still water: dark, soft-edged, a sheen on its far edge */
+        double rx = 10.0 + vdc_rnd(&st) * 7.0, ry = 4.0 + vdc_rnd(&st) * 2.5;
+
+        for (y = 0; y < VDC_H; y++)
+            for (x = 0; x < VDC_W; x++) {
+                double dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry, wob = 0.12 * sin(x * 0.7 + var * 2.0);
+                double r = sqrt(dx * dx + dy * dy) - wob;
+
+                if (r >= 1.0)
+                    continue;
+                vdc_px(s, x, y, 36, 46, 60, (int) (150.0 * (r > 0.75 ? (1.0 - r) / 0.25 : 1.0)));
+                if (r > 0.62 && r < 0.9 && dy < -0.25) /* the sheen */
+                    vdc_px(s, x, y, 180, 198, 218, 85);
+            }
+        break;
+    }
+    case VDC_MOSS: /* a lumpy patch of green dots */
+        n = 34 + (int) (vdc_rnd(&st) * 20.0);
+        for (k = 0; k < n; k++) {
+            double a = vdc_rnd(&st) * 6.2832, d = pow(vdc_rnd(&st), 0.7);
+            int mx = (int) (cx + cos(a) * d * (12.0 + 4.0 * sin(a * 3.0 + var))), my = (int) (cy + sin(a) * d * 5.5);
+            int g = 100 + (int) (vdc_rnd(&st) * 55.0), al = 150 + (int) (vdc_rnd(&st) * 70.0);
+
+            vdc_px(s, mx, my, g / 2 + 5, g, g / 3, al);
+            if (vdc_rnd(&st) < 0.5)
+                vdc_px(s, mx + 1, my, g / 2, g - 15, g / 3, al - 30);
+        }
+        break;
+    case VDC_BONES: /* two or three old bones, knobbed ends, a shadow under */
+        n = 2 + (int) (vdc_rnd(&st) * 2.0);
+        for (k = 0; k < n; k++) {
+            double a = vdc_rnd(&st) * 3.1416, len = 5.0 + vdc_rnd(&st) * 4.0, s2;
+            double bx = cx + (vdc_rnd(&st) - 0.5) * 18.0, by = cy + (vdc_rnd(&st) - 0.5) * 6.0;
+            double ex = cos(a) * len / 2.0, ey = sin(a) * len / 2.0 * 0.42;
+
+            for (s2 = -1.0; s2 <= 1.0; s2 += 0.1) {
+                x = (int) (bx + ex * s2), y = (int) (by + ey * s2);
+                vdc_px(s, x + 1, y + 1, 0, 0, 0, 70);
+                vdc_px(s, x, y, 208, 200, 184, 235);
+            }
+            for (y = -1; y <= 0; y++) /* the knobs */
+                for (x = -1; x <= 0; x++) {
+                    vdc_px(s, (int) (bx + ex) + x, (int) (by + ey) + y, 222, 214, 198, 240);
+                    vdc_px(s, (int) (bx - ex) + x, (int) (by - ey) + y, 222, 214, 198, 240);
+                }
+        }
+        break;
+    }
+    SDL_UnlockSurface(s);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    return s;
+}
+
+/* step 3 of the floor pass: a decal on (j, i), drawn at (x, y)?  style is
+   the room's floor style (get_floor_decor), -1 for none */
+static void
+vdecal_draw(int j, int i, int x, int y, int style, bool rug, bool furniture)
+{
+    static SDL_Surface *cache[VDC_KINDS][4];
+    /* weights: crack, pebbles, puddle, moss, bones */
+    static const double wcob[5] = { 0.35, 0.30, 0.15, 0.10, 0.10 }, wcer[5] = { 0.55, 0.20, 0.25, 0.0, 0.0 };
+    static const double wmoss[5] = { 0.10, 0.10, 0.25, 0.55, 0.0 }, wmar[5] = { 0.70, 0.30, 0.0, 0.0, 0.0 };
+    static const double wcor[5] = { 0.15, 0.55, 0.20, 0.0, 0.10 };
+    const double *w;
+    double h, dens, pick;
+    int seed = (int) ledger_no(&u.uz) * 131 + 17, kind, var;
+    SDL_Surface *s;
+
+    if (!vfx_ambient || style < 0 || rug || furniture)
+        return;
+    switch (style) {
+    case V_FLOOR_COBBLESTONE: case V_FLOOR_DARK: w = wcob, dens = 0.16; break;
+    case V_FLOOR_CERAMIC: w = wcer, dens = 0.16; break;
+    case V_FLOOR_MOSS_COVERED: w = wmoss, dens = 0.20; break;
+    case V_FLOOR_MARBLE: w = wmar, dens = 0.12; break;
+    case V_FLOOR_ROUGH: case V_FLOOR_ROUGH_LIT: w = wcor, dens = 0.12; break;
+    default: return;
+    }
+    h = vsp_hash(j, i, seed);
+    if (h >= dens && !getenv("VULTURE_DECALS_ALL")) /* probe: every square */
+        return;
+    pick = vsp_hash(i, j, seed + 3);
+    for (kind = 0; kind < VDC_KINDS - 1 && pick >= w[kind]; kind++)
+        pick -= w[kind];
+    var = (int) (vsp_hash(j + 7, i, seed + 5) * 4.0) & 3;
+    if (!cache[kind][var] && !(cache[kind][var] = vdc_make(kind, var)))
+        return;
+    s = cache[kind][var];
+    vulture_put_img(x - VDC_W / 2 + (int) ((vsp_hash(j, i + 3, seed + 9) - 0.5) * 22.0),
+                    y - VDC_H / 2 + (int) ((vsp_hash(j + 3, i, seed + 11) - 0.5) * 8.0), s);
+}
+
+/*
+ * IMPLEMENTATION_LOG s215: a solid rock mass.  The user: "i dont like the
+ * lack of ceilings ... like a weird 2d paper diorama and not a 3d model" -
+ * chose "Solid rock mass": walls as thick blocks with tops, and the known
+ * rock round rooms and corridors capped at wall height.
+ *  - Walls are blocks: only the faces turned toward you are drawn (a
+ *    wall's north / west faces look away - step 1 draws nothing now), and
+ *    every wall gets a stone top at its height.
+ *  - The band: every square you have not mapped within VROCK_D of one you
+ *    have (map knowledge only - nothing about the level's real rock leaks)
+ *    is a rock block with a top, darker the further out (into the dark).
+ *    A block shows a rough rock face toward open ground in front of it, or
+ *    toward a lower block in front.
+ *  - Corridors stay visible: a block in the "reach" of open ground behind
+ *    it (a corridor, a doorway, a floor - reach 5 rows, a row less each
+ *    step forward, a wall or a full block stops it) is cut down to a low
+ *    shelf (VROCK_LOW), so a corridor reads as a trench and a door as a
+ *    notch.  A room's band in front of its walls stays full: the wall hid
+ *    the floor behind it anyway.
+ *  - Tops are flat-normalled (no false relief), see-through round you like
+ *    walls, and occlude for the outlines (vxr: a diamond).  The void's dust
+ *    is off: the dark is rock now.
+ */
+#define VROCK_D 3
+#define VROCK_LOW 18
+static signed char vrock_d[ROWNO][COLNO];     /* band distance (0 mapped, VROCK_D+1 beyond) */
+static signed char vrock_reach[ROWNO][COLNO]; /* open ground's sight, rows left */
+static unsigned char vrock_hh[ROWNO][COLNO];  /* this frame: a block's height (0 none) */
+
+static bool
+vrock_open(int b) /* ground you can stand on, as you know it */
+{
+    return b != V_TILE_WALL_GENERIC && b != V_MISC_UNMAPPED_AREA && b != V_TILE_NONE;
+}
+
+static int
+vrock_wall_h(void) /* the walls' height now: their art's */
+{
+    vulture_tile *wt = vulture_get_tile(vulture_opts.wall_style == V_WALL_DISPLAY_STYLE_FULL
+                                            ? walls_full[V_WALL_BRICK].south
+                                            : walls_half[V_WALL_BRICK].south);
+
+    return wt && wt->graphic ? -wt->ymod : 75;
+}
+
+static SDL_Surface *
+vrock_cap(int var, bool normal) /* a block's top: the square's diamond, 112 x 44; or its normal map */
+{
+    static SDL_Surface *c[3] = { NULL, NULL, NULL }, *n = NULL;
+    SDL_Surface **slot = normal ? &n : &c[var % 3], *s;
+    const int W = 2 * V_MAP_XMOD, H = 2 * V_MAP_YMOD;
+    int x, y;
+
+    if (*slot)
+        return *slot;
+    if (!(s = SDL_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return NULL;
+    SDL_LockSurface(s);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            double dx = (x + 0.5 - W / 2.0) / (W / 2.0), dy = (y + 0.5 - H / 2.0) / (H / 2.0);
+            double r = fabs(dx) + fabs(dy), a = r > 1.03 ? 0.0 : 1.0; /* hard, a pixel over: no seams */
+            Uint32 px = 0;
+
+            if (a > 0.0) {
+                if (normal) {
+                    px = 0x008080FFu; /* straight up: no relief */
+                } else {
+                    /* low-contrast grain, no rims (rims drew a grid of
+                       tiles): the tops run together into one surface */
+                    double nz = vsp_hash(x, y, 31 + var * 7), nb = vsp_hash(x / 4, y / 2, 57 + var);
+                    int v = 40 + (int) (nz * 9.0 + nb * 7.0) - (nb < 0.07 ? 10 : 0);
+
+                    v = v < 0 ? 0 : v > 255 ? 255 : v;
+                    px = (Uint32) (v + 5) << 16 | (Uint32) (v + 2) << 8 | (Uint32) v;
+                }
+                px |= (Uint32) (a * 255.0) << 24;
+            }
+            ((Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch))[x] = px;
+        }
+    SDL_UnlockSurface(s);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    *slot = s;
+    return s;
+}
+
+/* before the second pass: the band, and each block's height, in drawing
+   order (a square's back neighbours come first) */
+static void
+vrock_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
+{
+    int x, y, ii, jj, hw = vrock_wall_h();
+
+    memset(vrock_hh, 0, sizeof vrock_hh);
+    memset(vrock_reach, 0, sizeof vrock_reach);
+    if (!vrock_on || !md)
+        return;
+    for (y = 0; y < ROWNO; y++)
+        for (x = 1; x < COLNO; x++) {
+            int b = md->get_glyph(MAP_BACK, x, y), d = VROCK_D + 1, dx, dy;
+
+            if (b != V_MISC_UNMAPPED_AREA && b != V_TILE_NONE) {
+                vrock_d[y][x] = 0;
+                continue;
+            }
+            for (dy = -VROCK_D; dy <= VROCK_D; dy++)
+                for (dx = -VROCK_D; dx <= VROCK_D; dx++) {
+                    int c = abs(dx) > abs(dy) ? abs(dx) : abs(dy), b2;
+
+                    if (c >= d || !isok(x + dx, y + dy))
+                        continue;
+                    b2 = md->get_glyph(MAP_BACK, x + dx, y + dy);
+                    if (b2 != V_MISC_UNMAPPED_AREA && b2 != V_TILE_NONE)
+                        d = c;
+                }
+            vrock_d[y][x] = (signed char) d;
+        }
+    for (ii = -tr; ii <= tr; ii++)
+        for (jj = diff + ii; jj + ii <= sum; jj++) {
+            int dj, di, j, i, b, k, r = -9;
+            static const int bk[3][3] = { { -1, 0, 1 }, { 0, -1, 1 }, { -1, -1, 2 } }; /* behind: UL, UR, up */
+
+            v_rot(jj, ii, vulture_view_rot, &dj, &di);
+            j = vx + dj, i = vy + di;
+            if (j < 1 || j >= COLNO || i < 0 || i >= ROWNO)
+                continue;
+            b = md->get_glyph(MAP_BACK, j, i);
+            if (vrock_open(b)) {
+                vrock_reach[i][j] = 5;
+                continue;
+            }
+            if (b == V_TILE_WALL_GENERIC) {
+                vrock_reach[i][j] = 0, vrock_hh[i][j] = (unsigned char) hw;
+                continue;
+            }
+            if (vrock_d[i][j] < 1 || vrock_d[i][j] > VROCK_D)
+                continue;
+            for (k = 0; k < 3; k++) {
+                int oj, oi, nj, ni;
+
+                v_rot(bk[k][0], bk[k][1], vulture_view_rot, &oj, &oi);
+                nj = j + oj, ni = i + oi;
+                if (isok(nj, ni) && vrock_reach[ni][nj] - bk[k][2] > r)
+                    r = vrock_reach[ni][nj] - bk[k][2];
+            }
+            if (r >= 1)
+                vrock_reach[i][j] = (signed char) r, vrock_hh[i][j] = VROCK_LOW;
+            else
+                vrock_reach[i][j] = 0, vrock_hh[i][j] = (unsigned char) hw;
+        }
+}
+
+/* a top's far edges, 2 px lines: e 0 up-left, 1 up-right - the lip where
+   the rock drops away behind it into a room or a corridor */
+static SDL_Surface *
+vrock_lip(int e)
+{
+    static SDL_Surface *l[2] = { NULL, NULL };
+    const int W = 2 * V_MAP_XMOD, H = 2 * V_MAP_YMOD;
+    int x, y;
+
+    if (l[e])
+        return l[e];
+    if (!(l[e] = SDL_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return NULL;
+    SDL_LockSurface(l[e]);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            double dx = (x + 0.5 - W / 2.0) / (W / 2.0), dy = (y + 0.5 - H / 2.0) / (H / 2.0);
+            double r = fabs(dx) + fabs(dy), a = 0.0;
+
+            if (dy < 0.0 && (e ? dx > 0.0 : dx < 0.0) && r < 1.0 && r > 0.9)
+                a = (r - 0.9) / 0.1;
+            ((Uint32 *) ((Uint8 *) l[e]->pixels + (size_t) y * l[e]->pitch))[x] =
+                (Uint32) (a * 190.0) << 24 | 0x00A69E94u;
+        }
+    SDL_UnlockSurface(l[e]);
+    SDL_SetSurfaceBlendMode(l[e], SDL_BLENDMODE_BLEND);
+    return l[e];
+}
+
+/* a block's top at height h over the square drawn at (x, y), shaded sh
+   (255 full), see-through round you by f; it occludes for the outlines.
+   lips: bit 0 its up-left edge, bit 1 its up-right edge drop away */
+static void
+vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0)
+{
+    SDL_Surface *c = vrock_cap(var, false), *nm = vrock_cap(0, true);
+    int cx0 = x - V_MAP_XMOD, cy0 = y - V_MAP_YMOD - h, amin = 255;
+    vxr_face_t fc;
+
+    if (!c)
+        return;
+    SDL_SetSurfaceColorMod(c, (Uint8) sh, (Uint8) sh, (Uint8) sh);
+    if (f > 0.0f && vwall_hole_on && vwall_amin < 250 && vulture_gpumap_on) {
+        float hx = (float) vwall_hx, hy = (float) (vwall_hy - VWALL_BODY);
+        float qx = hx < cx0 ? cx0 : hx > cx0 + c->w ? cx0 + c->w : hx;
+        float qy = hy < cy0 ? cy0 : hy > cy0 + c->h ? cy0 + c->h : hy;
+
+        if ((qx - hx) * (qx - hx) + (qy - hy) * (qy - hy) < VWALL_R1 * VWALL_R1) {
+            f = f >= 1.0f ? 1.0f : f * f * (3.0f - 2.0f * f);
+            amin = (int) (255.0f - (255.0f - vwall_amin) * f + 0.5f);
+        }
+    }
+    if (amin < 255) {
+        vulture_gpumap_holed(c, cx0, cy0, (float) vwall_hx, (float) (vwall_hy - VWALL_BODY), VWALL_R0, VWALL_R1,
+                             amin);
+        if (vulture_normal_capture && nm)
+            vulture_gpumap_normal_holed(nm, cx0, cy0, (float) vwall_hx, (float) (vwall_hy - VWALL_BODY), VWALL_R0,
+                                        VWALL_R1, amin);
+    } else {
+        vulture_put_img(cx0, cy0, c);
+        if (vulture_normal_capture && nm && vulture_gpumap_on)
+            vulture_gpumap_normal(nm, cx0, cy0);
+    }
+    SDL_SetSurfaceColorMod(c, 255, 255, 255);
+    for (int e = 0; e < 2; e++) { /* the lips */
+        SDL_Surface *ls = (lips >> e) & 1 ? vrock_lip(e) : NULL;
+
+        if (!ls)
+            continue;
+        SDL_SetSurfaceColorMod(ls, (Uint8) sh, (Uint8) sh, (Uint8) sh);
+        if (amin < 255)
+            vulture_gpumap_holed(ls, cx0, cy0, (float) vwall_hx, (float) (vwall_hy - VWALL_BODY), VWALL_R0,
+                                 VWALL_R1, amin);
+        else
+            vulture_put_img(cx0, cy0, ls);
+        SDL_SetSurfaceColorMod(ls, 255, 255, 255);
+    }
+    fc.x0 = (float) x, fc.y0 = (float) (y - h), fc.k = 0.0f, fc.h = 0;
+    fc.seq = ++vxr_seq, fc.amin = amin, fc.cap = true;
+    vxr_faces.push_back(fc);
+}
+
+/* the foot of a rough rock face, low high: the bottom of its art */
+static void
+vrock_low_face(int x, int y, int tile, int low, int sh)
+{
+    vulture_tile *t = vulture_get_tile(tile);
+    SDL_Rect src;
+    int keep;
+
+    if (!t || !t->graphic)
+        return;
+    keep = low + V_MAP_YMOD + 1;
+    if (keep > t->graphic->h)
+        keep = t->graphic->h;
+    src.x = 0, src.y = t->graphic->h - keep, src.w = t->graphic->w, src.h = keep;
+    SDL_SetSurfaceColorMod(t->graphic, (Uint8) sh, (Uint8) sh, (Uint8) sh);
+    if (vulture_gpumap_on) {
+        vulture_gpumap_blit(t->graphic, &src, x + t->xmod, y + t->ymod + src.y);
+    } else {
+        SDL_Rect d = { (Sint16) (x + t->xmod), (Sint16) (y + t->ymod + src.y), (Uint16) src.w, (Uint16) src.h };
+
+        SDL_BlitSurface(t->graphic, &src, vulture_screen, &d);
+    }
+    SDL_SetSurfaceColorMod(t->graphic, 255, 255, 255);
+}
+
+/* end of a square in the second pass: its block - faces toward what lies
+   lower in front, and its top */
+static void
+vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int ei)
+{
+    static const int fadeby[VROCK_D + 1] = { 255, 255, 150, 70 };
+    int h, b, sh, side, hw;
+
+    if (!vrock_on || !md || !isok(j, i) || !(h = vrock_hh[i][j]))
+        return;
+    b = md->get_glyph(MAP_BACK, j, i);
+    hw = vrock_wall_h();
+    sh = b == V_TILE_WALL_GENERIC ? 255 : fadeby[vrock_d[i][j] > VROCK_D ? VROCK_D : vrock_d[i][j]];
+    for (side = 0; side < 2; side++) { /* screen-south (side 2), screen-east (side 3) */
+        int nj = side ? ej : sj, ni = side ? ei : si, nb, nh, face;
+        bool out = !isok(nj, ni);
+
+        nb = out ? V_MISC_UNMAPPED_AREA : md->get_glyph(MAP_BACK, nj, ni);
+        nh = out ? 0 : vrock_hh[ni][nj];
+        face = side ? walls_full[V_WALL_ROUGH].east : walls_full[V_WALL_ROUGH].south;
+        if (vulture_opts.wall_style != V_WALL_DISPLAY_STYLE_FULL)
+            face = side ? walls_half[V_WALL_ROUGH].east : walls_half[V_WALL_ROUGH].south;
+        if (b == V_TILE_WALL_GENERIC) {
+            /* a wall: its faces toward open ground come from get_wall_tiles;
+               toward a lower block in front (or the map's edge), rough rock */
+            if (out || (!vrock_open(nb) && nh > 0 && nh < h))
+                vwall_draw(x, y, face, side ? 3 : 2, 0);
+            continue;
+        }
+        if (vrock_open(nb) || (nh > 0 && nh < h)) {
+            if (h >= hw) {
+                vulture_tile *ft = vulture_get_tile(face);
+
+                if (ft && ft->graphic && sh < 255) { /* darker with the band */
+                    SDL_SetSurfaceColorMod(ft->graphic, (Uint8) sh, (Uint8) sh, (Uint8) sh);
+                    vwall_draw(x, y, face, side ? 3 : 2, 0);
+                    SDL_SetSurfaceColorMod(ft->graphic, 255, 255, 255);
+                } else {
+                    vwall_draw(x, y, face, side ? 3 : 2, 0);
+                }
+            } else {
+                vrock_low_face(x, y, face, h, sh);
+            }
+        }
+    }
+    { /* the lips: where what lies behind is lower - the room, the corridor, a shelf */
+        int lips = 0, e;
+
+        for (e = 0; e < 2; e++) {
+            int oj, oi, nj, ni;
+
+            v_rot(e ? 0 : -1, e ? -1 : 0, vulture_view_rot, &oj, &oi);
+            nj = j + oj, ni = i + oi;
+            if (isok(nj, ni) && vrock_hh[ni][nj] < h && md->get_glyph(MAP_BACK, nj, ni) != V_MISC_UNMAPPED_AREA)
+                lips |= 1 << e;
+            else if (isok(nj, ni) && vrock_hh[ni][nj] > 0 && vrock_hh[ni][nj] < h)
+                lips |= 1 << e;
+        }
+        vrock_cap_put(x, y, h, sh, (j * 7 + i * 3) % 3, (float) (y - vwall_hy) / 22.0f, lips);
     }
 }
 
@@ -8933,10 +9461,11 @@ vulture_idle_bob(bool at_map)
     (void) vfx_alive();
     levwin->force_redraw();
     ROOTWIN->draw_windows();
-    vulture_refresh_window_region();
     /* s117: the redraw painted over the hover tooltip - put it back (it
-       used to flash up and vanish within ~80 ms) */
-    vulture_mouse_draw();
+       used to flash up and vanish within ~80 ms).  s215: BEFORE the one
+       present - presenting the windows first sent a frame out without it
+       every idle tick, and the tooltip over your hero flickered */
+    vulture_mouse_draw_noflush();
     vulture_refresh_window_region();
     vulture_mouse_refresh();
     vulture_mouse_restore_bg();
@@ -18045,6 +18574,11 @@ levelwin::draw()
             for (dir_idx = 0; dir_idx < 12; dir_idx++)
                 vulture_put_tile(x, y, maptile_floor_edge[i][j].dir[dir_idx]);
 
+            /* s214: cracks, pebbles, a puddle, moss, old bones */
+            if (map_back >= V_TILE_FLOOR_COBBLESTONE && map_back <= V_TILE_FLOOR_DARK)
+                vdecal_draw(j, i, x, y, get_floor_decor(map_back, i, j), map_deco[i][j] != 0,
+                            map_data->get_glyph(MAP_FURNITURE, j, i) != V_TILE_NONE);
+
             /* s205: the foot of the walls behind, the slab's faces in front */
             vao_square(map_data, j, i, x, y, map_darkness, vl_fog);
         }
@@ -18052,6 +18586,7 @@ levelwin::draw()
     vslab_draw(); /* s205: over the void's tiles, under everything standing */
     vxr_faces.clear(), vxr_mons.clear(), vxr_seq = 0; /* s210 */
     vtorch_list.clear(); /* s211 */
+    vrock_prepare(map_data, view_x, view_y, map_tr_y, diff, sum); /* s215: the rock mass */
     vwall_hole_on = u.ux && !u.uswallow && !vwall_probe_off; /* s209: the walls in front of you see-through round you */
     if (vwall_hole_on) {
         double o = vulture_opts.wall_opacity;
@@ -18097,13 +18632,17 @@ levelwin::draw()
             nex += j, ney += i, nsx += j, nsy += i;
 
             /* 1. West and north walls (s209: a room's front walls - solid,
-               their face toward you; see-through round you) */
-            if (nwx >= 1 && nwx < COLNO && nwy >= 0 && nwy < ROWNO) /* s212: its outside faces (nex, ney) */
-                vwall_draw(x, y, maptile_wall[i][j].west, 0,
-                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nwx, nwy), nex, ney); /* s187 */
-            if (nnx >= 1 && nnx < COLNO && nny >= 0 && nny < ROWNO) /* s212: its outside faces (nsx, nsy) */
-                vwall_draw(x, y, maptile_wall[i][j].north, 1,
-                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nnx, nny), nsx, nsy); /* s187 */
+               their face toward you; see-through round you).  s215: walls
+               are blocks now - these faces look away from you; the block's
+               top and the rock in front of it close it (vrock_draw) */
+            if (!vrock_on) {
+                if (nwx >= 1 && nwx < COLNO && nwy >= 0 && nwy < ROWNO) /* s212: its outside faces (nex, ney) */
+                    vwall_draw(x, y, maptile_wall[i][j].west, 0,
+                               vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nwx, nwy), nex, ney); /* s187 */
+                if (nnx >= 1 && nnx < COLNO && nny >= 0 && nny < ROWNO) /* s212: its outside faces (nsx, nsy) */
+                    vwall_draw(x, y, maptile_wall[i][j].north, 1,
+                               vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nnx, nny), nsx, nsy); /* s187 */
+            }
 
             /* shortcut for unmapped case */
             if (map_back != V_MISC_UNMAPPED_AREA || map_obj != V_TILE_NONE) {
@@ -18269,6 +18808,7 @@ levelwin::draw()
                            vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nex, ney)); /* s187 */
                 vtorch_draw(x, y, j, i, nex, ney, maptile_wall[i][j].east, true); /* s211 */
             }
+            vrock_draw(map_data, j, i, x, y, nsx, nsy, nex, ney); /* s215: its block - faces, top */
         }
     }
 
