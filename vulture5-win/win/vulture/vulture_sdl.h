@@ -122,6 +122,7 @@ extern void vulture_gpu_hd_derive(SDL_Surface *copy, SDL_Surface *orig, bool fli
                                   int alpha);
 extern void vulture_gpumap_set_view(const SDL_Rect *src, const SDL_Rect *dst);
 extern bool vulture_gpumap_hd_ok(void);
+extern void vulture_gpumap_set_focus(int y); /* s205: depth of field around you */
 extern void vulture_gpu_hd_derive_cut(SDL_Surface *copy, SDL_Surface *orig, SDL_Surface *mask,
                                       bool outside); /* s203 */
 /* the frame as it would be shown (map layer + overlay), copied into out

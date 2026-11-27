@@ -4416,6 +4416,38 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   key is chosen from the screen direction ('l' is screen right = map NE);
   vfall_freeze holds the falls and rolls at set points.
 
+### 205. The dungeon as solid blocks
+
+- The user: "make the game look more 3d in general".  The creatures were
+  already relief-lit (tiles_n has volume for nearly every sprite); what
+  looked flat was the world: floors ended paper-thin against the void and
+  nothing darkened where a wall met the floor.
+- levelwin.cpp "s205" (vao_*, vslab_*), from the floor pass:
+  - Contact shadow: a floor square darkens softly along each back edge
+    (screen up-left / up-right) where rock or a wall stands behind it -
+    two 110x44 diamond masks, 150 alpha at the edge falling to nothing
+    halfway in, corners doubling up.
+  - Slab faces: where a front edge (screen down-left / down-right) meets
+    rock or the unknown, the cut face of the slab hangs below it: a
+    generated rock section (lit rim, grain, strata) fading into the dark
+    over 28 px, the left-facing face lit and the right-facing one at 70%.
+    Queued in the floor pass and drawn after it - the void's own black
+    tiles would paint over them.  On the square grid's diamond (the floor
+    art is 109 px across a 112 px step), or neighbouring faces leave seams.
+  - "Floor" is V_TILE_FLOOR_COBBLESTONE..DARK (rooms, corridors, doorways,
+    water, ice, lava); anything else is rock to these.
+- vulture_sdl.cpp vgm_dof_pass (s205), in vgm_compose between the map layer
+  and the overlay: depth of field.  The composed map is halved three times
+  (2x2 averages) and laid back upscaled in 8 px strips whose alpha rises
+  with distance from the focus (you: levelwin sets it each frame) - sharp
+  within 24% of the screen height, full softening 20% further.  The
+  overlay (effects, text, HUD) stays sharp.  A room around you is always
+  in focus; big caves and far parts soften at the top and bottom.
+  vulture.conf depth_blur=0 turns it off (vulture_opts.depth_blur, default
+  1); probes: VULTURE_NO_DOF, VULTURE_DOF_BAND (percent).
+- Probe VULTURE_SELFTEST_LOOK: magic mapping, then the whole frame
+  (look_full.bmp).  Remembered parts stay dark under the fog of war.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

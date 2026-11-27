@@ -37,6 +37,9 @@ struct vulture_optstruct {
 	/* s168: present frames through the graphics card (an SDL_Renderer);
 	 * falls back to the window surface if no accelerated renderer exists */
 	int gpu;
+	/* s205: depth of field - the map far above and below you softens, as a
+	 * camera close over a diorama sees it.  1 (default) on, 0 off. */
+	int depth_blur;
 	/* Overview-map (Tab) zoom.  The parchment is a fixed 640x480 painting;
 	 * this is the integer factor its art is built at.  0 = auto: the largest
 	 * factor that fits on screen WITHOUT covering the message lines. */

@@ -6209,6 +6209,150 @@ vfall_probe_tick(Uint32 now)
     vfall_probe_sub = 1, vfall_probe_t = SDL_GetTicks();
 }
 
+/*
+ * IMPLEMENTATION_LOG s205: the dungeon as solid blocks.
+ *  - Contact shadow (ambient occlusion): a floor square darkens softly along
+ *    the edges where a wall or rock stands behind it, deepest in corners, so
+ *    walls stand ON the floor instead of floating over it.
+ *  - Slab faces: where a floor square's front edge (toward you) meets rock
+ *    or the void, the cut face of the slab hangs below it - rock with a
+ *    lit rim and strata, lit from the upper left (the left-facing face
+ *    brighter), fading into the dark below - so rooms and corridors read as
+ *    solid blocks rather than sheets floating in black.  Drawn after the
+ *    whole floor pass (the void's black tiles would paint over them).
+ */
+#define VSLAB_D 28 /* a slab face's depth, px */
+struct vslab_t {
+    int x, y;            /* the square's centre on screen */
+    Uint8 side, shade;   /* side 0: its lower-left edge, 1: lower-right */
+};
+static std::vector<vslab_t> vslab_list;
+static SDL_Surface *vao_mask[2] = { NULL, NULL }; /* the contact shadow along the upper-left / upper-right edge */
+static SDL_Surface *vslab_tex = NULL;
+
+static bool
+vao_floor(int b) /* a floor of some kind - not rock, a wall, or the unknown */
+{
+    return b >= V_TILE_FLOOR_COBBLESTONE && b <= V_TILE_FLOOR_DARK;
+}
+
+static SDL_Surface *
+vao_make_mask(int side)
+{
+    int w = 110, h = 44, x, y;
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+
+    if (!s)
+        return NULL;
+    SDL_LockSurface(s);
+    for (y = 0; y < h; y++) {
+        Uint32 *row = (Uint32 *) ((Uint8 *) s->pixels + y * s->pitch);
+
+        for (x = 0; x < w; x++) {
+            double u = (x + 0.5 - w / 2.0) / (w / 2.0), v = (y + 0.5 - h / 2.0) / (h / 2.0);
+            double d = side == 0 ? 1.0 + u + v : 1.0 - u + v, a = 0.0; /* 0 at that edge, 1 at the middle */
+
+            if (fabs(u) + fabs(v) <= 1.0 && d < 0.5)
+                a = pow(1.0 - d / 0.5, 1.7) * 150.0;
+            row[x] = (Uint32) (a + 0.5) << 24; /* black */
+        }
+    }
+    SDL_UnlockSurface(s);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    return s;
+}
+
+static SDL_Surface *
+vslab_make_tex(void) /* rock seen in section: a lit rim, grain, strata, into the dark */
+{
+    int w = 64, h = VSLAB_D, x, y;
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+
+    if (!s)
+        return NULL;
+    SDL_LockSurface(s);
+    for (y = 0; y < h; y++) {
+        Uint32 *row = (Uint32 *) ((Uint8 *) s->pixels + y * s->pitch);
+        double fy = (double) y / (h - 1), a = 255.0 * pow(1.0 - fy, 1.2);
+
+        for (x = 0; x < w; x++) {
+            double n = 0.5 * vsp_hash(x, y, 7) + 0.5 * vsp_hash(x / 4, y / 3, 11);
+            double strata = 0.84 + 0.16 * sin(y * 1.3 + 1.5 * sin(x * 0.21));
+            double c = (0.55 + 0.45 * n) * strata * (y < 2 ? 1.4 : 1.0);
+            int r = (int) (98 * c), g = (int) (88 * c), b = (int) (78 * c);
+
+            r = r > 255 ? 255 : r, g = g > 255 ? 255 : g, b = b > 255 ? 255 : b;
+            row[x] = (Uint32) (a + 0.5) << 24 | (Uint32) r << 16 | (Uint32) g << 8 | (Uint32) b;
+        }
+    }
+    SDL_UnlockSurface(s);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    return s;
+}
+
+/* the floor pass: square (j, i), drawn at (x, y), is floor - shade the foot
+   of what stands behind it and queue the faces of the slab in front */
+static void
+vao_square(mapdata *md, int j, int i, int x, int y, int dark, bool lit)
+{
+    /* screen up-left, up-right, down-left, down-right: map W, N, S, E at no turn */
+    static const int nb[4][2] = { { -1, 0 }, { 0, -1 }, { 0, 1 }, { 1, 0 } };
+    int k, ax, ay;
+
+    if (!vao_floor(md->get_glyph(MAP_BACK, j, i)))
+        return;
+    if (!vao_mask[0])
+        vao_mask[0] = vao_make_mask(0), vao_mask[1] = vao_make_mask(1);
+    for (k = 0; k < 4; k++) {
+        int nj, ni;
+
+        v_rot(nb[k][0], nb[k][1], vulture_view_rot, &ax, &ay);
+        nj = j + ax, ni = i + ay;
+        if (nj >= 1 && nj < COLNO && ni >= 0 && ni < ROWNO && vao_floor(md->get_glyph(MAP_BACK, nj, ni)))
+            continue;
+        if (k < 2) { /* behind: the foot of the wall darkens the floor */
+            if (vao_mask[k])
+                vulture_put_img(x - 55, y - 21, vao_mask[k]);
+        } else if (vslab_list.size() < 1500) { /* in front: the slab's cut face */
+            vslab_t f;
+
+            f.x = x, f.y = y, f.side = (Uint8) (k - 2);
+            f.shade = (Uint8) (lit || dark <= 0 ? 255 : dark == 1 ? 140 : 80);
+            vslab_list.push_back(f);
+        }
+    }
+}
+
+/* after the floor pass: the slab faces queued, hanging from their edges */
+static void
+vslab_draw(void)
+{
+    size_t k;
+    SDL_Rect r;
+
+    if (vslab_list.empty())
+        return;
+    if (!vslab_tex && !(vslab_tex = vslab_make_tex())) {
+        vslab_list.clear();
+        return;
+    }
+    r.x = 0, r.y = 0, r.w = vslab_tex->w, r.h = vslab_tex->h;
+    for (k = 0; k < vslab_list.size(); k++) {
+        const vslab_t &f = vslab_list[k];
+        int sh = f.side == 0 ? f.shade : f.shade * 7 / 10; /* lit from the upper left */
+        /* on the square grid's own diamond (the floor art is 109 px across a
+           112 px step), so neighbouring faces meet without a seam */
+        float x0 = (float) (f.side == 0 ? f.x - V_MAP_XMOD : f.x), y0 = (float) (f.side == 0 ? f.y + 1 : f.y + 1 + V_MAP_YMOD);
+        float x1 = (float) (f.side == 0 ? f.x : f.x + V_MAP_XMOD), y1 = (float) (f.side == 0 ? f.y + 1 + V_MAP_YMOD : f.y + 1);
+        float q[8];
+
+        q[0] = x0, q[1] = y0, q[2] = x1, q[3] = y1;
+        q[4] = x1, q[5] = y1 + VSLAB_D, q[6] = x0, q[7] = y0 + VSLAB_D;
+        vdr_quad_rgb(vslab_tex, r, q, sh, sh, sh, 255);
+    }
+    vslab_list.clear();
+}
+
 /* the overlay pass, after vfx_draw */
 static void
 vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
@@ -6225,6 +6369,12 @@ vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
         return;
     vsp_level_check();
     vsp_cx = cx, vsp_cy = cy, vsp_vx = vx, vsp_vy = vy;
+    { /* s205: the camera focuses on you */
+        int fx, fy;
+
+        vfx_mover_screen(u.ux, u.uy, cx, cy, vx, vy, &fx, &fy);
+        vulture_gpumap_set_focus(fy - 30);
+    }
     if (vsp_on_count > 0)
         for (y = 0; y < ROWNO; y++)
             for (x = 1; x < COLNO; x++) {
@@ -6589,6 +6739,7 @@ vsoak_tick(bool at_map)
 }
 static void vaim_probe(int stage, const char *dir); /* s156 probe */
 static Uint32 vpause_probe_t = 0; /* s145 probe: shoot the pause menu */
+static Uint32 vlook_probe_t = 0;  /* s205 probe: the whole level known, shot */
 /* probe: s187 - VULTURE_SELFTEST_FOG maps the level and shoots the fog of
    war against the light: in the start room, in a corridor, in a dark room */
 static Uint32 vfog_probe_t = 0;
@@ -6713,6 +6864,15 @@ vulture_idle_bob(bool at_map)
         vfog_probe_t = 0;
         if (++vfog_probe_n < 4 && (vfog_probe_n == 1 || vfog_probe_move(vfog_probe_n - 1)))
             vfog_probe_t = SDL_GetTicks();
+    }
+    if (vlook_probe_t && now - vlook_probe_t > 1200 && getenv("VULTURE_SELFTEST")) { /* probe: s205 */
+        char pp[700];
+
+        vlook_probe_t = 0;
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(pp, sizeof pp, "%s" "\\" "look_full.bmp", getenv("VULTURE_SELFTEST"));
+        vulture_save_frame_bmp(pp);
     }
     if (vpause_probe_t && now - vpause_probe_t > 700 && getenv("VULTURE_SELFTEST")) {
         char pp[700];
@@ -9973,6 +10133,11 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_LOOK")) { /* probe: s205 the whole level known: far parts out of focus */
+            do_mapping();
+            vlook_probe_t = SDL_GetTicks();
             break;
         }
         if (getenv("VULTURE_SELFTEST_FALL")) { /* probe: s204 bodies falling, boulders rolling */
@@ -15800,8 +15965,12 @@ levelwin::draw()
             /* 3. Floor edges */
             for (dir_idx = 0; dir_idx < 12; dir_idx++)
                 vulture_put_tile(x, y, maptile_floor_edge[i][j].dir[dir_idx]);
+
+            /* s205: the foot of the walls behind, the slab's faces in front */
+            vao_square(map_data, j, i, x, y, map_darkness, vl_fog);
         }
     }
+    vslab_draw(); /* s205: over the void's tiles, under everything standing */
     vhp.ok = false; /* s193 */
     if (vl_fog && vfx_shadows) { /* s191: shadows cast by the lights, on the floor */
         SDL_Rect cr = { (Sint16) this->abs_x, (Sint16) this->abs_y, (Uint16) this->w,

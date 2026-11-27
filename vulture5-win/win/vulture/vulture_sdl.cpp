@@ -457,6 +457,9 @@ static bool vgm_view = false;     /* this frame's map is drawn at the zoom */
 static bool vgm_tex_view = false; /* the map layer holds a map drawn so */
 static float vgm_vsx = 1.0f, vgm_vsy = 1.0f, vgm_vlx = 0.0f, vgm_vly = 0.0f;
 static float vgm_vpx = 0.0f, vgm_vpy = 0.0f;
+static SDL_Texture *vgm_dof_t[3] = { NULL, NULL, NULL }; /* s205: the map halved, quartered, eighthed */
+static int vgm_dof_w = 0, vgm_dof_h = 0;
+static int vgm_focus_y = -1; /* s205: where the camera focuses (you), 1x map space; < 0: the middle */
 extern SDL_Surface *vulture_load_surface(char *srcbuf, unsigned int buflen); /* vulture_gfl.h */
 
 /*
@@ -714,6 +717,16 @@ static void vgm_drop(bool destroy)
 		vgm_hd_none.clear();
 	}
 	vgm_tex = vgm_out = vgm_big = vgm_rgb = NULL;
+	{ /* s205: the depth-of-field steps */
+		int k;
+
+		for (k = 0; k < 3; k++) {
+			if (destroy && vgm_dof_t[k])
+				SDL_DestroyTexture(vgm_dof_t[k]);
+			vgm_dof_t[k] = NULL;
+		}
+		vgm_dof_w = vgm_dof_h = 0;
+	}
 	vgm_valid = false;
 	vgm_blend = -1;
 	if (destroy) { /* s185 */
@@ -1295,6 +1308,81 @@ static void vgm_upload_overlay(const SDL_Rect *r)
 		vgm_upload(vgm_rgb, s, r);
 }
 
+/* s205: depth of field.  Close over a diorama a camera keeps only a band in
+   focus: the map layer far above and below you softens.  The composed map is
+   halved three times (each step a 2x2 average) and laid back, upscaled, in
+   thin strips that fade in away from the focus.  The overlay - effects,
+   text, the HUD - goes on after it, sharp. */
+static void vgm_dof_pass(void)
+{
+	static int off = -1, band_pct = 24; /* probe: VULTURE_DOF_BAND (percent) narrows the focus */
+	SDL_Texture *prev = vgm_out;
+	int W = 0, H = 0, k, fy, band, ramp, y;
+
+	if (off < 0) {
+		const char *e = getenv("VULTURE_DOF_BAND");
+
+		off = getenv("VULTURE_NO_DOF") ? 1 : 0;
+		if (e && atoi(e) > 0 && atoi(e) < 50)
+			band_pct = atoi(e);
+	}
+	if (off || !vulture_opts.depth_blur || !vgm_out)
+		return;
+	SDL_QueryTexture(vgm_out, NULL, NULL, &W, &H);
+	if (W < 128 || H < 128)
+		return;
+	if (vgm_dof_w != W || vgm_dof_h != H) {
+		for (k = 0; k < 3; k++) {
+			if (vgm_dof_t[k])
+				SDL_DestroyTexture(vgm_dof_t[k]);
+			vgm_dof_t[k] = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET,
+			                                 W >> (k + 1), H >> (k + 1));
+		}
+		vgm_dof_w = W, vgm_dof_h = H;
+	}
+	for (k = 0; k < 3; k++)
+		if (!vgm_dof_t[k])
+			return;
+	for (k = 0; k < 3; k++) { /* down: each step averages 2x2 */
+		SDL_SetRenderTarget(vulture_gpu, vgm_dof_t[k]);
+		SDL_SetTextureBlendMode(prev, SDL_BLENDMODE_NONE);
+		SDL_SetTextureScaleMode(prev, SDL_ScaleModeLinear);
+		SDL_RenderCopy(vulture_gpu, prev, NULL, NULL);
+		prev = vgm_dof_t[k];
+	}
+	SDL_SetRenderTarget(vulture_gpu, vgm_out);
+	SDL_RenderSetClipRect(vulture_gpu, NULL);
+	fy = vgm_focus_y >= 0 ? vgm_focus_y : H / 2;
+	if (vgm_focus_y >= 0 && vgm_tex_view) /* s201: drawn at the zoom */
+		fy = (int) vgm_vy((float) fy);
+	else if (vgm_focus_y >= 0 && vgm_zoom && vgm_zsrc.h > 0)
+		fy = vgm_zdst.y + (fy - vgm_zsrc.y) * vgm_zdst.h / vgm_zsrc.h;
+	band = H * band_pct / 100, ramp = H * 20 / 100;
+	SDL_SetTextureBlendMode(prev, SDL_BLENDMODE_BLEND);
+	SDL_SetTextureScaleMode(prev, SDL_ScaleModeLinear);
+	SDL_SetTextureColorMod(prev, 255, 255, 255);
+	for (y = 0; y + 8 <= H; y += 8) { /* up, in strips fading in away from the focus */
+		int d = abs(y + 4 - fy);
+		double a = d <= band ? 0.0 : d >= band + ramp ? 1.0 : (double) (d - band) / ramp;
+		SDL_Rect sr, dr;
+
+		if (a <= 0.0)
+			continue;
+		a = 0.8 * a * a * (3.0 - 2.0 * a);
+		sr.x = 0, sr.y = y >> 3, sr.w = W >> 3, sr.h = 1;
+		dr.x = 0, dr.y = y, dr.w = W, dr.h = 8;
+		SDL_SetTextureAlphaMod(prev, (Uint8) (a * 255.0 + 0.5));
+		SDL_RenderCopy(vulture_gpu, prev, &sr, &dr);
+	}
+	SDL_SetTextureAlphaMod(prev, 255);
+}
+
+/* s205: levelwin, each frame: where you are on the map layer (1x) */
+void vulture_gpumap_set_focus(int y)
+{
+	vgm_focus_y = y;
+}
+
 /* s183: the map layer - zoomed the way vzoom_apply zoomed the overlay - with
    the overlay over it, into vgm_out */
 static void vgm_compose(void)
@@ -1339,6 +1427,7 @@ static void vgm_compose(void)
 		} else
 			SDL_RenderCopy(vulture_gpu, vgm_tex, &vgm_zsrc, &vgm_zdst);
 	}
+	vgm_dof_pass(); /* s205: the far map softens, under the sharp overlay */
 	SDL_SetTextureScaleMode(vulture_gpu_tex, SDL_ScaleModeNearest);
 	if (vgm_blend == 1) {
 		SDL_SetTextureBlendMode(vulture_gpu_tex, vgm_premul);
