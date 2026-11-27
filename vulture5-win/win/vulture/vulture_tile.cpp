@@ -53,6 +53,19 @@ static vulture_tile *vulture_make_alpha_player_tile(int monnum, double op_scale)
 static inline vulture_tile * vulture_shade_tile(vulture_tile *orig, int shadelevel);
 static inline void vulture_set_tile_alpha(vulture_tile *tile, double opacity);
 
+/* s208: a back wall - any wall style's south or east tile (full or half
+   height): the face of a room's north / west wall that looks at you */
+static bool vwall_back(int tile_id)
+{
+	int k;
+
+	for (k = 0; k < V_WALL_STYLE_MAX; k++)
+		if (walls_full[k].south == tile_id || walls_full[k].east == tile_id
+		    || walls_half[k].south == tile_id || walls_half[k].east == tile_id)
+			return true;
+	return false;
+}
+
 static int vulture_obfuscate_object(int obj_id);
 
 
@@ -600,11 +613,15 @@ vulture_tile * vulture_load_tile(int tile_id)
 		return NULL;
 	}
 
-	if (TILE_IS_WALL(tile_id))
+	/* s208: see-through applies to the walls in front of a room (its south
+	   and east wall squares' north / west tiles - the walls' room side seen
+	   from behind, already faint panels); the back walls, whose brick faces
+	   and tops you look at, stand solid */
+	if (TILE_IS_WALL(tile_id) && !vwall_back(tile_id))
 		vulture_set_tile_alpha(newtile, vulture_opts.wall_opacity);
 	/* s201: where its double-resolution art is */
 	vulture_gpu_hd_register(newtile->graphic, vulture_gametiles[tile_id].filename.c_str(),
-	                        TILE_IS_WALL(tile_id) ? vulture_opts.wall_opacity : 1.0);
+	                        TILE_IS_WALL(tile_id) && !vwall_back(tile_id) ? vulture_opts.wall_opacity : 1.0);
 
 	return newtile;
 }

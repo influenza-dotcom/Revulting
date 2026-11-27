@@ -4518,6 +4518,29 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   shutting on the clock), VULTURE_SELFTEST_ARC (dagger, arrow, rock through
   the core's tmp_at, shot each step).
 
+### 208. Solid back walls
+
+- The user: "make the game look more 3D" (again).  The walls looked thin:
+  the conf's wall_opacity 0.6 (see-through walls) was baked into every
+  wall tile's alpha, so a room's back walls - brick faces with their tops
+  drawn as a band - let the black void through and read as dark glass.
+- What the wall tiles are (worth knowing): a wall tile belongs to the WALL
+  square, one per side facing open floor (get_wall_tiles).  A room's back
+  walls are its north / west wall squares' south / east tiles (brick faces
+  with a top band); its front walls are its south / east wall squares'
+  north / west tiles - the walls' room side seen from behind, which the
+  art draws as half-transparent black panels (alpha 127) with a dark top
+  line: the cutaway's ghost walls.
+- vulture_tile.cpp (vwall_back): wall_opacity now applies to the front
+  walls only (and to their HD art); a back wall loads solid.  The room
+  reads as a box - solid back walls with their tops, the front cut away -
+  on its slab (s205).  The see-through setting keeps its use: seeing into
+  the room past the walls in front of it.
+- Tried first and dropped: solid tops laid along every wall's top edge
+  (the matching south tile's band, straightened).  On the back walls they
+  only repeated the art's band; on the front walls - whose bodies are
+  ghost panels - they floated over the floor like rails.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
