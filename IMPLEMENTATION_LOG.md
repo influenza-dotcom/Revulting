@@ -4894,6 +4894,16 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   round or more from the first, fires an arrow, throws a dagger, lobs a
   rock.
 
+### 223. The room you are in shows whole
+
+- Inside a room, its front walls (ring squares with the room's floor behind
+  them on screen) and doors there turn see-through at wall_opacity - all of
+  them, not only round you - and the rock in front that would hide the
+  room's floor goes see-through like rock over a corridor.  Fades in and out
+  over 250 ms.  Off with wall_opacity 1.0 or VULTURE_NO_ROOMCUT.  Outlines
+  skip what shows through a see-through-all-over face (vxr_face_t.cut).
+  Probe ROCK saves a _s4nocut frame to compare.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

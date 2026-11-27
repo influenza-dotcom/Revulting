@@ -7517,6 +7517,7 @@ struct vxr_face_t {
     int seq;         /* drawn after anything with a smaller seq */
     int amin;        /* 255, or how solid its middle was in the see-through circle */
     bool cap;        /* s215: a block's top instead - a diamond round (x0, y0) */
+    int cut;         /* s223: see-through all over (your room's front walls, rock over ground): its alpha */
 };
 struct vxr_mon_t {
     int tile, face, tx, ty, seq;
@@ -7553,6 +7554,7 @@ static int vwall_amin = 77;            /* how solid a wall stays at the circle's
 static float vl_light_at(int x, int y); /* s212: the light grid at a square (last computed) */
 #define VWALL_DIM 190                   /* s212: a wall's outside facing the dark: this much black over it */
 static bool vwall_probe_off = false;   /* probe: the same view with no circle */
+static int vcut_now = 255; /* s223: this square see-through (the room you are in): its alpha, 255 solid */
 
 static int
 vwall_outer(int tile) /* a front wall's tile: its style's face toward you (back-wall art); -1 none */
@@ -7683,7 +7685,18 @@ vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1
     /* the wall's foot, carried on to where you stand: in front of you
        (lower on the screen) it hides you; at your side or behind, not */
     foot = eface ? y + V_MAP_YMOD - (vwall_hx - x) * k : y + (vwall_hx - x + V_MAP_XMOD) * k;
-    amin = vhole_put(x, y, tile, shade, (foot - vwall_hy + 11.0f) / 22.0f, dim);
+    if (vcut_now < 255) { /* s223: the room you are in - this wall see-through, all of it */
+        vulture_tile *ct = vulture_get_tile_shaded(tile, shade);
+
+        dim = 0;
+        if (ct && ct->graphic)
+            SDL_SetSurfaceAlphaMod(ct->graphic, (Uint8) vcut_now);
+        amin = vhole_put(x, y, tile, shade, (foot - vwall_hy + 11.0f) / 22.0f, 0);
+        if (ct && ct->graphic)
+            SDL_SetSurfaceAlphaMod(ct->graphic, 255);
+        amin = amin < vcut_now ? amin : vcut_now;
+    } else
+        amin = vhole_put(x, y, tile, shade, (foot - vwall_hy + 11.0f) / 22.0f, dim);
     if ((t = vulture_get_tile_shaded(tile, shade)) != NULL && t->graphic) { /* s210: what it may hide */
         vxr_face_t fc;
 
@@ -7694,6 +7707,7 @@ vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1
         fc.seq = ++vxr_seq;
         fc.amin = amin;
         fc.cap = false;
+        fc.cut = vcut_now; /* s223 */
         vxr_faces.push_back(fc);
     }
 }
@@ -7971,6 +7985,8 @@ vxr_draw(void)
                         g = g * g * (3.0f - 2.0f * g);
                         a = (f.amin + (255.0f - f.amin) * g) / 255.0f;
                     }
+                    if (f.cut < 255 && f.cut / 255.0f < a) /* s223: see-through all over */
+                        a = f.cut / 255.0f;
                     e = (a - 0.5f) / 0.5f;
                     vis = e > vis ? e : vis;
                 }
@@ -9125,6 +9141,7 @@ vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool 
     }
     fc.x0 = (float) x, fc.y0 = (float) (y - h), fc.k = 0.0f, fc.h = 0;
     fc.seq = ++vxr_seq, fc.amin = amin, fc.cap = true;
+    fc.cut = ghost ? ghost : 255; /* s223: see-through rock or a see-through wall's top */
     vxr_faces.push_back(fc);
 }
 
@@ -9234,6 +9251,106 @@ vrock_wall_face(struct walls (*mw)[COLNO], int j, int i, int side)
                 : (full ? walls_full[st].south : walls_half[st].south);
 }
 
+/*
+ * IMPLEMENTATION_LOG s223: the room you are in shows whole.  Inside a room,
+ * its front walls (the ring squares with the room's floor behind them on
+ * the screen) and its doors there turn see-through - all of them, at the
+ * circle's wall_opacity, not only round you - and the rock in front of
+ * them that would hide the room's floor goes see-through like the rock
+ * over a corridor.  Fades in as you enter (250 ms) and out as you leave.
+ * wall_opacity 1.0 (circle off) leaves it off; VULTURE_NO_ROOMCUT too.
+ */
+static Uint8 vcut_a[ROWNO][COLNO];   /* per square: 255 solid, less see-through */
+static Uint8 vcut_r[ROWNO][COLNO];   /* band rock over the room: 255 no, less the see-through amount */
+static int vcut_room = -1, vcut_prev = -1;
+static bool vcut_probe_off = false; /* probe: the same view, no room cut */
+static Uint32 vcut_t_in = 0, vcut_t_out = 0;
+
+static bool
+vcut_busy(Uint32 now)
+{
+    return (vcut_room >= 0 && now - vcut_t_in < 300) || (vcut_prev >= 0 && now - vcut_t_out < 300);
+}
+
+static void
+vcut_mark(mapdata *md, int room, double kk, int vx, int vy, int tr, int diff, int sum)
+{
+    static signed char rr[ROWNO][COLNO];
+    static const int bk[3][3] = { { -1, 0, 1 }, { 0, -1, 1 }, { -1, -1, 2 } }; /* behind: UL, UR, up */
+    int ii, jj, k, a = 255 - (int) ((255 - vwall_amin) * kk + 0.5), ra = 255 - (int) ((255 - 80) * kk + 0.5);
+    struct mkroom *mr;
+
+    if (room < 0 || kk <= 0.0)
+        return;
+    mr = &svr.rooms[room];
+    memset(rr, 0, sizeof rr);
+    for (ii = -tr; ii <= tr; ii++) /* in drawing order: the room's floor seen forward */
+        for (jj = diff + ii; jj + ii <= sum; jj++) {
+            int dj, di, j, i, b, r = -9;
+            bool ring;
+
+            v_rot(jj, ii, vulture_view_rot, &dj, &di);
+            j = vx + dj, i = vy + di;
+            if (j < 1 || j >= COLNO || i < 0 || i >= ROWNO)
+                continue;
+            b = md->get_glyph(MAP_BACK, j, i);
+            if (levl[j][i].roomno == room + ROOMOFFSET && vrock_open(b)) {
+                rr[i][j] = 5;
+                continue;
+            }
+            for (k = 0; k < 3; k++) {
+                int oj, oi, nj, ni;
+
+                v_rot(bk[k][0], bk[k][1], vulture_view_rot, &oj, &oi);
+                nj = j + oj, ni = i + oi;
+                if (isok(nj, ni) && rr[ni][nj] - bk[k][2] > r)
+                    r = rr[ni][nj] - bk[k][2];
+            }
+            rr[i][j] = (signed char) (r > 0 ? r : 0);
+            ring = j >= mr->lx - 1 && j <= mr->hx + 1 && i >= mr->ly - 1 && i <= mr->hy + 1;
+            if (ring && r >= 3 && (b == V_TILE_WALL_GENERIC || IS_DOOR(levl[j][i].typ))) /* a front wall, a door */
+                vcut_a[i][j] = (Uint8) (a < vcut_a[i][j] ? a : vcut_a[i][j]);
+            else if (r >= 1 && b != V_TILE_WALL_GENERIC && vrock_hh[i][j])
+                vcut_r[i][j] = (Uint8) (ra < vcut_r[i][j] ? ra : vcut_r[i][j]);
+        }
+}
+
+/* once a frame, after the circle's settings: what of your room goes see-through */
+static void
+vcut_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
+{
+    Uint32 now = SDL_GetTicks();
+    int room = -1;
+    double kin, kout;
+
+    memset(vcut_a, 255, sizeof vcut_a);
+    memset(vcut_r, 255, sizeof vcut_r);
+    vcut_now = 255;
+    if (md && u.ux && !u.uswallow && vwall_hole_on && vwall_amin < 250 && !getenv("VULTURE_NO_ROOMCUT") && !vcut_probe_off) {
+        int rn = levl[u.ux][u.uy].roomno;
+
+        if (rn >= ROOMOFFSET && rn - ROOMOFFSET < (MAXNROFROOMS + 1) * 2)
+            room = rn - ROOMOFFSET;
+    }
+    if (room != vcut_room) {
+        if (vcut_room >= 0)
+            vcut_prev = vcut_room, vcut_t_out = now;
+        vcut_room = room, vcut_t_in = now;
+    }
+    if (vcut_probe_off) /* probe: no fade either way */
+        vcut_room = -1, vcut_prev = -1;
+    kin = vcut_room >= 0 ? (now - vcut_t_in) / 250.0 : 0.0;
+    kin = kin > 1.0 ? 1.0 : kin, kin = kin * kin * (3.0 - 2.0 * kin);
+    kout = vcut_prev >= 0 ? 1.0 - (now - vcut_t_out) / 250.0 : 0.0;
+    if (kout <= 0.0)
+        vcut_prev = -1, kout = 0.0;
+    kout = kout * kout * (3.0 - 2.0 * kout);
+    if (vcut_prev == vcut_room)
+        vcut_prev = -1;
+    vcut_mark(md, vcut_room, kin, vx, vy, tr, diff, sum);
+    vcut_mark(md, vcut_prev, kout, vx, vy, tr, diff, sum);
+}
+
 /* s219: is the block at (j, i) see-through (style 4: band rock open
    ground behind would be hidden by) - to its neighbours it is not there */
 static bool
@@ -9244,7 +9361,7 @@ vrock_ghost_at(mapdata *md, int j, int i)
     if (vrock_style != 4 || !isok(j, i) || !vrock_hh[i][j] || md->get_glyph(MAP_BACK, j, i) == V_TILE_WALL_GENERIC)
         return false;
     d = vrock_d[i][j];
-    return d >= 1 && d <= VROCK_D && vrock_reach[i][j] >= 1;
+    return d >= 1 && d <= VROCK_D && (vrock_reach[i][j] >= 1 || vcut_r[i][j] < 168); /* s223: over your room */
 }
 
 /* end of a square in the second pass: its block - faces toward what lies
@@ -9262,6 +9379,10 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
     dd = vrock_d[i][j] < 0 ? 0 : vrock_d[i][j] > VROCK_D ? VROCK_D : vrock_d[i][j];
     sh = b == V_TILE_WALL_GENERIC ? 255 : fadeby[dd];
     ghost = vrock_style == 4 && b != V_TILE_WALL_GENERIC && vrock_reach[i][j] >= 1 ? 80 : 0; /* s219 */
+    if (!ghost && b != V_TILE_WALL_GENERIC && vcut_r[i][j] < 168) /* s223: over the room you are in */
+        ghost = vcut_r[i][j];
+    if (b == V_TILE_WALL_GENERIC && vcut_now < 255) /* s223: a front wall of your room: its top too */
+        ghost = vcut_now;
     for (side = 0; side < 2; side++) { /* screen-south (side 2), screen-east (side 3) */
         int nj = side ? ej : sj, ni = side ? ei : si, nb, nh, face, dim;
         bool out = !isok(nj, ni);
@@ -9812,6 +9933,12 @@ vrock_probe_shot(const char *name)
         snprintf(p, sizeof p, "%s" "\\" "%s_s%d.bmp", getenv("VULTURE_SELFTEST"), name, sv[s]);
         vulture_save_frame_bmp(p);
     }
+    vrock_style = 4, vcut_probe_off = true; /* s223: the same, the room you are in not cut */
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    snprintf(p, sizeof p, "%s" "\\" "%s_s4nocut.bmp", getenv("VULTURE_SELFTEST"), name);
+    vulture_save_frame_bmp(p);
+    vcut_probe_off = false;
     vrock_style = keep;
     levwin->force_redraw();
     vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rock probe: %s at %d,%d\n", name, u.ux, u.uy);
@@ -10530,7 +10657,7 @@ vulture_idle_bob(bool at_map)
         for (q = 0; q < vfx_list.size(); q++)
             if (vfx_list[q].kind == 3 && now - vfx_list[q].t0 < vfx_list[q].dur)
                 marker = true;
-        if (now - last < ((vsp_active(now) || vstair_busy(now)) ? 16u : marker ? 25u : vidle_interval)) /* s198, s216: 60 fps */
+        if (now - last < ((vsp_active(now) || vstair_busy(now) || vcut_busy(now)) ? 16u : marker ? 25u : vidle_interval)) /* s198, s216, s223: 60 fps */
             return;
     }
     last = now;
@@ -19688,6 +19815,7 @@ levelwin::draw()
         vwall_amin = (int) ((o < 0.0 ? 0.0 : o > 1.0 ? 1.0 : o) * 255.0 + 0.5);
         vfx_mover_screen(u.ux, u.uy, map_centre_x, map_centre_y, view_x, view_y, &vwall_hx, &vwall_hy);
     }
+    vcut_prepare(map_data, view_x, view_y, map_tr_y, diff, sum); /* s223: the room you are in, whole */
     vhp.ok = false; /* s193 */
     if (vl_fog && vfx_shadows) { /* s191: shadows cast by the lights, on the floor */
         SDL_Rect cr = { (Sint16) this->abs_x, (Sint16) this->abs_y, (Uint16) this->w,
@@ -19713,6 +19841,7 @@ levelwin::draw()
             map_back = map_data->get_glyph(MAP_BACK, j, i);
             map_obj = map_data->get_glyph(MAP_OBJ, j, i);
             map_mon = map_data->get_glyph(MAP_MON, j, i);
+            vcut_now = vcut_a[i][j]; /* s223 */
             if (vnm_ok) /* s153: as in the floor pass */
                 vulture_normal_capture = vl_L[i][j] >= 0.55f || distmin(u.ux, u.uy, j, i) <= 4;
 
@@ -19747,11 +19876,17 @@ levelwin::draw()
                     int furn = map_data->get_glyph(MAP_FURNITURE, j, i);
 
                     if (!vdr_draw(x, y, j, i, furn) && !vtree_draw(x, y, j, i, furn)) { /* s206: trees sway */
+                        vulture_tile *dt = vcut_now < 255 && furn != V_TILE_NONE ? vulture_get_tile(v_rot_door(furn)) : NULL;
+
+                        if (dt && dt->graphic) /* s223: in your room's front wall - see-through */
+                            SDL_SetSurfaceAlphaMod(dt->graphic, (Uint8) vcut_now);
                         if (vwall_hole_on && furn != V_TILE_NONE && IS_DOOR(levl[j][i].typ))
                             /* s210: a door in front of you, see-through round you */
                             vhole_put(x, y, v_rot_door(furn), 0, (float) (y - vwall_hy) / 22.0f);
                         else
                             vulture_put_tile(x, y, v_rot_door(furn));
+                        if (dt && dt->graphic)
+                            SDL_SetSurfaceAlphaMod(dt->graphic, 255);
                     }
                 }
 
