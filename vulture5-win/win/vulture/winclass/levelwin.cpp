@@ -6353,6 +6353,425 @@ vslab_draw(void)
     vslab_list.clear();
 }
 
+/*
+ * IMPLEMENTATION_LOG s206: a living dungeon.
+ *  - Creatures turn in depth: a change of facing narrows the sprite to an
+ *    edge and opens it out the other way (~150 ms) - a turn about its own
+ *    upright axis - instead of a mirror flip.
+ *  - Awake hostiles in view turn to face you and keep watching; pets and
+ *    peaceful folk glance about now and then.  Every few seconds an awake
+ *    creature standing still does something small - a little one hops (its
+ *    shadow staying on the floor), others shift their weight or stretch -
+ *    each on its own clock.  Sleepers keep still.  You too, standing idle.
+ *  - Trees sway in a breeze that rises and dies down, each in its own time,
+ *    and now and then drop a leaf; fountains glitter and drip into their
+ *    basins; a sink's tap drips; incense curls up from altars; a low mist
+ *    creeps about graves; thrones catch the light.
+ */
+struct vlife_t {
+    signed char face, from, glance; /* the way it faces; before its turn; a glance's way */
+    Uint8 act;                      /* a fidget: 0 none, 1 hop, 2 weight shift, 3 stretch */
+    Uint32 turn_t0, next, act_t0, glance_until, seen;
+};
+static std::map<unsigned, vlife_t> vlife; /* by monster id; 0xFFFFFFFF is you */
+static Uint32 vlife_prune_t = 0;
+
+static Uint32
+vlife_gap(bool hero) /* how long until the next fidget or glance */
+{
+    static int busy = -1; /* probe: VULTURE_LIFE_BUSY makes it often */
+
+    if (busy < 0)
+        busy = getenv("VULTURE_LIFE_BUSY") ? 1 : 0;
+    if (busy)
+        return 300 + rand() % 500;
+    return hero ? 6000 + rand() % 7000 : 2500 + rand() % 5500;
+}
+
+/* step 5 of the map: the creature on (j, i), drawn as `tile` facing `face`
+   (its walk's) at screen x `sx`, its pose so far in xs, ys, deg and the y it
+   stands at - its life adds to the pose; the face to draw comes back */
+static int
+vlife_apply(int j, int i, int tile, int face, bool moving, int sx, double *xs, double *ys, double *deg,
+            int *y)
+{
+    Uint32 now = SDL_GetTicks();
+    vulture_tile *vt = vulture_get_tile(tile);
+    struct monst *m = NULL;
+    std::map<unsigned, vlife_t>::iterator it;
+    bool hero = u_at(j, i), asleep, hostile, small;
+    unsigned key;
+    int art, eff, want, hx, hy;
+
+    if (!vfx_ambient || !vt || !vt->graphic)
+        return face;
+    if (hero) {
+        key = 0xFFFFFFFFu;
+        asleep = u.usleep || gm.multi < 0;
+        hostile = false;
+        small = verysmall(gy.youmonst.data) != 0;
+    } else {
+        if (!(m = m_at(j, i)) || DEADMONSTER(m) || !canspotmon(m))
+            return face;
+        key = m->m_id;
+        asleep = m->msleeping || !m->mcanmove;
+        hostile = !m->mtame && !m->mpeaceful;
+        small = m->data->msize <= MZ_SMALL && !is_flyer(m->data) && !is_floater(m->data);
+    }
+    art = vtw_art_facing(tile, vt->graphic);
+    eff = face ? face : (art ? art : 1); /* the way it faces on screen */
+    if ((it = vlife.find(key)) == vlife.end()) {
+        vlife_t r;
+
+        r.face = r.from = (signed char) eff, r.glance = 0, r.act = 0;
+        r.turn_t0 = r.act_t0 = r.glance_until = 0, r.next = now + vlife_gap(hero), r.seen = now;
+        it = vlife.insert(std::make_pair(key, r)).first;
+    }
+    vlife_t &r = it->second;
+    r.seen = now;
+    want = eff;
+    if (asleep) { /* still */
+        r.glance = 0, r.act = 0;
+        want = r.face;
+    } else if (moving) { /* the way it walks */
+        r.glance = 0, r.act = 0;
+    } else {
+        if (hostile) { /* it watches you */
+            vsp_screen(u.ux, u.uy, &hx, &hy);
+            want = hx > sx + 4 ? 1 : hx < sx - 4 ? -1 : r.face;
+        } else if (r.glance && now < r.glance_until) {
+            want = r.glance;
+        } else {
+            r.glance = 0;
+        }
+        if (now >= r.next && !r.act) { /* something small */
+            r.next = now + vlife_gap(hero);
+            if (!hostile && rand() % 100 < 40) { /* a glance: the other way, or a pet at you */
+                r.glance = (signed char) -eff;
+                if (m && m->mtame && rand() % 2) {
+                    vsp_screen(u.ux, u.uy, &hx, &hy);
+                    r.glance = (signed char) (hx >= sx ? 1 : -1);
+                }
+                r.glance_until = now + 900 + rand() % 1400;
+            } else {
+                r.act = (Uint8) (small && rand() % 3 ? 1 : 2 + rand() % 2);
+                r.act_t0 = now;
+            }
+        }
+    }
+    if (want != r.face) /* it turns */
+        r.from = r.face, r.face = (signed char) want, r.turn_t0 = now;
+    eff = r.face;
+    if (r.turn_t0) {
+        double u = (now - r.turn_t0) / 150.0;
+
+        if (u >= 1.0) {
+            r.turn_t0 = 0;
+        } else { /* narrowed to an edge, opened out the other way */
+            double c = fabs(cos(3.14159265 * u));
+
+            *xs *= c < 0.06 ? 0.06 : c;
+            eff = u < 0.5 ? r.from : r.face;
+            vsp_live_t = now;
+        }
+    }
+    if (r.act) {
+        double dur = r.act == 1 ? 340.0 : r.act == 2 ? 760.0 : 640.0, u = (now - r.act_t0) / dur;
+
+        if (u >= 1.0) {
+            r.act = 0;
+        } else {
+            double s = sin(3.14159265 * u);
+
+            if (r.act == 1) { /* a hop - up, down, a squash as it lands */
+                *y -= (int) (8.0 * s);
+                if (u > 0.82) {
+                    double k = sin(3.14159265 * (u - 0.82) / 0.18);
+
+                    *ys *= 1.0 - 0.08 * k, *xs *= 1.0 + 0.06 * k;
+                }
+            } else if (r.act == 2) { /* its weight shifted one way and back */
+                *deg += 4.5 * sin(6.2831853 * u);
+            } else { /* a stretch */
+                *ys *= 1.0 + 0.06 * s, *xs *= 1.0 - 0.03 * s;
+            }
+            vsp_live_t = now;
+        }
+    }
+    return eff;
+}
+
+static void
+vlife_tick(Uint32 now) /* the overlay pass: forget creatures long out of sight */
+{
+    std::map<unsigned, vlife_t>::iterator it;
+
+    if (now - vlife_prune_t < 2000)
+        return;
+    vlife_prune_t = now;
+    for (it = vlife.begin(); it != vlife.end();)
+        if (now - it->second.seen > 10000)
+            vlife.erase(it++);
+        else
+            ++it;
+}
+
+/* step 2 of the map: a tree in the breeze - its crown sways, its foot stays;
+   false: not a tree (or the atmosphere is off) */
+static bool
+vtree_draw(int x, int y, int j, int i, int furn)
+{
+    vulture_tile *t;
+    double tm, ph, gust, sw;
+    float q[8];
+    SDL_Rect r;
+
+    if (furn != V_MISC_TREE || !vfx_ambient || !(t = vulture_get_tile(furn)) || !t->graphic)
+        return false;
+    tm = SDL_GetTicks() / 1000.0, ph = vsp_hash(j, i, 5) * 6.2832;
+    gust = 0.55 + 0.45 * sin(tm * 0.31 + ph * 0.7); /* the wind rises and dies down */
+    sw = gust * (3.4 * sin(tm * 1.15 + ph) + 1.4 * sin(tm * 2.9 + ph * 1.7));
+    r.x = 0, r.y = 0, r.w = t->graphic->w, r.h = t->graphic->h;
+    q[0] = (float) (x + t->xmod + sw), q[1] = (float) (y + t->ymod);
+    q[2] = (float) (x + t->xmod + t->graphic->w + sw), q[3] = q[1];
+    q[4] = (float) (x + t->xmod + t->graphic->w), q[5] = (float) (y + t->ymod + t->graphic->h);
+    q[6] = (float) (x + t->xmod), q[7] = q[5];
+    vdr_quad_rgb(t->graphic, r, q, 255, 255, 255, 255);
+    vdr_quad_normal(vulture_get_tile_normal(furn, false), r, q, 255);
+    return true;
+}
+
+/* the overlay pass: the furniture in sight alive - formulas of the clock and
+   the square, nothing kept */
+static void
+vlive_furniture(mapdata *md, double t)
+{
+    int x, y, k;
+
+    if (!vfx_ambient || !md || u.uswallow)
+        return;
+    for (y = 0; y < ROWNO; y++)
+        for (x = 1; x < COLNO; x++) {
+            int f, sx, sy;
+            double ph;
+
+            if (!cansee(x, y))
+                continue;
+            f = md->get_glyph(MAP_FURNITURE, x, y);
+            if (f != V_MISC_FOUNTAIN && f != V_MISC_SINK && f != V_MISC_ALTAR && f != V_MISC_GRAVE
+                && f != V_MISC_THRONE && f != V_MISC_TREE)
+                continue;
+            vsp_screen(x, y, &sx, &sy);
+            ph = vsp_hash(x, y, 3) * 100.0;
+            if (f == V_MISC_FOUNTAIN) {
+                /* the plume shimmers as the water moves through it, and glitters */
+                vsp_blob(sx + (int) (3.0 * sin(t * 1.7 + ph)), sy - 56, 24, 110, 160, 255,
+                         (int) (30 + 16 * sin(t * 4.3 + ph)), true, 0.7);
+                for (k = 0; k < 14; k++) {
+                    double s = sin(t * 6.0 + k * 1.7 + ph), a = s > 0.0 ? pow(s, 3.0) : 0.0;
+
+                    if (a > 0.05)
+                        vsp_blob(sx + (int) ((vsp_hash(x * 7 + k, y, 1) - 0.5) * 56.0),
+                                 sy - 66 + (int) (vsp_hash(x, y * 7 + k, 2) * 24.0), 1.8, 210, 235, 255,
+                                 (int) (235 * a), true);
+                }
+                for (k = 0; k < 6; k++) { /* drops falling into the basin */
+                    double u = fmod(t / 0.9 + k / 6.0 + ph, 1.0), side = k % 2 ? 1.0 : -1.0;
+                    int px = sx + (int) (side * (20 + 12 * vsp_hash(x, y, k))), py = sy - 48 + (int) (30 * u * u);
+
+                    vsp_blob(px, py, 1.6, 175, 215, 255, (int) (230 * (1.0 - u)), true);
+                }
+                vsp_blob(sx, sy - 16, 22, 120, 170, 255, (int) (18 + 14 * sin(t * 3.0 + ph)), true, 0.35);
+            } else if (f == V_MISC_SINK) { /* the tap drips */
+                double u = fmod(t / 1.7 + ph, 1.0);
+
+                if (u < 0.5)
+                    vsp_blob(sx + 2, sy - 40, 0.6 + 1.6 * u, 180, 215, 255, 200, true);
+                else if (u < 0.62)
+                    vsp_blob(sx + 2, sy - 40 + (int) (12 * (u - 0.5) / 0.12), 1.4, 180, 215, 255, 220, true);
+                else if (u < 0.85) {
+                    double w = (u - 0.62) / 0.23;
+
+                    for (k = 0; k < 6; k++)
+                        vsp_blob(sx + 2 + (int) (cos(k * 1.047) * 7 * w), sy - 28 + (int) (sin(k * 1.047) * 2.5 * w),
+                                 1.0, 170, 205, 255, (int) (150 * (1.0 - w)), true);
+                }
+            } else if (f == V_MISC_ALTAR) { /* incense curls up */
+                for (k = 0; k < 5; k++) {
+                    double u = fmod(t / 3.4 + k * 0.2 + ph, 1.0);
+                    int px = sx + (int) (sin(t * 1.3 + k * 2.1) * 9.0 * u + (vsp_hash(x, y, k) - 0.5) * 10.0);
+
+                    vsp_blob(px, sy - 40 - (int) (u * 70.0), 3.0 + 8.0 * u, 175, 185, 205,
+                             (int) (80 * sin(3.14159265 * u)), false);
+                }
+            } else if (f == V_MISC_GRAVE) { /* a low mist creeps about it */
+                for (k = 0; k < 3; k++) {
+                    double u = fmod(t / 5.0 + k / 3.0 + ph, 1.0);
+
+                    vsp_blob(sx - 32 + (int) (u * 64.0), sy - 4 + (int) (sin(t + k) * 3.0), 13.0, 140, 155, 190,
+                             (int) (62 * sin(3.14159265 * u)), false, 0.5);
+                }
+            } else if (f == V_MISC_THRONE) { /* the gold studs catch the light */
+                for (k = 0; k < 2; k++) {
+                    double s = sin(t * 1.6 + k * 2.3 + ph), a = s > 0.0 ? pow(s, 14.0) : 0.0;
+
+                    if (a > 0.05)
+                        vsp_blob(sx + (k ? 22 : -18), sy - (k ? 66 : 60), 2.0, 255, 225, 140, (int) (230 * a), true);
+                }
+            } else { /* a tree drops a leaf now and then */
+                double c = t / 2.6 + ph, u = fmod(c, 1.0);
+                int leaf = (int) floor(c), lx = sx + (int) ((vsp_hash(x, y, leaf) - 0.5) * 40.0);
+
+                if (u < 0.7)
+                    vsp_blob(lx + (int) (8.0 * sin(u * 12.0 + ph)), sy - 60 + (int) (64.0 * u / 0.7), 1.4, 70, 140,
+                             60, 220, false);
+                else
+                    vsp_blob(lx + (int) (8.0 * sin(8.4 + ph)), sy + 4, 1.4, 70, 140, 60,
+                             (int) (220 * (1.0 - (u - 0.7) / 0.3)), false);
+            }
+        }
+}
+
+/* probe: s206 - VULTURE_SELFTEST_LIFE: furniture set round you and three
+   creatures (a hostile jackal, a peaceful gnome, a newt); frames as they
+   live; then you stand on the jackal's far side and it turns to watch */
+static Uint32 vlife_probe_t = 0;
+static int vlife_probe_n = 0, vlife_probe_sub = 0, vlife_probe_shots = 0, vlife_probe_jx = 0, vlife_probe_jy = 0;
+
+static void
+vlife_probe_shot(const char *tag)
+{
+    const char *dir = getenv("VULTURE_SELFTEST");
+    char p[700];
+    SDL_Surface *o;
+    SDL_Rect a;
+    int hx, hy;
+
+    if (!dir || vlife_probe_shots >= 40 || !vulture_screen || vulture_screen->w < 960 || vulture_screen->h < 540)
+        return;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    vsp_screen(u.ux, u.uy, &hx, &hy);
+    a.w = 640, a.h = 400, a.x = hx - 320, a.y = hy - 230;
+    a.x = a.x < 0 ? 0 : a.x + a.w > vulture_screen->w ? vulture_screen->w - a.w : a.x;
+    a.y = a.y < 0 ? 0 : a.y + a.h > vulture_screen->h ? vulture_screen->h - a.h : a.y;
+    if (!(o = SDL_CreateRGBSurfaceWithFormat(0, a.w, a.h, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return;
+    snprintf(p, sizeof p, "%s\\life%02d_%s_%02d.bmp", dir, vlife_probe_n, tag, vlife_probe_shots++);
+    if (vulture_frame_to_surface(o, &a))
+        SDL_SaveBMP(o, p);
+    SDL_FreeSurface(o);
+}
+
+static struct monst *
+vlife_probe_mon(int pm, int dx, int dy, bool peaceful)
+{
+    int x = u.ux + dx, y = u.uy + dy;
+    struct monst *m;
+
+    if (!isok(x, y) || !ACCESSIBLE(levl[x][y].typ) || m_at(x, y))
+        return NULL;
+    if ((m = makemon(&mons[pm], x, y, NO_MM_FLAGS)) != 0) {
+        m->mpeaceful = peaceful ? 1 : 0;
+        m->msleeping = 0, m->mcanmove = 1;
+    }
+    return m;
+}
+
+static void
+vlife_probe_tick(Uint32 now)
+{
+    static const int fx[6] = { 2, 2, -2, -2, 0, 0 }, fy[6] = { 0, 2, 2, 0, 2, -2 };
+    static const schar ft[6] = { FOUNTAIN, ALTAR, SINK, GRAVE, THRONE, TREE };
+    static const int at[6] = { 30, 60, 90, 120, 150, 400 };
+    int k;
+
+    if (vlife_probe_sub > 0) {
+        int s = vlife_probe_sub - 1;
+
+        if (vlife_probe_n == 1) { /* living: a burst, a frame every 70 ms */
+            if (now - vlife_probe_t < (Uint32) (300 + 70 * s))
+                return;
+            vlife_probe_shot("live");
+            if (++vlife_probe_sub > 12)
+                vlife_probe_sub = 0, vlife_probe_n++, vlife_probe_t = now;
+        } else { /* the turn */
+            if (now - vlife_probe_t < (Uint32) at[s])
+                return;
+            vlife_probe_shot("turn");
+            if (++vlife_probe_sub > 6)
+                vlife_probe_sub = 0, vlife_probe_n++, vlife_probe_t = now;
+        }
+        return;
+    }
+    if (now - vlife_probe_t < 700)
+        return;
+    u.uhp = u.uhpmax;
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "life probe %d\n", vlife_probe_n);
+    switch (vlife_probe_n) {
+    case 0: { /* furniture round you; three creatures */
+        struct monst *j;
+
+        for (k = 0; k < 6; k++) { /* the nearest free room floor 2-3 squares off */
+            int x, y, bx = 0, by = 0, bd = 99;
+
+            for (y = u.uy - 3; y <= u.uy + 3; y++)
+                for (x = u.ux - 3; x <= u.ux + 3; x++) {
+                    int d = distmin(u.ux, u.uy, x, y) * 10 + abs(x - u.ux - fx[k]) + abs(y - u.uy - fy[k]);
+
+                    if (isok(x, y) && distmin(u.ux, u.uy, x, y) >= 2 && levl[x][y].typ == ROOM && !m_at(x, y)
+                        && !OBJ_AT(x, y) && d < bd)
+                        bd = d, bx = x, by = y;
+                }
+            if (!bx)
+                continue;
+            levl[bx][by].typ = ft[k];
+            if (ft[k] == ALTAR)
+                levl[bx][by].altarmask = AM_NEUTRAL;
+            newsym(bx, by);
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "life probe: furniture %d at %d,%d\n", (int) ft[k], bx, by);
+        }
+        if ((j = vlife_probe_mon(PM_JACKAL, 1, -1, false)) != 0 || (j = vlife_probe_mon(PM_JACKAL, 1, 1, false)) != 0)
+            vlife_probe_jx = j->mx, vlife_probe_jy = j->my;
+        (void) vlife_probe_mon(PM_GNOME, -1, -1, true);
+        (void) vlife_probe_mon(PM_NEWT, -1, 1, false);
+        vlife_probe_n = 1;
+        break;
+    }
+    case 2: { /* you, on the jackal's other side (on screen) */
+        int tx = 0, ty = 0, x, y, jsx, jsy, hsx, hsy;
+
+        vsp_screen(vlife_probe_jx, vlife_probe_jy, &jsx, &jsy);
+        vsp_screen(u.ux, u.uy, &hsx, &hsy);
+        for (y = vlife_probe_jy - 2; y <= vlife_probe_jy + 2 && vlife_probe_jx && !tx; y++)
+            for (x = vlife_probe_jx - 2; x <= vlife_probe_jx + 2 && !tx; x++) {
+                int sx2, sy2;
+
+                if (!isok(x, y) || !ACCESSIBLE(levl[x][y].typ) || m_at(x, y) || IS_FURNITURE(levl[x][y].typ)
+                    || levl[x][y].typ == TREE || (x == u.ux && y == u.uy))
+                    continue;
+                vsp_screen(x, y, &sx2, &sy2);
+                if ((sx2 - jsx) * (hsx - jsx) < 0 && abs(sx2 - jsx) >= 40)
+                    tx = x, ty = y;
+            }
+        if (!tx) {
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "life probe: no way round the jackal\n");
+            vlife_probe_n = 3, vlife_probe_t = now;
+            return;
+        }
+        teleds(tx, ty, TELEDS_NO_FLAGS);
+        break;
+    }
+    default:
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "life probe: done, %d shots, %d lives\n",
+                          vlife_probe_shots, (int) vlife.size());
+        vlife_probe_t = 0;
+        return;
+    }
+    flush_screen(1);
+    vlife_probe_sub = 1, vlife_probe_t = SDL_GetTicks();
+}
+
 /* the overlay pass, after vfx_draw */
 static void
 vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
@@ -6400,6 +6819,8 @@ vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
         vsp_on_count = 0;
     vdr_tick(now);   /* s203 */
     vfall_tick(now); /* s204 */
+    vlife_tick(now); /* s206 */
+    vlive_furniture(md, t); /* s206 */
     vsp_draw_waves(now);
     vsp_draw_parts(now, t, dt);
     vfl_draw(now);    /* s202 */
@@ -6890,6 +7311,8 @@ vulture_idle_bob(bool at_map)
         vdr_probe_tick(now);
     if (vfall_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s204 */
         vfall_probe_tick(now);
+    if (vlife_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s206 */
+        vlife_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -10133,6 +10556,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_LIFE")) { /* probe: s206 creatures and furniture alive */
+            vlife_probe_t = SDL_GetTicks(), vlife_probe_n = 0, vlife_probe_sub = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_LOOK")) { /* probe: s205 the whole level known: far parts out of focus */
@@ -16026,7 +16453,7 @@ levelwin::draw()
                 {
                     int furn = map_data->get_glyph(MAP_FURNITURE, j, i);
 
-                    if (!vdr_draw(x, y, j, i, furn))
+                    if (!vdr_draw(x, y, j, i, furn) && !vtree_draw(x, y, j, i, furn)) /* s206: trees sway */
                         vulture_put_tile(x, y, v_rot_door(furn));
                 }
 
@@ -16109,16 +16536,18 @@ levelwin::draw()
                         }
                     }
                     vanim_xform(j, i, &tx, &ty, &xs, &ys, &deg, &red);
-                    {
+                    { /* s206: it turns in depth, watches you, fidgets */
+                        int face = vlife_apply(j, i, map_mon, vtw_face[i][j], vtw_mv[i][j] != 0, tx, &xs, &ys, &deg,
+                                               &ty);
                         int ha = 255;
 
                         if (u_at(j, i)) { /* s193: how you were drawn, for vcond_draw */
                             if (Invis && !See_invisible)
                                 ha = 150; /* invisible: faint (110 was too faint to read) */
                             vhp.ok = true, vhp.tile = map_mon, vhp.x = tx, vhp.y = ty;
-                            vhp.face = vtw_face[i][j], vhp.sx = xs, vhp.sy = ys, vhp.deg = deg;
+                            vhp.face = face, vhp.sx = xs, vhp.sy = ys, vhp.deg = deg;
                         }
-                        vtw_put_tile_x(tx, ty, map_mon, vtw_face[i][j], xs, ys, deg, red, ha);
+                        vtw_put_tile_x(tx, ty, map_mon, face, xs, ys, deg, red, ha);
                     }
                     if (iflags.hilite_pet
                         && map_data->get_glyph(MAP_PET, j, i))

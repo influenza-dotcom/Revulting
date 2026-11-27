@@ -4448,6 +4448,39 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Probe VULTURE_SELFTEST_LOOK: magic mapping, then the whole frame
   (look_full.bmp).  Remembered parts stay dark under the fog of war.
 
+### 206. A living dungeon
+
+- The user: "i want the game to feel more alive even and look more 3D".
+  Ambient life already existed (dust, drips, embers s160; halos, water
+  glints, lava pulses s171; living fog s192; breathing s85; flyers bob s82),
+  so this round gives the creatures and the furniture behaviour.
+- levelwin.cpp "s206" (vlife_*), at the creature step:
+  - A change of facing is a turn in depth: the sprite narrows to an edge
+    and opens out the other way over 150 ms (|cos| on its width, the face
+    switching at the middle) instead of a mirror flip - walking, watching,
+    glancing alike.  Facing 0 (never moved) counts as the art's own way, so
+    a first look doesn't "turn".
+  - Awake hostiles in view face you and keep watching (screen x against
+    yours; always, whether or not it can see you - its perception stays
+    hidden).  Pets and peacefuls glance about (40% of their moments; a pet
+    sometimes at you); every 2.5-8 s an awake creature standing still
+    fidgets: a small one (MZ_SMALL or less, not flying) hops 8 px - its
+    s158 shadow stays on the floor - with a squash on landing; others shift
+    their weight or stretch.  Sleepers (shown as asleep anyway, s137) keep
+    still.  You too, every 6-13 s.  Records by m_id (0xFFFFFFFF is you),
+    forgotten 10 s out of sight.
+- vtree_draw (the furniture step): trees sway - the crown sheared over a
+  fixed foot by a breeze that rises and dies down, each tree its own phase.
+- vlive_furniture (the overlay pass, furniture in sight, stateless): a
+  fountain's plume shimmers and glitters and drops fall into its basin; a
+  sink's tap drips and splashes; incense curls up from altars; a low mist
+  creeps about graves; a throne's gold studs glint; trees drop a leaf.
+- All under the Atmosphere switch (vfx_ambient).
+- Probe VULTURE_SELFTEST_LIFE: furniture on the nearest free floor round
+  you, a hostile jackal, a peaceful gnome, a newt; a burst of frames, then
+  you stand on the jackal's other side (on screen) and it turns.
+  VULTURE_LIFE_BUSY makes the fidgets come every 0.3-0.8 s.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
