@@ -4672,6 +4672,28 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   maps it like a creature with no turn or scale.  Probe XRAY now also
   drops a chest behind a front wall.
 
+### 213. Water that reflects; rings in it
+
+- vrefl_draw runs at the monster step, BEFORE the creature's sprite, with
+  its exact pose (tile, facing as vtw_put_tile_x chose, glide, scale): the
+  sprite is laid upside down from its feet onto the water / ice squares in
+  front (its own and up to two screen rows ahead), clipped to each
+  diamond in 2 px strips through vulture_gpumap_quad (a quad whose corners
+  are given bottom-first flips the source).  Water: each strip sways
+  (+-1.6 px), blue tint, fading with depth; ice: paler, sharper, still.
+  The floor pass is already down; things on those squares and walls in
+  front are drawn over it later in the same pass.  Faint (invisible)
+  creatures cast none.  GPU map only.
+- A creature in water, not flying or floating, sends three rings out from
+  its feet (additive dots on the map layer).
+- get_wall_decor gives plain brick to walls facing any floor that is not a
+  room's (water, ice, lava...), so walls round a pool inside a room came
+  out brick in a vine room: the s209 borrow (a room floor beside the wall
+  square) now covers every such floor, not only rough.
+- Probe VULTURE_SELFTEST_WATER moves you where the most floor lies ahead
+  (full-height front walls hid the first pool), pours eight squares of
+  pool in front of you and puts a giant eel in it.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

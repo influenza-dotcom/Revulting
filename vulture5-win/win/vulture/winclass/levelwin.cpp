@@ -8125,6 +8125,235 @@ vgrade_probe_tick(Uint32 now)
     levwin->force_redraw();
 }
 
+/*
+ * IMPLEMENTATION_LOG s213: water that reflects.
+ *  - A creature (you too) standing on or by water is mirrored in it: at
+ *    the monster step, before its sprite, its pose (tile, facing, glide,
+ *    scale) is laid upside down from its feet onto the water and ice
+ *    squares in front of it, clipped to their diamonds in 2 px strips -
+ *    on water each strip sways with the waves and the colour goes blue and
+ *    fades with depth; ice reflects sharper and paler, without waves.
+ *    Whatever stands on those squares, and walls in front, are drawn over
+ *    it later in the pass.  GPU map only (vulture_gpumap_quad).
+ *  - A creature IN water (not flying or floating) sends rings out from its
+ *    feet.
+ */
+static bool
+vrefl_wet(mapdata *md, int x, int y, bool *ice) /* water or ice the hero knows */
+{
+    int b;
+
+    if (!md || !isok(x, y) || !levl[x][y].seenv)
+        return false;
+    b = md->get_glyph(MAP_BACK, x, y);
+    if (ice)
+        *ice = b == V_TILE_FLOOR_ICE;
+    return b == V_TILE_FLOOR_WATER || b == V_TILE_FLOOR_ICE;
+}
+
+/* the monster step: the creature on (j, i), about to be drawn at (tx, ty)
+   facing face, scaled xs, ys - its reflection, and rings if it is in water */
+static void
+vrefl_draw(mapdata *md, int j, int i, int tile_id, int face, int tx, int ty, double xs, double ys, int cx, int cy,
+           int vx, int vy)
+{
+    /* its square and the ones in front, as screen steps (va, vb) */
+    static const int nb[9][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 }, { 2, 0 },
+                                  { 0, 2 }, { 2, 1 }, { 1, 2 }, { 2, 2 } };
+    vulture_tile *tile;
+    SDL_Surface *img;
+    int art, dx, dy, w, h, k, feet, x0, x1;
+    double tt;
+    bool flip, any = false, wet[9], ice[9];
+    int wx[9], wy[9];
+
+    if (!vulture_gpumap_on || !md || !vfx_ambient || !(tile = vulture_get_tile(tile_id)) || !tile->graphic)
+        return;
+    for (k = 0; k < 9; k++) {
+        int dj, di;
+
+        v_rot(nb[k][0], nb[k][1], vulture_view_rot, &dj, &di);
+        wet[k] = vrefl_wet(md, j + dj, i + di, &ice[k]);
+        if (wet[k]) {
+            vfx_square_screen(j + dj, i + di, cx, cy, vx, vy, &wx[k], &wy[k]);
+            any = true;
+        }
+    }
+    if (!any)
+        return;
+    art = face ? vtw_art_facing(tile_id, tile->graphic) : 0;
+    flip = face != 0 && ((art == 0 && face < 0) || (art != 0 && art != face));
+    img = tile->graphic, dx = tx + tile->xmod;
+    if (flip) {
+        SDL_Surface *fl = vtw_flipped(tile_id, tile->graphic);
+
+        if (fl)
+            img = fl, dx = tx - tile->xmod - tile->graphic->w + 1;
+    }
+    dy = ty + tile->ymod, w = img->w, h = img->h;
+    if (xs < 0.2 || ys < 0.2)
+        return;
+    feet = dy + h;
+    {
+        double cxm = dx + w / 2.0;
+
+        x0 = (int) floor(cxm - w / 2.0 * xs), x1 = (int) ceil(cxm + w / 2.0 * xs);
+    }
+    tt = SDL_GetTicks() / 1000.0;
+    for (k = 0; k < 9; k++) {
+        int d;
+
+        if (!wet[k])
+            continue;
+        for (d = 0; d < h; d += 2) { /* screen rows below the feet, two at a time */
+            int y = feet + d, yc = y + 1, dyr = abs(yc - wy[k]), hw, xa, xb, wave, v, al;
+            float q[8];
+            SDL_Rect src;
+
+            if (dyr >= V_MAP_YMOD)
+                continue;
+            hw = V_MAP_XMOD * (V_MAP_YMOD - dyr) / V_MAP_YMOD;
+            xa = wx[k] - hw > x0 ? wx[k] - hw : x0;
+            xb = wx[k] + hw < x1 ? wx[k] + hw : x1;
+            if (xb - xa < 1)
+                continue;
+            v = h - 2 - (int) (d / ys); /* the sprite's rows, from its feet up */
+            if (v < 0)
+                break;
+            src.x = (int) ((xa - x0) / xs), src.w = (int) ceil((xb - xa) / xs);
+            src.y = v, src.h = 2;
+            if (src.x < 0)
+                src.x = 0;
+            if (src.x + src.w > w)
+                src.w = w - src.x;
+            if (src.w < 1)
+                continue;
+            wave = ice[k] ? 0 : (int) floor(1.6 * sin(y * 0.45 + tt * 2.4 + j) + 0.5);
+            /* upside down: the source's top row goes at the strip's bottom */
+            q[0] = (float) (xa + wave), q[1] = (float) (y + 2);
+            q[2] = (float) (xb + wave), q[3] = (float) (y + 2);
+            q[4] = (float) (xb + wave), q[5] = (float) y;
+            q[6] = (float) (xa + wave), q[7] = (float) y;
+            al = (int) ((ice[k] ? 150.0 : 160.0) * (1.0 - (double) d / (h * 1.15)));
+            if (al <= 3)
+                continue;
+            if (ice[k])
+                vulture_gpumap_quad(img, &src, q, 215, 228, 255, al);
+            else
+                vulture_gpumap_quad(img, &src, q, 170, 205, 240, al);
+        }
+    }
+    /* in the water, not over it: rings from its feet */
+    if (wet[0] && !ice[0]) {
+        struct monst *m = m_at(j, i);
+        bool up = u_at(j, i) ? (Levitation || Flying) : (m && (is_flyer(m->data) || is_floater(m->data)));
+
+        if (!up) {
+            double fx = dx + w / 2.0;
+            int r;
+
+            for (r = 0; r < 3; r++) {
+                double ph = fmod(tt * 0.8 + r / 3.0, 1.0), rad = 6.0 + 26.0 * ph;
+                int a = (int) (95.0 * (1.0 - ph)), s;
+
+                for (s = 0; s < 22; s++) {
+                    double an = s * 6.2832 / 22.0;
+
+                    vtorch_blob((int) (fx + cos(an) * rad), (int) (feet - 2 + sin(an) * rad * 0.42), 1, 200, 225,
+                                255, a);
+                }
+            }
+        }
+    }
+}
+
+/* probe: s213 - VULTURE_SELFTEST_WATER: a pool in front of you, a giant eel
+   in it; shot, and again a moment later (the waves move) */
+static Uint32 vrefl_probe_t = 0;
+static int vrefl_probe_n = 0;
+
+static void
+vrefl_probe_tick(Uint32 now)
+{
+    static const int nb[8][2] = { { 1, 0 }, { 0, 1 }, { 1, 1 }, { 2, 0 }, { 0, 2 }, { 2, 1 }, { 1, 2 }, { 2, 2 } };
+    char p[700];
+
+    if (now - vrefl_probe_t < (vrefl_probe_n == 2 ? 300u : 1200u))
+        return;
+    vrefl_probe_t = SDL_GetTicks();
+    if (vrefl_probe_n == 0) {
+        int k, made = 0, ex = 0, ey = 0, x, y, bx = 0, by = 0, best = 9999;
+
+        /* first somewhere with open floor in front: all eight squares */
+        for (y = 1; y < ROWNO - 1; y++)
+            for (x = 2; x < COLNO - 1; x++) {
+                int d;
+
+                int va, vb, ahead = 0;
+
+                if (levl[x][y].typ != ROOM || m_at(x, y) || !levl[x][y].lit)
+                    continue;
+                for (k = 0; k < 8; k++) {
+                    int dj, di;
+
+                    v_rot(nb[k][0], nb[k][1], vulture_view_rot, &dj, &di);
+                    if (!isok(x + dj, y + di) || levl[x + dj][y + di].typ != ROOM || m_at(x + dj, y + di)
+                        || u_at(x + dj, y + di))
+                        break;
+                }
+                if (k < 8)
+                    continue;
+                for (va = 0; va <= 4; va++) /* how much floor lies in front: the more, the less wall hides */
+                    for (vb = 0; vb <= 4; vb++) {
+                        int dj, di;
+
+                        v_rot(va, vb, vulture_view_rot, &dj, &di);
+                        ahead += isok(x + dj, y + di) && levl[x + dj][y + di].typ == ROOM;
+                    }
+                d = distmin(u.ux, u.uy, x, y) - 4 * ahead;
+                if (d < best)
+                    best = d, bx = x, by = y;
+            }
+        if (bx && (bx != u.ux || by != u.uy)) {
+            teleds(bx, by, TELEDS_NO_FLAGS);
+            vision_recalc(0);
+        }
+        for (k = 0; k < 8; k++) {
+            int dj, di, x, y;
+
+            v_rot(nb[k][0], nb[k][1], vulture_view_rot, &dj, &di);
+            x = u.ux + dj, y = u.uy + di;
+            if (!isok(x, y) || levl[x][y].typ != ROOM || m_at(x, y))
+                continue;
+            levl[x][y].typ = POOL;
+            newsym(x, y);
+            made++;
+            if (k == 2)
+                ex = x, ey = y;
+        }
+        if (ex) {
+            struct monst *e = makemon(&mons[PM_GIANT_EEL], ex, ey, NO_MM_FLAGS);
+
+            if (e) {
+                e->mundetected = 0, e->msleeping = 1;
+                newsym(ex, ey);
+            }
+        }
+        flush_screen(1);
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "water probe: %d pool squares, eel at %d,%d\n", made, ex,
+                          ey);
+    } else {
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "water_%c.bmp", getenv("VULTURE_SELFTEST"), 'a' + vrefl_probe_n - 1);
+        vulture_save_frame_bmp(p);
+    }
+    if (++vrefl_probe_n >= 3) {
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "water probe: done\n");
+        vrefl_probe_t = 0;
+    }
+}
+
 /* the overlay pass, after vfx_draw */
 static void
 vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
@@ -8683,6 +8912,8 @@ vulture_idle_bob(bool at_map)
         vtorch_probe_tick(now);
     if (vgrade_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s212 */
         vgrade_probe_tick(now);
+    if (vrefl_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s213 */
+        vrefl_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -11926,6 +12157,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_WATER")) { /* probe: s213 reflections */
+            vrefl_probe_t = SDL_GetTicks(), vrefl_probe_n = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_GRADE")) { /* probe: s212 the areas' colour */
@@ -17985,6 +18220,9 @@ levelwin::draw()
                             vhp.ok = true, vhp.tile = map_mon, vhp.x = tx, vhp.y = ty;
                             vhp.face = face, vhp.sx = xs, vhp.sy = ys, vhp.deg = deg;
                         }
+                        if (ha >= 255) /* s213: mirrored in the water in front of it */
+                            vrefl_draw(map_data, j, i, map_mon, face, tx, ty, xs, ys, map_centre_x, map_centre_y,
+                                       view_x, view_y);
                         vtw_put_tile_x(tx, ty, map_mon, face, xs, ys, deg, red, ha);
                         if (!u_at(j, i)) { /* s210: what the walls in front of it may hide */
                             struct monst *om = m_at(j, i);
@@ -19442,8 +19680,10 @@ levelwin::get_wall_tiles(int y, int x)
                 /* s209: a room wall's face toward a doorway or a corridor is
                    that room's wall seen from there - the room's style, not
                    the corridor's rough rock (solid full-height front walls
-                   made the doorways' rough sides stand out) */
-                if (bg == V_TILE_FLOOR_ROUGH || bg == V_TILE_FLOOR_ROUGH_LIT)
+                   made the doorways' rough sides stand out).  s213: toward
+                   any floor but a room's (a pool, ice, lava...) the same -
+                   get_wall_decor gives those plain brick */
+                if (bg != V_TILE_FLOOR_COBBLESTONE && bg != V_MISC_FLOOR_NOT_VISIBLE)
                     for (k2 = 0; k2 < 8; k2++) { /* beside it first, then corner to corner */
                         static const int ndx[8] = { -1, 0, 1, 0, -1, 1, 1, -1 };
                         static const int ndy[8] = { 0, -1, 0, 1, -1, -1, 1, 1 };
