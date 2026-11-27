@@ -7804,7 +7804,7 @@ vxr_probe_tick(Uint32 now)
                 bool front;
 
                 if (levl[x][y].typ != ROOM || m_at(x, y) || u_at(x, y) || !cansee(x, y)
-                    || distmin(u.ux, u.uy, x, y) < 3)
+                    || distmin(u.ux, u.uy, x, y) < 2)
                     continue;
                 v_rot(0, 1, vulture_view_rot, &sj, &si);
                 v_rot(1, 0, vulture_view_rot, &ej, &ei);
@@ -7834,6 +7834,175 @@ vxr_probe_tick(Uint32 now)
         vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "xray probe: done\n");
         vxr_probe_t = 0;
     }
+}
+
+/*
+ * IMPLEMENTATION_LOG s211: torches on the walls of lit rooms.
+ *  - A lit room's back walls (the faces you look at) carry a torch in an
+ *    iron sconce on every third square along a wall ((2j + i + the level)
+ *    % 3 - whichever way the wall runs), never on a banner, a painting or
+ *    a niche.  Dark rooms stay dark.
+ *  - The flame is drawn on the map layer (walls and creatures in front of
+ *    it hide it) as additive blobs that flicker and lean; seen, each torch
+ *    is a point light in vl_compute (warm, radius 2.4, lifted to the
+ *    flame), so the relief light, the shine, the creatures' shadows and the
+ *    light pools all move with it.  Out of sight only the sconce is drawn.
+ */
+struct vtorch_t {
+    int fj, fi; /* the floor square it lights */
+};
+static std::vector<vtorch_t> vtorch_list; /* this frame's, from the map pass */
+
+static SDL_Surface *
+vtorch_sconce(void) /* an iron bracket holding a torch: 9 x 16, its foot at the bottom middle */
+{
+    static SDL_Surface *s = NULL;
+    int x, y;
+
+    if (s)
+        return s;
+    if (!(s = SDL_CreateRGBSurfaceWithFormat(0, 9, 16, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return NULL;
+    SDL_FillRect(s, NULL, 0);
+    SDL_LockSurface(s);
+    for (y = 0; y < 16; y++)
+        for (x = 0; x < 9; x++) {
+            Uint32 *q = (Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch) + x, c = 0;
+
+            if (y <= 1 && x >= 3 && x <= 5)
+                c = y == 0 ? 0xFF2A201A : 0xFF3A2A20; /* charred top */
+            else if (y == 7 && x >= 2 && x <= 6)
+                c = 0xFF77716B; /* the ring, lit edge */
+            else if (y == 8 && x >= 2 && x <= 6)
+                c = 0xFF46423E;
+            else if (y >= 2 && y <= 11 && x >= 3 && x <= 5)
+                c = x == 3 ? 0xFF8A5A33 : x == 4 ? 0xFF6E4728 : 0xFF4E321C; /* the stick */
+            else if (y == 12 && x >= 3 && x <= 5)
+                c = 0xFF5A554F; /* the plate on the wall */
+            else if (y >= 13 && x >= 3 && x <= 5)
+                c = 0xFF3A3633;
+            else if (y >= 13 && y <= 14 && (x == 2 || x == 6))
+                c = 0xFF2E2B29;
+            *q = c;
+        }
+    SDL_UnlockSurface(s);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    return s;
+}
+
+static void
+vtorch_glow(int x, int y, int r, int g, int b, int alpha) /* the flame's light on the wall: 49 px */
+{
+    static SDL_Surface *s = NULL;
+
+    if (alpha <= 2)
+        return;
+    if (!s) {
+        int px, py;
+
+        if (!(s = SDL_CreateRGBSurfaceWithFormat(0, 49, 49, 32, SDL_PIXELFORMAT_ARGB8888)))
+            return;
+        SDL_LockSurface(s);
+        for (py = 0; py < 49; py++)
+            for (px = 0; px < 49; px++) {
+                double dx = (px - 24) / 24.5, dy = (py - 24) / 24.5, d = sqrt(dx * dx + dy * dy);
+                double a = d >= 1.0 ? 0.0 : (1.0 - d) * (1.0 - d);
+
+                ((Uint32 *) ((Uint8 *) s->pixels + (size_t) py * s->pitch))[px] =
+                    (Uint32) (a * 255.0) << 24 | 0x00FFFFFFu;
+            }
+        SDL_UnlockSurface(s);
+        SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_ADD);
+    }
+    SDL_SetSurfaceColorMod(s, (Uint8) r, (Uint8) g, (Uint8) b);
+    SDL_SetSurfaceAlphaMod(s, (Uint8) (alpha > 255 ? 255 : alpha));
+    vulture_put_img(x - 24, y - 24, s);
+}
+
+static void
+vtorch_blob(int x, int y, int ir, int r, int g, int b, int alpha) /* additive, on the map layer */
+{
+    SDL_Surface *s;
+
+    ir = ir < 1 ? 1 : ir > 8 ? 8 : ir;
+    if (alpha <= 2)
+        return;
+    if (!vsp_disc[0][ir] && !(vsp_disc[0][ir] = vsp_make_disc(ir, true)))
+        return;
+    s = vsp_disc[0][ir];
+    SDL_SetSurfaceColorMod(s, (Uint8) r, (Uint8) g, (Uint8) b);
+    SDL_SetSurfaceAlphaMod(s, (Uint8) (alpha > 255 ? 255 : alpha));
+    vulture_put_img(x - ir, y - ir, s);
+}
+
+/* step 7 of the map: a back wall's face (tile) on square (j, i), drawn at
+   (x, y), facing the floor square (fj, fi) - a torch on it? */
+static void
+vtorch_draw(int x, int y, int j, int i, int fj, int fi, int tile, bool eface)
+{
+    vulture_tile *wt;
+    SDL_Surface *sc;
+    int k, tx, ty, seed;
+
+    if (!vfx_ambient || tile < 0 || tile == V_TILE_NONE || !isok(j, i) || !isok(fj, fi))
+        return;
+    if (levl[fj][fi].typ != ROOM || !levl[fj][fi].lit || !levl[j][i].seenv || !levl[fj][fi].seenv)
+        return;
+    seed = (int) ledger_no(&u.uz) * 7;
+    if ((2 * j + i + seed) % 3 != 0) /* every third square, whichever way the wall runs */
+        return;
+    for (k = 1; k <= 3; k++) /* not on a banner, a painting or a niche (a pillar will do) */
+        if (tile == walls_full[V_WALL_BRICK + k].south || tile == walls_full[V_WALL_BRICK + k].east
+            || tile == walls_half[V_WALL_BRICK + k].south || tile == walls_half[V_WALL_BRICK + k].east)
+            return;
+    if (!(wt = vulture_get_tile(tile)) || !wt->graphic)
+        return;
+    /* the middle of the face's foot, a little over half way up it */
+    tx = eface ? x + V_MAP_XMOD / 2 : x - V_MAP_XMOD / 2;
+    ty = y + V_MAP_YMOD / 2 - (int) (-wt->ymod * 0.55);
+    if ((sc = vtorch_sconce()) != NULL)
+        vulture_put_img(tx - 4, ty - 15, sc);
+    {
+        vtorch_t q;
+
+        q.fj = fj, q.fi = fi;
+        vtorch_list.push_back(q);
+    }
+    if (cansee(fj, fi)) { /* the flame */
+        double tt = SDL_GetTicks() / 1000.0, ph = j * 1.9 + i * 2.7;
+        double fl = 0.82 + 0.10 * sin(tt * 8.3 + ph) + 0.06 * sin(tt * 19.7 + j) + 0.03 * ((rand() % 100) / 100.0);
+        int lean = (int) floor(1.4 * sin(tt * 5.1 + ph) + 0.5), fy = ty - 17;
+
+        vtorch_glow(tx, fy, 255, 125, 40, (int) (52 * fl)); /* its light on the wall round it */
+        vtorch_blob(tx, fy - 2, 7, 255, 125, 35, (int) (115 * fl));
+        vtorch_blob(tx, fy, 4, 255, 150, 50, (int) (235 * fl));
+        vtorch_blob(tx + lean, fy - 3, 3, 255, 200, 90, (int) (240 * fl));
+        vtorch_blob(tx + lean, fy - 7 - (int) (2.5 * fl), 2, 255, 170, 60, (int) (190 * fl));
+        vtorch_blob(tx, fy - 1, 2, 255, 248, 215, 255);
+    }
+}
+
+/* probe: s211 - VULTURE_SELFTEST_TORCH: the room you start in, twice, a
+   quarter second apart (the flames move) */
+static Uint32 vtorch_probe_t = 0;
+static int vtorch_probe_n = 0;
+
+static void
+vtorch_probe_tick(Uint32 now)
+{
+    char p[700];
+
+    if (now - vtorch_probe_t < (vtorch_probe_n ? 250u : 1500u))
+        return;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    snprintf(p, sizeof p, "%s" "\\" "torch_%c.bmp", getenv("VULTURE_SELFTEST"), 'a' + vtorch_probe_n);
+    vulture_save_frame_bmp(p);
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "torch probe: shot %d, %d torches\n", vtorch_probe_n,
+                      (int) vtorch_list.size());
+    vtorch_probe_t = SDL_GetTicks();
+    if (++vtorch_probe_n >= 2)
+        vtorch_probe_t = 0;
 }
 
 /* the overlay pass, after vfx_draw */
@@ -8384,6 +8553,8 @@ vulture_idle_bob(bool at_map)
         vwall_probe_tick(now);
     if (vxr_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s210 */
         vxr_probe_tick(now);
+    if (vtorch_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s211 */
+        vtorch_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -11627,6 +11798,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_TORCH")) { /* probe: s211 torches */
+            vtorch_probe_t = SDL_GetTicks(), vtorch_probe_n = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_XRAY")) { /* probe: s210 creatures behind walls */
@@ -15596,6 +15771,16 @@ vl_compute(mapdata *md)
         else
             vl_add(ls->x, ls->y, ls->range + 0.8, 0.75 * fl, 1.0, 0.9, 0.65, 34.0f, 52.0f, true);
     }
+    for (size_t ti = 0; ti < vtorch_list.size(); ti++) { /* s211: the torches on lit rooms' walls */
+        const vtorch_t &q = vtorch_list[ti];
+        double fl;
+
+        if (!cansee(q.fj, q.fi))
+            continue;
+        fl = 0.80 + 0.10 * sin(t * 8.3 + q.fj * 1.9 + q.fi * 2.7) + 0.06 * sin(t * 19.7 + q.fj)
+             + 0.04 * ((rand() % 100) / 100.0);
+        vl_add(q.fj, q.fi, 2.6, 0.34 * fl, 1.0, 0.68, 0.38, 52.0f, 40.0f);
+    }
     for (y = 0; y < ROWNO; y++)
         for (x = 1; x < COLNO; x++) {
             int g;
@@ -17492,6 +17677,7 @@ levelwin::draw()
     }
     vslab_draw(); /* s205: over the void's tiles, under everything standing */
     vxr_faces.clear(), vxr_mons.clear(), vxr_seq = 0; /* s210 */
+    vtorch_list.clear(); /* s211 */
     vwall_hole_on = u.ux && !u.uswallow && !vwall_probe_off; /* s209: the walls in front of you see-through round you */
     if (vwall_hole_on) {
         double o = vulture_opts.wall_opacity;
@@ -17688,12 +17874,16 @@ levelwin::draw()
 
             /* 7. South & East walls (s209: see-through round you when you
                are behind them) */
-            if (nsx >= 1 && nsx < COLNO && nsy >= 0 && nsy < ROWNO)
+            if (nsx >= 1 && nsx < COLNO && nsy >= 0 && nsy < ROWNO) {
                 vwall_draw(x, y, maptile_wall[i][j].south, 2,
                            vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nsx, nsy)); /* s187 */
-            if (nex >= 1 && nex < COLNO && ney >= 0 && ney < ROWNO)
+                vtorch_draw(x, y, j, i, nsx, nsy, maptile_wall[i][j].south, false); /* s211 */
+            }
+            if (nex >= 1 && nex < COLNO && ney >= 0 && ney < ROWNO) {
                 vwall_draw(x, y, maptile_wall[i][j].east, 3,
                            vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nex, ney)); /* s187 */
+                vtorch_draw(x, y, j, i, nex, ney, maptile_wall[i][j].east, true); /* s211 */
+            }
         }
     }
 

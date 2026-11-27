@@ -4623,6 +4623,24 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   peaceful gnome behind front walls; seen in the shots instead: a jackal's
   legs and a newt wholly behind a front wall, outlined in red.
 
+### 211. Torches on the walls of lit rooms
+
+- A lit room's back walls (the S/E faces you look at) carry a torch in an
+  iron sconce on every third square ((2j + i + 7 x ledger) % 3, so one in
+  three whichever way the wall runs); not on banners, paintings or niches
+  (a pillar will do); dark rooms none.  vtorch_draw runs in step 7 right
+  after the face, so walls and creatures in front hide it.
+- The sconce is a 9 x 16 procedural sprite; the flame is additive blobs on
+  the MAP layer (flicker, lean) plus a 49 px warm glow on the wall round
+  it; out of sight only the sconce shows.
+- Each seen torch is a point light in vl_compute (radius 2.6, 0.34, warm,
+  lifted 52 px): relief light, shine, creature shadows and the light pools
+  move with it.  The torch list comes from the map pass, which runs before
+  vl_render in the same frame.
+- First cut was 7 px of flame on busy wall art: unreadable at 1080p; every
+  fourth square plus "no decorated walls" left brick rooms (4 in 5 squares
+  decorated) with one torch.  Probe VULTURE_SELFTEST_TORCH.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
