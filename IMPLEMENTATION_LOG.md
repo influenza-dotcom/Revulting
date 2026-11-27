@@ -4775,6 +4775,38 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Idle animation stays at its designed ~30 fps (interval = 3 x frame
   cost, at least 33 ms), 60 fps while spells or the stairs fade play.
 
+### 218. The rock mass, reworked ("you need to fix these ceilings")
+
+- What was wrong, seen with a new probe (VULTURE_SELFTEST_ROCK: the start
+  room, its nearest door, a corridor walked, the level mapped, back in the
+  room; VULTURE_ROCK_DARK=1 a dark level walked; VULTURE_ROCK_MINES=n a
+  Mines level, mapped).  s215's rock was full height by default with low
+  shelves cut wherever open ground lay behind: in front of a room the dark
+  tops covered its front walls and floor; a mapped level became terraces,
+  lone towers and brown cliffs; and a dark room's unseen floor was drawn as
+  rock round you.
+- Heights: band rock is LOW (18 px) by default - one flat shelf that
+  corridors run through as trenches.  It rises to wall height only behind
+  a wall (its front neighbour is a wall, or rock that rose - a second,
+  front-to-back pass) and only out of open ground's reach, so the mass
+  stands behind a room's back walls flush with their tops and nowhere it
+  could hide anything known.
+- A room's front walls keep full height (s209) and show their own outside
+  over the low rock in front: the room's style (its north / west tile's,
+  else a neighbour's along the wall), dark (VWALL_DIM, s212).  A wall face
+  toward a corridor or a doorway (step 7) is an outside too: as dark as
+  that ground is unlit (vrock_out_dim); toward a room's ground it stays
+  that room's lit wall.  Rock cliff faces follow the same rule.
+- The band is rock you know or may take for granted: stone you have seen
+  (seenv), squares beside a corridor, squares outside a wall you have seen
+  from its room (a wall with known room ground beside it); then on, 3 deep,
+  4-connected (no corner cutting through a wall line), through squares you
+  have not seen.  An unseen square next to room ground you know (or a
+  doorway, unless a corridor also touches it) is never rock - a dark
+  room's unexplored floor stays open dark.
+- Cost: none measurable (idle frame median 19 vs 18 ms on a mapped level,
+  hidden window; the band is a BFS over 1680 squares).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
