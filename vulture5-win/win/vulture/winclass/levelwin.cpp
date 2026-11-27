@@ -907,6 +907,7 @@ static void vdth_start(int x, int y, int tile, int heft, int face, bool ghost); 
 static bool vdth_draw(int j, int i, int x, int y);                              /* s204 */
 static int vdth_object_alpha(int j, int i);                                     /* s204 */
 static bool vbr_draw(int j, int i, int x, int y, int tile_id);                  /* s204 */
+static bool vstair_busy(Uint32 now);                                            /* s216 */
 static bool vbr_offset(int j, int i, int *ox, int *oy);                         /* s204 */
 static bool vlid_draw(int j, int i, int x, int y, int tile_id);                 /* s207 */
 static bool vfl_hides(int j, int i, int tile_id);                               /* s207 */
@@ -8882,6 +8883,191 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
     }
 }
 
+/*
+ * IMPLEMENTATION_LOG s216: stairs you take.  When the core is sure of a
+ * level change (goto_level, past its last refusal) it calls
+ * vulture_level_leave: a short blocking clip - you sink down the stairs,
+ * rise up them, drop through the floor (or just go, by magic) while the
+ * map fades to black - and the screen holds black until the new level is
+ * first drawn; then it fades in while you step down onto it, rise into
+ * view, or drop in from above.  The UI stays.  A change that never comes
+ * lets go after 1.5 s.  VULTURE_NO_STAIRFX turns it off.
+ */
+#define VSTAIR_OUT 380
+#define VSTAIR_IN 520
+static int vstair_how = 0;       /* the leave clip playing: 1 down, 2 up, 3 falling, 4 other */
+static double vstair_u = 0.0;    /* its progress */
+static bool vstair_hold = false; /* black, waiting for the new level */
+static Uint32 vstair_hold_t = 0;
+static long vstair_from = -1;    /* the level left */
+static int vstair_in_how = 0;    /* how you arrive */
+static Uint32 vstair_in_t = 0;   /* when the arrival began */
+
+static double
+vstair_ease(double u)
+{
+    u = u < 0.0 ? 0.0 : u > 1.0 ? 1.0 : u;
+    return u * u * (3.0 - 2.0 * u);
+}
+
+static bool
+vstair_busy(Uint32 now)
+{
+    return vstair_how || vstair_hold || (vstair_in_t && now - vstair_in_t < VSTAIR_IN);
+}
+
+/* how far your sprite is moved now, leaving or arriving */
+static int
+vstair_hero_dy(void)
+{
+    Uint32 now = SDL_GetTicks();
+
+    if (vstair_how) {
+        double u = vstair_u;
+
+        switch (vstair_how) {
+        case 1: return (int) (26.0 * u * u);           /* down the stairs: you sink */
+        case 2: return (int) (-22.0 * vstair_ease(u)); /* up them: you rise */
+        case 3: return (int) (70.0 * u * u);           /* through the floor */
+        default: return 0;
+        }
+    }
+    if (vstair_in_t && now - vstair_in_t < VSTAIR_IN) {
+        double u = (now - vstair_in_t) / (double) VSTAIR_IN, e = 1.0 - vstair_ease(u);
+
+        switch (vstair_in_how) {
+        case 1: return (int) (-18.0 * e); /* came down: you step down onto it */
+        case 2: return (int) (18.0 * e);  /* came up: you rise into view */
+        case 3: {                         /* dropped in from above */
+            double f = u < 0.6 ? u / 0.6 : 1.0;
+
+            return (int) (-80.0 * (1.0 - f * f));
+        }
+        default: return 0;
+        }
+    }
+    return 0;
+}
+
+/* over the map, after its effects: the fade - leaving, held, arriving */
+static void
+vstair_fade(int x, int y, int w, int h)
+{
+    static SDL_Surface *blk = NULL;
+    Uint32 now = SDL_GetTicks();
+    int a = 0;
+    SDL_Rect d;
+
+    if (vstair_from >= 0 && !vstair_how && u.ux && (long) ledger_no(&u.uz) != vstair_from) {
+        vstair_from = -1, vstair_hold = false, vstair_in_t = now; /* the new level: fade in */
+    } else if (vstair_hold && now - vstair_hold_t > 1500) {      /* it never came: let go */
+        vstair_from = -1, vstair_hold = false, vstair_in_t = now, vstair_in_how = 0;
+    }
+    if (vstair_how)
+        a = (int) (255.0 * vstair_ease(vstair_u));
+    else if (vstair_hold)
+        a = 255;
+    else if (vstair_in_t && now - vstair_in_t < VSTAIR_IN)
+        a = (int) (255.0 * (1.0 - vstair_ease((now - vstair_in_t) / (double) VSTAIR_IN)));
+    if (a <= 0 || !vulture_screen)
+        return;
+    if (!blk) {
+        if (!(blk = SDL_CreateRGBSurfaceWithFormat(0, 8, 8, 32, SDL_PIXELFORMAT_ARGB8888)))
+            return;
+        SDL_FillRect(blk, NULL, 0xFF000000u);
+        SDL_SetSurfaceBlendMode(blk, SDL_BLENDMODE_BLEND);
+    }
+    SDL_SetSurfaceAlphaMod(blk, (Uint8) (a > 255 ? 255 : a));
+    d.x = x, d.y = y, d.w = w, d.h = h;
+    SDL_BlitScaled(blk, NULL, vulture_screen, &d);
+}
+
+/* the core (goto_level), once the move is sure: play leaving */
+extern "C" void
+vulture_level_leave(int how)
+{
+    Uint32 t0;
+    bool shot = false;
+
+    if (vulture_windows_inited != TRUE || !levwin || !u.ux || getenv("VULTURE_NO_STAIRFX"))
+        return;
+    vstair_from = (long) ledger_no(&u.uz), vstair_in_how = how, vstair_how = how, vstair_u = 0.0;
+    vstair_in_t = 0;
+    t0 = SDL_GetTicks();
+    while (vstair_u < 1.0) {
+        vstair_u = (SDL_GetTicks() - t0) / (double) VSTAIR_OUT;
+        if (vstair_u > 1.0)
+            vstair_u = 1.0;
+        SDL_PumpEvents();
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        vulture_refresh_window_region();
+        if (!shot && vstair_u >= 0.45 && getenv("VULTURE_SELFTEST") && getenv("VULTURE_SELFTEST_STAIRS")) {
+            char p[700];
+
+            snprintf(p, sizeof p, "%s" "\\" "stairs_leave.bmp", getenv("VULTURE_SELFTEST"));
+            vulture_save_frame_bmp(p);
+            shot = true;
+        }
+        SDL_Delay(10);
+    }
+    vstair_how = 0, vstair_hold = true, vstair_hold_t = SDL_GetTicks();
+}
+
+/* probe: s216 - VULTURE_SELFTEST_STAIRS: onto the down stairs and down;
+   shots mid-leave (in vulture_level_leave), mid-arrival and after */
+static Uint32 vstair_probe_t = 0;
+static int vstair_probe_n = 0;
+
+static void
+vstair_probe_tick(Uint32 now)
+{
+    char p[700];
+
+    if (vstair_probe_n == 0) {
+        stairway *st;
+
+        if (now - vstair_probe_t < 1200)
+            return;
+        for (st = gs.stairs; st; st = st->next)
+            if (!st->up && !st->isladder && st->tolev.dnum == u.uz.dnum)
+                break;
+        if (!st) {
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "stairs probe: no down stairs\n");
+            vstair_probe_t = 0;
+            return;
+        }
+        teleds(st->sx, st->sy, TELEDS_NO_FLAGS);
+        vision_recalc(0);
+        flush_screen(1);
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        vulture_refresh_window_region();
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "stairs probe: going down from %d,%d\n", u.ux, u.uy);
+        vstair_probe_n = 1;
+        next_level(TRUE);
+        vstair_probe_t = SDL_GetTicks();
+        return;
+    }
+    if (vstair_probe_n == 1 && vstair_in_t && now - vstair_in_t >= 200) {
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "stairs_arrive.bmp", getenv("VULTURE_SELFTEST"));
+        vulture_save_frame_bmp(p);
+        vstair_probe_n = 2;
+        return;
+    }
+    if (vstair_probe_n == 2 && vstair_in_t && now - vstair_in_t >= 900) {
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "stairs_after.bmp", getenv("VULTURE_SELFTEST"));
+        vulture_save_frame_bmp(p);
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "stairs probe: done, now on level %d at %d,%d\n",
+                          (int) depth(&u.uz), u.ux, u.uy);
+        vstair_probe_t = 0;
+    }
+}
+
 /* the overlay pass, after vfx_draw */
 static void
 vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
@@ -9442,6 +9628,8 @@ vulture_idle_bob(bool at_map)
         vgrade_probe_tick(now);
     if (vrefl_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s213 */
         vrefl_probe_tick(now);
+    if (vstair_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s216 */
+        vstair_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -9453,7 +9641,7 @@ vulture_idle_bob(bool at_map)
         for (q = 0; q < vfx_list.size(); q++)
             if (vfx_list[q].kind == 3 && now - vfx_list[q].t0 < vfx_list[q].dur)
                 marker = true;
-        if (now - last < (vsp_active(now) ? 16u : marker ? 25u : vidle_interval)) /* s198: 60 fps */
+        if (now - last < ((vsp_active(now) || vstair_busy(now)) ? 16u : marker ? 25u : vidle_interval)) /* s198, s216: 60 fps */
             return;
     }
     last = now;
@@ -12686,6 +12874,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_STAIRS")) { /* probe: s216 leaving, arriving */
+            vstair_probe_t = SDL_GetTicks(), vstair_probe_n = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_WATER")) { /* probe: s213 reflections */
@@ -18748,6 +18940,8 @@ levelwin::draw()
                         }
                     }
                     vanim_xform(j, i, &tx, &ty, &xs, &ys, &deg, &red);
+                    if (u_at(j, i)) /* s216: down the stairs, up them, dropping in */
+                        ty += vstair_hero_dy();
                     { /* s206: it turns in depth, watches you, fidgets */
                         int face = vlife_apply(j, i, map_mon, vtw_face[i][j], vtw_mv[i][j] != 0, tx, &xs, &ys, &deg,
                                                &ty);
@@ -18852,6 +19046,7 @@ levelwin::draw()
     vtele_draw(map_centre_x, map_centre_y, view_x, view_y);   /* s163 */
     vaim_draw(map_centre_x, map_centre_y, view_x, view_y);  /* s125 */
     vblast_draw(map_centre_x, map_centre_y, view_x, view_y); /* s138 */
+    vstair_fade(this->abs_x, this->abs_y, this->w, this->h); /* s216: leaving, arriving */
     vzoom_apply(this->abs_x, this->abs_y, this->w, this->h); /* s121 */
     Uint32 vpf_e = SDL_GetTicks(); /* probe */
     vulture_draw_vignette(this->abs_x, this->abs_y, this->w, this->h); /* s74 */

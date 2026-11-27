@@ -441,6 +441,7 @@ extern void vulture_shatter_fx(int, int, int); /* s202: shards, a splash */
 extern void vulture_world_fx(int, int, int); /* s203: fountains, altars, thrones, chests, found doors */
 extern void vulture_boulder_roll(int, int, int, int); /* s204: a pushed boulder rolls */
 extern void vulture_lid(int, int, int); /* s207: a box's lid lifts and shuts */
+extern void vulture_level_leave(int); /* Vulture s216 */
 extern void vulture_flight_range(int, int, int, int); /* s207: the coming flight's arc */
 extern void vulture_run_summary(int); /* s165 */
 extern void vulture_photo_fx(int, int, int, int); /* s170 */

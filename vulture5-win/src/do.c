@@ -1783,6 +1783,8 @@ goto_level(
 
     if (on_level(newlevel, &u.uz))
         return; /* this can happen */
+    /* Vulture s216: the move is sure - play leaving it */
+    vulture_level_leave(falling ? 3 : at_stairs ? (up ? 2 : 1) : 4);
 
     if (gl.luacore && nhcb_counts[NHCB_LVL_LEAVE]) {
         lua_getglobal(gl.luacore, "nh_callback_run");

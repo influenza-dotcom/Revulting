@@ -4743,6 +4743,23 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   tooltip shows - hence only there.  vulture_mouse_draw_noflush draws it
   before the one present.
 
+### 216. Stairs you take
+
+- The core calls vulture_level_leave(how) in goto_level right after its
+  last refusal ("this can happen" on_level return), so it plays only for
+  a change that will happen: 1 down the stairs, 2 up them, 3 falling, 4
+  anything else (portal, level teleport).  extern.h + do.c.
+- The leave: a blocking 380 ms clip (like the lid lift, s207) - your
+  sprite sinks / rises / drops, the map fades to black; then black holds
+  until the first frame drawn on the new level (ledger changed), which
+  starts a 520 ms fade-in while you step down onto it, rise into view, or
+  drop in from above.  A change that never comes lets go after 1.5 s.  The
+  UI is not faded.  The idle redraw runs at 60 fps meanwhile.
+  VULTURE_NO_STAIRFX turns it off.
+- Probe VULTURE_SELFTEST_STAIRS: onto the down stairs, next_level(TRUE);
+  shots mid-leave, 200 ms into the arrival (the level title card over the
+  fading-in level) and after.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
