@@ -4760,6 +4760,21 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   shots mid-leave, 200 ms into the arrival (the level title card over the
   fading-in level) and after.
 
+### 217. Frame-rate check after 209-216
+
+- No code.  From the probes' own logs (idle frame = the whole map drawn
+  and presented; present = upload + compose + swap), 1920 x 1080, hidden
+  window, GPU map and lighting, every effect on, the rock mass included:
+  idle frame median 9 ms (p95 12) when the present is cheap; present
+  1.7 ms, of which compose (bloom, depth of field) 0.23 ms.
+- Run to run the PRESENT swings between 1.7 and 17 ms (vsync / a shared
+  GPU - another copy of the game may be running), so compare idle minus
+  present: the map draw is 7-8 ms in every build from 209 (walls) to 216
+  (stairs) - outlines, torches, bloom and grades, reflections, floor
+  details and the rock mass added nothing measurable.
+- Idle animation stays at its designed ~30 fps (interval = 3 x frame
+  cost, at least 33 ms), 60 fps while spells or the stairs fade play.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
