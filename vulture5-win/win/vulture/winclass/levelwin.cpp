@@ -4177,6 +4177,8 @@ static int vfl_style = VIMP_GENERIC, vfl_mat = 0; /* 0 other, 1 metal, 2 wood, 3
 static int vfl_next_range = 0, vfl_next_fired = 0, vfl_next_sx = -1, vfl_next_sy = -1;
 static double vfl_arc_r = 6.0, vfl_arc_h = 20.0, vfl_step_ms = 45.0;
 static int vfl_fired = 0, vfl_start_x = -1, vfl_start_y = -1, vfl_tile = -1;
+static bool vfl_point = false; /* s222: flies point first (arrows, bolts, darts, spears, daggers...) */
+static double vfl_art = 0.0;   /* s222: which way its art points (radians, screen) */
 static Uint32 vfl_end_t = 0;
 static int vfl_end_x = -1, vfl_end_y = -1;
 static float vfl_end_dx = 0.0f, vfl_end_dy = 0.0f;
@@ -4437,6 +4439,99 @@ vimp_chips(int x, int y, float dx, float dy, int mat)
     vsp_live_t = SDL_GetTicks();
 }
 
+/*
+ * IMPLEMENTATION_LOG s222: darts are not footballs.  A thrown pointed
+ * weapon spun end over end (300 degrees a square) and a fired one flew at
+ * whatever angle its art lies at - an arrow drawn pointing left flew right
+ * tail first.  Now arrows, bolts, darts, spears and javelins, daggers and
+ * knives, tridents fly point first along their arc (nose up off the hand,
+ * level at the top, down into the target); shuriken, boomerangs, axes,
+ * rocks, flasks still tumble - about their middle now, not their feet.
+ * Which way an art points is read off its pixels: the long axis of what is
+ * opaque, and the point the more metal end (bright, grey) - fletching, a
+ * hilt or a shaft is the other.
+ */
+static double
+vfl_art_angle(int tile_id, bool arrowlike)
+{
+    /* which end is the point: for arrows, bolts and darts the narrower end
+       (fletching is wide; their heads can be dark or faint), for blades,
+       spears and tridents the more metal end (bright, grey: not a hilt, a
+       shaft, a grip) */
+    static std::vector<std::pair<int, double> > cache;
+    vulture_tile *t = vulture_get_tile(tile_id);
+    SDL_Surface *s;
+    double mx = 0, my = 0, sxx = 0, syy = 0, sxy = 0, n = 0, ax = 1, ay = 0, tmin = 1e9, tmax = -1e9, ang = 0.0;
+    double em[2] = { 0, 0 }, ew[2] = { 0, 0 }, ep[2] = { 0, 0 }, epp[2] = { 0, 0 };
+    size_t k;
+    int x, y, pass, key = tile_id * 2 + (arrowlike ? 1 : 0);
+
+    for (k = 0; k < cache.size(); k++)
+        if (cache[k].first == key)
+            return cache[k].second;
+    if (!t || !t->graphic || !(s = SDL_ConvertSurfaceFormat(t->graphic, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return 0.0;
+    SDL_LockSurface(s);
+    for (pass = 0; pass < 4; pass++) {
+        for (y = 0; y < s->h; y++)
+            for (x = 0; x < s->w; x++) {
+                Uint32 p = ((Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch))[x];
+                double al = (double) (p >> 24), r = (p >> 16) & 255, g = (p >> 8) & 255, bb = p & 255;
+                double tt, pp, hi, lo;
+                int e;
+
+                if (al < 40.0)
+                    continue;
+                if (pass == 0) { /* the middle */
+                    mx += x * al, my += y * al, n += al;
+                    continue;
+                }
+                if (pass == 1) { /* the spread: the long axis */
+                    sxx += (x - mx) * (x - mx) * al, syy += (y - my) * (y - my) * al;
+                    sxy += (x - mx) * (y - my) * al;
+                    continue;
+                }
+                tt = (x - mx) * ax + (y - my) * ay, pp = -(x - mx) * ay + (y - my) * ax;
+                if (pass == 2) { /* how far it reaches both ways */
+                    tmin = tt < tmin ? tt : tmin, tmax = tt > tmax ? tt : tmax;
+                    continue;
+                }
+                e = tt > tmax - 0.3 * (tmax - tmin) ? 0 : tt < tmin + 0.3 * (tmax - tmin) ? 1 : -1;
+                if (e < 0)
+                    continue;
+                hi = r > g ? (r > bb ? r : bb) : (g > bb ? g : bb), lo = r < g ? (r < bb ? r : bb) : (g < bb ? g : bb);
+                em[e] += (hi > 0 ? 1.0 - (hi - lo) / hi : 1.0) * sqrt(hi / 255.0) * al; /* metal */
+                ew[e] += al, ep[e] += pp * al, epp[e] += pp * pp * al;                   /* width */
+            }
+        if (pass == 0 && n > 0)
+            mx /= n, my /= n;
+        if (pass == 1) {
+            double th = 0.5 * atan2(2.0 * sxy, sxx - syy);
+
+            ax = cos(th), ay = sin(th);
+        }
+    }
+    SDL_UnlockSurface(s);
+    SDL_FreeSurface(s);
+    if (n > 0 && ew[0] > 0 && ew[1] > 0) {
+        bool hi_end;
+
+        if (arrowlike) { /* the narrower end */
+            double v0 = epp[0] / ew[0] - (ep[0] / ew[0]) * (ep[0] / ew[0]);
+            double v1 = epp[1] / ew[1] - (ep[1] / ew[1]) * (ep[1] / ew[1]);
+
+            hi_end = v0 < v1;
+        } else { /* the more metal end */
+            hi_end = em[0] / ew[0] >= em[1] / ew[1];
+        }
+        ang = hi_end ? atan2(ay, ax) : atan2(-ay, -ax);
+    }
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "flight: art %d points %.0f deg (%s)\n", tile_id,
+                      ang * 180.0 / 3.14159265358979, arrowlike ? "narrow end" : "metal end");
+    cache.push_back(std::make_pair(key, ang));
+    return ang;
+}
+
 /* the core's tmp_at: a thrown / fired / kicked thing takes off (its glyph) */
 extern "C" void
 vulture_flight_begin(int glyph)
@@ -4445,6 +4540,7 @@ vulture_flight_begin(int glyph)
     vfl_on = true;
     vfl_style = VIMP_GENERIC, vfl_mat = 0;
     vfl_tile = -1, vfl_step_ms = 45.0;
+    vfl_point = false; /* s222 */
     /* s207: the arc it will fly (told by the thrower just before, or a guess) */
     vfl_arc_r = vfl_next_range > 0 ? vfl_next_range : 6;
     vfl_arc_r = vfl_arc_r < 2.0 ? 2.0 : vfl_arc_r > 20.0 ? 20.0 : vfl_arc_r;
@@ -4468,6 +4564,15 @@ vulture_flight_begin(int glyph)
                                                                                         : VIMP_BLUNT;
             else
                 vfl_style = VIMP_BLUNT; /* rocks, gems, anything thrown */
+            { /* s222: point first, or tumbling */
+                int sk = oc->oc_skill < 0 ? -oc->oc_skill : oc->oc_skill;
+
+                vfl_point = oc->oc_class == WEAPON_CLASS
+                            && (oc->oc_skill < 0 /* arrows, bolts */ || sk == P_DART || sk == P_SPEAR
+                                || sk == P_DAGGER || sk == P_KNIFE || sk == P_TRIDENT || sk == P_LANCE);
+                if (vfl_point && vfl_tile >= 0)
+                    vfl_art = vfl_art_angle(vfl_tile, oc->oc_skill < 0 || sk == P_DART);
+            }
         }
     }
     /* s207: fired - nearly flat; lobbed glass - high; thrown weapons and
@@ -4680,8 +4785,36 @@ vfl_draw_arc(Uint32 now, Uint8 r, Uint8 g, Uint8 b)
     vfl_path(s, &px, &py);
     lift = vfl_lift(s);
     vsp_blob(px, py + 3, 8.5 - lift / 16.0, 0, 0, 0, (int) (125 * (1.0 - lift / 70.0)), false, 0.45); /* its shadow */
-    vtw_put_tile_x(px, py - (int) lift, vfl_tile, 0, 1.0, 1.0,
-                   vfl_fired ? 0.0 : s * (vfl_style == VIMP_BLUNT ? 200.0 : 300.0), false, 255);
+    {
+        double deg = vfl_style == VIMP_BLUNT ? s * 200.0 : s * 300.0, th;
+        vulture_tile *ft = vulture_get_tile(vfl_tile);
+        int hh = ft && ft->graphic ? ft->graphic->h : 0;
+
+        if (vfl_point) { /* s222: point first, along the arc - nose up, level, down */
+            double s0 = s - 0.2 < (vfl_start_x < 0 ? 1.0 : 0.0) ? (vfl_start_x < 0 ? 1.0 : 0.0) : s - 0.2, s1 = s0 + 0.4;
+            int ax2, ay2, bx2, by2;
+            double fdx, fdy;
+
+            vfl_path(s0, &ax2, &ay2);
+            vfl_path(s1, &bx2, &by2);
+            fdx = bx2 - ax2, fdy = (by2 - vfl_lift(s1)) - (ay2 - vfl_lift(s0));
+            if (fabs(fdx) + fabs(fdy) < 0.5 && vfl_pts.size() >= 2) { /* no way yet: the core's last step */
+                int cx2, cy2, dx2, dy2;
+
+                vsp_screen(vfl_pts[vfl_pts.size() - 2].x, vfl_pts[vfl_pts.size() - 2].y, &cx2, &cy2);
+                vsp_screen(vfl_pts[vfl_pts.size() - 1].x, vfl_pts[vfl_pts.size() - 1].y, &dx2, &dy2);
+                fdx = dx2 - cx2, fdy = dy2 - cy2;
+            }
+            deg = fabs(fdx) + fabs(fdy) < 0.5 ? 0.0 : (atan2(fdy, fdx) - vfl_art) * 180.0 / 3.14159265358979;
+        } else if (vfl_fired) {
+            deg = 0.0;
+        }
+        /* turned about its middle (the blit turns about its feet) */
+        th = deg * 3.14159265358979 / 180.0;
+        vtw_put_tile_x(px - (int) floor(0.5 * hh * sin(th) + 0.5),
+                       py - (int) lift - (int) floor(0.5 * hh * (1.0 - cos(th)) + 0.5), vfl_tile, 0, 1.0, 1.0, deg,
+                       false, 255);
+    }
 }
 
 /* the streak behind a flying thing */
@@ -7251,30 +7384,39 @@ vlid_probe_tick(Uint32 now)
 
     if (getenv("VULTURE_SELFTEST_ARC")) { /* the flights */
         static const int ddx[8] = { 1, 1, 0, -1, -1, -1, 0, 1 }, ddy[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
-        static const int what[3] = { DAGGER, ARROW, ROCK };
+        static const int what[5] = { DART, DART, ARROW, DAGGER, ROCK }; /* s222: darts two ways */
+        static const char *const wn[5] = { "dart", "dart2", "arrow", "dagger", "rock" };
+        static int first = -1;
         int best = 0, bl = 0, l, k, x, y;
 
         if (now - vlid_probe_t < 900)
             return;
-        if (step >= 3) {
+        if (step >= 5) {
             vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "arc probe: done, %d shots\n", vlid_probe_shots);
             vlid_probe_t = 0;
             return;
         }
-        for (k = 0; k < 8; k++) { /* the most open way */
+        for (k = 0; k < 8; k++) { /* the most open way (the second dart: another, a quarter round or more) */
+            int off = first < 0 ? 0 : (k - first + 8) % 8;
+
+            if (step == 1 && first >= 0 && (off <= 1 || off >= 7))
+                continue;
             for (l = 0, x = u.ux + ddx[k], y = u.uy + ddy[k];
                  isok(x, y) && ACCESSIBLE(levl[x][y].typ) && !m_at(x, y) && l < 9; l++)
                 x += ddx[k], y += ddy[k];
             if (l > bl)
                 bl = l, best = k;
         }
-        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "arc probe %d: %d squares\n", step, bl);
-        vulture_flight_range(bl, step == 1, u.ux, u.uy);
+        if (step == 0)
+            first = best;
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "arc probe %d: %s, %d squares way %d\n", step, wn[step], bl,
+                          best);
+        vulture_flight_range(bl, step == 2, u.ux, u.uy);
         tmp_at(DISP_FLASH, objnum_to_glyph(what[step]));
         for (l = 1; l <= bl; l++) {
             tmp_at(u.ux + ddx[best] * l, u.uy + ddy[best] * l);
             nh_delay_output();
-            vlid_probe_shot(step == 0 ? "dagger" : step == 1 ? "arrow" : "rock");
+            vlid_probe_shot(wn[step]);
         }
         tmp_at(DISP_END, 0);
         vlid_probe_n++, vlid_probe_t = SDL_GetTicks();

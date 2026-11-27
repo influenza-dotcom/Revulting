@@ -4871,6 +4871,29 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   off, then out of sight (rloc_to) - ghosts and "fight 1" - then 10 turns on
   (fainter, "fight 0").
 
+### 222. Darts are not footballs
+
+- The user: "make it so that darts dont get spun around when theyre flung,
+  since theyre darts not like a football".  A thrown pointed weapon spun
+  300 degrees a square; a fired one did not turn at all, so it flew at the
+  angle its art lies at (an arrow drawn pointing left flew right tail
+  first).
+- Arrows, bolts, ya, darts, spears and javelins, daggers and knives,
+  tridents and lances now fly point first along the arc's tangent (nose up
+  off the hand, level at the top, down into the target).  Shuriken,
+  boomerangs, axes, rocks, flasks still tumble - about their middle now
+  (the blit turns about the feet; the position is corrected).
+- Which way an art points is read off its pixels (vfl_art_angle, cached,
+  logged "flight: art N points D deg"): the alpha-weighted long axis, and
+  the point is - for arrows, bolts and darts - the NARROWER end (fletching
+  is wide; a dart's head is faint, a bolt's or a dark elven arrow's dark),
+  for blades, spears and tridents the more METAL end ((1 - saturation) x
+  sqrt(brightness)).  Checked against every missile in the art: all 21
+  right.
+- Probe VULTURE_SELFTEST_ARC now throws a dart, a second dart a quarter
+  round or more from the first, fires an arrow, throws a dagger, lobs a
+  rock.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
