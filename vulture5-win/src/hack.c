@@ -208,6 +208,7 @@ dopush(
     otmp->next_boulder = 0;
     movobj(otmp, rx, ry); /* does newsym(rx,ry) */
     vulture_object_impact(rx, ry, (int) otmp->owt); /* s157: it rumbles in */
+    vulture_boulder_roll(sx, sy, rx, ry); /* Vulture s204: it rolls */
     if (Blind) {
         feel_location(rx, ry);
         feel_location(sx, sy);

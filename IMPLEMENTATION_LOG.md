@@ -4375,6 +4375,47 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   art, opened / shut / smashed / conjured as the core would set it, the
   swings shot held at set points (vdr_freeze); then each world effect.
 
+### 204. Bodies fall over; boulders roll
+
+- The user, after 203: "it looks literally 3d. can you add more shit like
+  that?!" - more in-betweens made in code from the existing sprites, in the
+  room's own isometric perspective.
+- levelwin.cpp "s204" (vdth_*: deaths):
+  - s79's death spun the sprite flat in the screen plane while it sank, in
+    a BLOCKING 170 ms vanim_frames.  Now a slain creature topples on the
+    clock (it never holds you up): it pivots on its feet onto the floor -
+    the top of the sprite shears along the floor direction and the sprite
+    foreshortens (one quad, as the door leaves), to 1.35 rad, rocks back,
+    fades from t 0.62.  VDTH_TALL: 80 px of height to a square's length of
+    floor.  Red from the blow at first, as s79 had it; a ghost thins upward.
+  - Which way: away from whoever struck it (vimp_last), else along a
+    missile's line (vfl_end), else away from you - but only its SIDE
+    (screen left or right): it falls BACK along that side's floor axis.
+    Falling toward the viewer turns the flat sprite edge-on - it thinned to
+    a sliver in the first probe.
+  - Its corpse waits for it (vdth_object_alpha: hidden while the body
+    falls, faded in as it lands) and skips the s83 drop; the s151 thud is
+    timed to the landing (330 ms).
+- levelwin.cpp "s204" (vbr_*: boulders): dopush (hack.c) calls
+  vulture_boulder_roll(from, to).  The boulder art is split once into the
+  rock and the shadow baked under it (translucent dark pixels in its lower
+  part); the shadow slides, the rock turns about its centre by the ground
+  covered over its radius (screen x; toward or away from you a little
+  less), shoved fast and slowed by friction over 280 ms, and the s158
+  contact shadow follows it.  The hook tests the square the boulder LEAVES:
+  vision still has the boulder in place when the core moves it, so the
+  square it lands on counts as out of sight.
+- GPU light: pieces drawn without normals were lit with the floor's relief
+  under them - a rolling rock looked washed out, the floor's pattern showing
+  through.  Quads now record their own normals
+  (vulture_gpumap_normal_quad, replayed into the normal layer as a quad):
+  door leaves (the panel's own masked normal map), falling bodies; the rock
+  through normal_ex.  vulture_gpumap_quad takes a colour now.
+- Probe VULTURE_SELFTEST_FALL: jackals killed to your screen right and
+  left, boulders pushed by a real key - Vulture moves by the SCREEN, so the
+  key is chosen from the screen direction ('l' is screen right = map NE);
+  vfall_freeze holds the falls and rolls at set points.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

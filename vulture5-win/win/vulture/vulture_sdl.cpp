@@ -552,6 +552,9 @@ struct vgm_nrec {
 	bool ex;
 	double sx, sy, deg;
 	int alpha;
+	bool quad;    /* s204: src laid into the quad q (a door leaf, a falling body) */
+	float q[8];
+	SDL_Rect src;
 };
 static std::vector<vgm_nrec> vgm_nlist; /* this frame's normal-map draws */
 static SDL_Rect vgm_clip;               /* the region the map pass redrew */
@@ -1645,15 +1648,17 @@ bool vulture_gpumap_shadow(SDL_Surface *s, const float *quad, const Uint8 *a4)
 
 /* s203: src of a surface (NULL: all of it) laid on the map layer as a quad
    - quad: the screen corners of src's top-left, top-right, bottom-right
-   and bottom-left (a door leaf turning on its hinge) - shaded (rgb of 255)
-   and faded */
-bool vulture_gpumap_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad, int shade, int alpha)
+   and bottom-left (a door leaf turning on its hinge, a body falling over) -
+   coloured (r, g, b of 255) and faded */
+bool vulture_gpumap_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad, int r, int g, int b,
+                         int alpha)
 {
 	static const int idx[6] = { 0, 1, 2, 0, 2, 3 };
 	SDL_Vertex v[4];
 	SDL_Texture *t;
 	float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
-	Uint8 sh = (Uint8) (shade < 0 ? 0 : shade > 255 ? 255 : shade);
+	Uint8 cr = (Uint8) (r < 0 ? 0 : r > 255 ? 255 : r), cg = (Uint8) (g < 0 ? 0 : g > 255 ? 255 : g);
+	Uint8 cb = (Uint8) (b < 0 ? 0 : b > 255 ? 255 : b);
 	Uint8 al = (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha);
 	int k;
 
@@ -1672,7 +1677,7 @@ bool vulture_gpumap_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad,
 	for (k = 0; k < 4; k++) {
 		v[k].position.x = vgm_view ? vgm_vx(quad[2 * k]) : quad[2 * k];
 		v[k].position.y = vgm_view ? vgm_vy(quad[2 * k + 1]) : quad[2 * k + 1];
-		v[k].color.r = v[k].color.g = v[k].color.b = sh, v[k].color.a = al;
+		v[k].color.r = cr, v[k].color.g = cg, v[k].color.b = cb, v[k].color.a = al;
 		v[k].tex_coord.x = (k == 1 || k == 2) ? u1 : u0;
 		v[k].tex_coord.y = k >= 2 ? v1 : v0;
 	}
@@ -1918,6 +1923,7 @@ void vulture_gpumap_normal(SDL_Surface *s, int x, int y)
 	if (!vulture_gpumap_on || !s)
 		return;
 	r.s = s, r.x = x, r.y = y, r.ex = false, r.sx = r.sy = 1.0, r.deg = 0.0, r.alpha = 255;
+	r.quad = false;
 	vgm_nlist.push_back(r);
 }
 
@@ -1929,6 +1935,27 @@ void vulture_gpumap_normal_ex(SDL_Surface *s, int dx, int dy, double sx, double 
 	if (!vulture_gpumap_on || !s)
 		return;
 	r.s = s, r.x = dx, r.y = dy, r.ex = true, r.sx = sx, r.sy = sy, r.deg = deg, r.alpha = alpha;
+	r.quad = false;
+	vgm_nlist.push_back(r);
+}
+
+/* s204: a normal map laid as vulture_gpumap_quad lays its colour - the
+   pieces that turn and fall get their own relief, not the floor's under them */
+void vulture_gpumap_normal_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad, int alpha)
+{
+	vgm_nrec r;
+	int k;
+
+	if (!vulture_gpumap_on || !s || !quad)
+		return;
+	r.s = s, r.x = r.y = 0, r.ex = false, r.sx = r.sy = 1.0, r.deg = 0.0, r.alpha = alpha;
+	r.quad = true;
+	for (k = 0; k < 8; k++)
+		r.q[k] = quad[k];
+	if (src)
+		r.src = *src;
+	else
+		r.src.x = r.src.y = 0, r.src.w = s->w, r.src.h = s->h;
 	vgm_nlist.push_back(r);
 }
 
@@ -2061,6 +2088,26 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			SDL_GetSurfaceBlendMode(r.s, &bm);
 			SDL_SetTextureBlendMode(t, bm);
 			SDL_SetTextureColorMod(t, 255, 255, 255);
+			if (r.quad && r.s->w > 0 && r.s->h > 0) { /* s204: as vulture_gpumap_quad laid it */
+				static const int qidx[6] = { 0, 1, 2, 0, 2, 3 };
+				SDL_Vertex v[4];
+				float u0 = (float) r.src.x / r.s->w, v0 = (float) r.src.y / r.s->h;
+				float u1 = (float) (r.src.x + r.src.w) / r.s->w, v1 = (float) (r.src.y + r.src.h) / r.s->h;
+				int k;
+
+				for (k = 0; k < 4; k++) {
+					v[k].position.x = vgm_tex_view ? vgm_vx(r.q[2 * k]) : r.q[2 * k];
+					v[k].position.y = vgm_tex_view ? vgm_vy(r.q[2 * k + 1]) : r.q[2 * k + 1];
+					v[k].color.r = v[k].color.g = v[k].color.b = 255;
+					v[k].color.a = (Uint8) (r.alpha < 0 ? 0 : r.alpha > 255 ? 255 : r.alpha);
+					v[k].tex_coord.x = (k == 1 || k == 2) ? u1 : u0;
+					v[k].tex_coord.y = k >= 2 ? v1 : v0;
+				}
+				SDL_SetTextureAlphaMod(t, 255);
+				SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+				SDL_RenderGeometry(vulture_gpu, t, v, 4, qidx, 6);
+				continue;
+			}
 			if (!r.ex && vgm_tex_view) { /* s201: at the zoom, as the map pass drew it */
 				SDL_FRect d = { vgm_vx((float) r.x), vgm_vy((float) r.y), r.s->w * vgm_vsx,
 				                r.s->h * vgm_vsy };

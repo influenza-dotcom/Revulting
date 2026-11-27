@@ -903,13 +903,20 @@ static void vimp_note_attack(int ax, int ay, int tx, int ty);                /* 
 static void vimp_recoil_xform(int j, int i, int *ox, int *oy, double *deg); /* s202 */
 static void vimp_hit(int x, int y, int dmg, int maxhp, bool hero);         /* s202 */
 static void vimp_kill(int x, int y, int maxhp);                            /* s202 */
+static void vdth_start(int x, int y, int tile, int heft, int face, bool ghost); /* s204 */
+static bool vdth_draw(int j, int i, int x, int y);                              /* s204 */
+static int vdth_object_alpha(int j, int i);                                     /* s204 */
+static bool vbr_draw(int j, int i, int x, int y, int tile_id);                  /* s204 */
+static bool vbr_offset(int j, int i, int *ox, int *oy);                         /* s204 */
 static int vanim_ax, vanim_ay, vanim_tx, vanim_ty;
 static double vanim_t = 0.0;
 struct vanim_death {
     int x, y, tile, heft; /* s151: heft */
+    int face;             /* s204: the way it faced; a ghost fades instead of falling */
+    bool ghost;
 };
 static vanim_death vanim_deaths[8];
-static int vanim_ndeaths = 0, vanim_dtile = -1, vanim_dx = 0, vanim_dy = 0;
+static int vanim_ndeaths = 0;
 
 /* s81: animations never hold the player up - a keypress or click waiting
    in the queue ends one at once */
@@ -1045,10 +1052,12 @@ vulture_anim_death(int x, int y)
     vanim_deaths[vanim_ndeaths].x = x;
     vanim_deaths[vanim_ndeaths].y = y;
     vanim_deaths[vanim_ndeaths].tile = tile;
+    vanim_deaths[vanim_ndeaths].face = vtw_face[y][x]; /* s204 */
     {
         struct monst *dm = m_at(x, y);
 
         vanim_deaths[vanim_ndeaths].heft = dm ? vheft_mon(dm->data) : 2; /* s151 */
+        vanim_deaths[vanim_ndeaths].ghost = dm && noncorporeal(dm->data);
         if (!dm || !noncorporeal(dm->data))
             vst_add(x, y, 2); /* s93: a death leaves a pool */
         if (dm) /* s202: the killing blow lands too (vfx_scan never sees it) */
@@ -1096,7 +1105,8 @@ vanim_play_drops(void)
     for (i = 0; i < n; i++) {
         int x = vanim_drops[i][0], y = vanim_drops[i][1];
 
-        if (map_data->get_glyph(MAP_OBJ, x, y) != V_TILE_NONE) {
+        if (map_data->get_glyph(MAP_OBJ, x, y) != V_TILE_NONE
+            && vdth_object_alpha(x, y) >= 255) { /* s204: a falling body brings its corpse in itself */
             vanim_drop_on[y][x] = true;
             vanim_drop_heft[y][x] = (signed char) vheft_obj(svl.level.objects[x][y]); /* s151 */
             vimpact(x, y, vanim_drop_heft[y][x], 80); /* lands about halfway in */
@@ -1114,7 +1124,16 @@ vanim_draw_object(int j, int i, int x, int y, int tile_id)
 {
     vulture_tile *tile;
     double t = vanim_t, oy, sx = 1.0, sy = 1.0;
+    int ha;
 
+    if (vbr_draw(j, i, x, y, tile_id)) /* s204: a boulder rolling in */
+        return;
+    ha = vdth_object_alpha(j, i); /* s204: a corpse waits for its body to land */
+    if (ha < 255) {
+        if (ha > 0 && (tile = vulture_get_tile(tile_id)) != NULL && tile->graphic)
+            vtx_blit(tile->graphic, x + tile->xmod, y + tile->ymod, 1.0, 1.0, 0.0, false, ha);
+        return;
+    }
     if (vanim_kind != 3 || !vanim_drop_on[i][j]
         || !(tile = vulture_get_tile(tile_id)) || !tile->graphic) {
         vulture_put_tile(x, y, tile_id);
@@ -1160,11 +1179,11 @@ vanim_play_deaths(void)
         if (map_data->get_glyph(MAP_MON, vanim_deaths[i].x, vanim_deaths[i].y)
             == vanim_deaths[i].tile)
             continue; /* still shown (lifesaved, or not redrawn): skip */
-        vanim_dx = vanim_deaths[i].x, vanim_dy = vanim_deaths[i].y;
-        vanim_dtile = vanim_deaths[i].tile;
-        vimpact(vanim_dx, vanim_dy, vanim_deaths[i].heft, 120); /* s151: the body lands */
-        vanim_frames(2, 9, 14);
-        vanim_dtile = -1;
+        /* s204: it falls on the clock (vdth_*), never holding you up */
+        vdth_start(vanim_deaths[i].x, vanim_deaths[i].y, vanim_deaths[i].tile, vanim_deaths[i].heft,
+                   vanim_deaths[i].face, vanim_deaths[i].ghost);
+        if (!vanim_deaths[i].ghost) /* s151: the body lands - as it reaches the floor */
+            vimpact(vanim_deaths[i].x, vanim_deaths[i].y, vanim_deaths[i].heft, 330);
     }
 }
 
@@ -1203,22 +1222,6 @@ vanim_xform(int j, int i, int *ox, int *oy, double *xs, double *ys,
     }
 }
 
-/* s79: the slain monster topples over, sinks and fades out, reddening */
-static void
-vanim_draw_death(int j, int i, int x, int y)
-{
-    vulture_tile *tile;
-    double t = vanim_t, e = t * t * (3.0 - 2.0 * t);
-
-    if (vanim_kind != 2 || j != vanim_dx || i != vanim_dy || vanim_dtile < 0)
-        return;
-    tile = vulture_get_tile(vanim_dtile);
-    if (!tile || !tile->graphic)
-        return;
-    vtx_blit(tile->graphic, x + tile->xmod, y + tile->ymod + (int) (10 * e),
-             1.0 + 0.1 * e, 1.0 - 0.15 * e, 85.0 * e, t < 0.5,
-             (int) (255 * (1.0 - t * t)));
-}
 
 
 /*
@@ -4808,6 +4811,7 @@ vimp_probe_tick(Uint32 now)
  */
 struct vdr_split_t {
     SDL_Surface *frame, *panel, *nframe; /* the arch, the panel (ARGB, the art's size), the arch's normals */
+    SDL_Surface *npanel;                 /* s204: the panel's normals, which turn with it */
     int pl, pr, pt, pb;                  /* the panel's box in the art */
     bool ok;
 };
@@ -4980,23 +4984,37 @@ vdr_split(int tile_id)
         sp->frame = sp->panel = NULL;
         return NULL;
     }
-    /* the arch's normals alone (the panel's would light the open doorway) */
+    /* the normals split the same way: the arch's alone (the panel's would
+       light the open doorway) and the panel's (s204: they turn with it, so
+       a leaf isn't lit with the floor's relief under it) */
     nm = vulture_get_tile_normal(tile_id, false);
     if (nm && nm->w == w && nm->h == h
         && (sp->nframe = SDL_ConvertSurfaceFormat(nm, SDL_PIXELFORMAT_ARGB8888, 0)) != NULL) {
+        if (!(sp->npanel = SDL_ConvertSurfaceFormat(nm, SDL_PIXELFORMAT_ARGB8888, 0))) {
+            SDL_FreeSurface(sp->nframe);
+            sp->nframe = NULL;
+        }
+    }
+    if (sp->nframe && sp->npanel) {
         SDL_LockSurface(sp->nframe);
+        SDL_LockSurface(sp->npanel);
         SDL_LockSurface(sp->panel);
         for (y = 0; y < h; y++) {
             Uint32 *nr = (Uint32 *) ((Uint8 *) sp->nframe->pixels + y * sp->nframe->pitch);
+            Uint32 *np = (Uint32 *) ((Uint8 *) sp->npanel->pixels + y * sp->npanel->pitch);
             const Uint32 *pa = (const Uint32 *) ((const Uint8 *) sp->panel->pixels + y * sp->panel->pitch);
 
             for (x = 0; x < w; x++)
                 if (pa[x] >> 24)
                     nr[x] = 0;
+                else
+                    np[x] = 0;
         }
         SDL_UnlockSurface(sp->panel);
+        SDL_UnlockSurface(sp->npanel);
         SDL_UnlockSurface(sp->nframe);
         SDL_SetSurfaceBlendMode(sp->nframe, SDL_BLENDMODE_BLEND);
+        SDL_SetSurfaceBlendMode(sp->npanel, SDL_BLENDMODE_BLEND);
     }
     /* zoomed in: the HD art cut the same way, the two adding up to it */
     vulture_gpu_hd_derive_cut(sp->frame, tile->graphic, sp->panel, true);
@@ -5011,19 +5029,21 @@ vdr_split(int tile_id)
    as a turning door's are), shaded and faded: on the GPU's map layer, or in
    2 px strips into the frame */
 static void
-vdr_quad(SDL_Surface *s, const SDL_Rect &src, const float *q, int shade, int alpha)
+vdr_quad_rgb(SDL_Surface *s, const SDL_Rect &src, const float *q, int r, int g, int b, int alpha)
 {
     int c;
 
     if (!s || alpha <= 0 || src.w <= 0 || src.h <= 0)
         return;
     alpha = alpha > 255 ? 255 : alpha;
-    shade = shade < 0 ? 0 : shade > 255 ? 255 : shade;
+    r = r < 0 ? 0 : r > 255 ? 255 : r;
+    g = g < 0 ? 0 : g > 255 ? 255 : g;
+    b = b < 0 ? 0 : b > 255 ? 255 : b;
     if (vulture_gpumap_on) {
-        vulture_gpumap_quad(s, &src, q, shade, alpha);
+        vulture_gpumap_quad(s, &src, q, r, g, b, alpha);
         return;
     }
-    SDL_SetSurfaceColorMod(s, (Uint8) shade, (Uint8) shade, (Uint8) shade);
+    SDL_SetSurfaceColorMod(s, (Uint8) r, (Uint8) g, (Uint8) b);
     SDL_SetSurfaceAlphaMod(s, (Uint8) alpha);
     for (c = 0; c < src.w; c++) {
         double f = (c + 0.5) / src.w;
@@ -5037,6 +5057,20 @@ vdr_quad(SDL_Surface *s, const SDL_Rect &src, const float *q, int shade, int alp
     }
     SDL_SetSurfaceColorMod(s, 255, 255, 255);
     SDL_SetSurfaceAlphaMod(s, 255);
+}
+
+static void
+vdr_quad(SDL_Surface *s, const SDL_Rect &src, const float *q, int shade, int alpha) /* grey-shaded */
+{
+    vdr_quad_rgb(s, src, q, shade, shade, shade, alpha);
+}
+
+/* s204: its normal map laid the same way, for the light (GPU only) */
+static void
+vdr_quad_normal(SDL_Surface *nm, const SDL_Rect &src, const float *q, int alpha)
+{
+    if (nm && alpha > 0 && vulture_normal_capture && vulture_gpumap_on)
+        vulture_gpumap_normal_quad(nm, &src, q, alpha);
 }
 
 /* s (a door piece, or a whole door tile) with its top-left at (x, y),
@@ -5093,6 +5127,7 @@ vdr_leaf(vdr_split_t *sp, int ox, int oy, int hx, int c0, int c1, double cx, dou
     q[4] = q[2], q[5] = (float) (oy + sp->pb + d1 * ky);
     q[6] = q[0], q[7] = (float) (oy + sp->pb + d0 * ky);
     vdr_quad(sp->panel, r, q, shade, alpha);
+    vdr_quad_normal(sp->npanel, r, q, alpha); /* s204 */
 }
 
 /* step 2 of the map: the door on (j, i) part way through opening, shutting,
@@ -5162,10 +5197,10 @@ vdr_draw(int x, int y, int j, int i, int cur)
         q[4] = (float) (ox + sp->pr + jx), q[5] = (float) (oy + sp->pb);
         q[6] = (float) (ox + sp->pl + jx), q[7] = q[5];
         if (a->push > 0.0f) /* falling away: behind the arch */
-            vdr_quad(sp->panel, r, q, 255 - (int) (70 * u), pa);
+            vdr_quad(sp->panel, r, q, 255 - (int) (70 * u), pa), vdr_quad_normal(sp->npanel, r, q, pa);
         vdr_img(sp->frame, sp->nframe, ox, oy, fa);
         if (a->push <= 0.0f)
-            vdr_quad(sp->panel, r, q, 255 - (int) (70 * u), pa);
+            vdr_quad(sp->panel, r, q, 255 - (int) (70 * u), pa), vdr_quad_normal(sp->npanel, r, q, pa);
         return true;
     }
     { /* opening (1) or shutting (2): the leaves turn about their pillars */
@@ -5623,6 +5658,557 @@ vdr_probe_tick(Uint32 now)
     vdr_probe_sub = 1, vdr_probe_t = SDL_GetTicks();
 }
 
+/*
+ * IMPLEMENTATION_LOG s204: more of the room's own perspective.
+ *  - A slain creature falls over the way something standing on the
+ *    isometric floor would: it pivots on its feet away from the blow that
+ *    killed it (who struck it, a missile's line, else away from you), the
+ *    sprite shearing along that floor direction and foreshortening as it
+ *    goes down (one quad), lands with a thud, rocks back and fades, its
+ *    corpse fading in as it lands.  On the clock - it never holds you up
+ *    (s79's spin-and-sink was a blocking 170 ms).  A ghost thins upward.
+ *  - A pushed boulder rolls into its square: the shadow baked under it (its
+ *    translucent dark pixels) slides along the floor while the rock turns
+ *    about its centre as far as a ball its size would over that ground,
+ *    shoved fast and slowed by friction.
+ */
+#define VDTH_TALL 80.0 /* screen px of a creature's height to a square's length of floor */
+struct vdth_t {
+    int x, y, tile, face, heft;
+    float fx, fy; /* the floor direction it falls: screen px per px of height */
+    Uint32 t0, dur;
+    bool ghost;
+};
+static std::vector<vdth_t> vdth_list;
+struct vbr_art_t {
+    SDL_Surface *rock, *shadow, *nrock; /* nrock: the rock's normals (no shadow) */
+    float cx, cy, rad; /* the rock's centre and size in the art */
+    int tile;
+    bool ok, tried;
+};
+static vbr_art_t vbr_art = { NULL, NULL, NULL, 0.0f, 0.0f, 0.0f, -1, false, false };
+struct vbr_t {
+    int x, y;     /* where the map shows it now */
+    float ox, oy; /* where it came from: screen px from there */
+    Uint32 t0, dur;
+};
+static std::vector<vbr_t> vbr_list;
+static d_level vfall_lev = { -1, -1 };
+static double vfall_freeze = -1.0; /* probe: >= 0 holds every fall and roll at this point of it */
+
+/* a floor direction seen on screen as (ux, uy): the screen px a body 1 px
+   tall covers lying down that way - the iso projection undone, the
+   direction made a unit on the floor, projected again */
+static void
+vdth_floor(double ux, double uy, float *fx, float *fy)
+{
+    double va = (ux / V_MAP_XMOD + uy / V_MAP_YMOD) / 2.0, vb = (uy / V_MAP_YMOD - ux / V_MAP_XMOD) / 2.0;
+    double len = sqrt(va * va + vb * vb);
+
+    if (len < 1e-6) { /* no way known: toward you */
+        *fx = 0.0f, *fy = (float) (V_MAP_YMOD * 2.0 / (1.4142 * VDTH_TALL));
+        return;
+    }
+    *fx = (float) (V_MAP_XMOD * (va - vb) / (len * VDTH_TALL));
+    *fy = (float) (V_MAP_YMOD * (va + vb) / (len * VDTH_TALL));
+}
+
+static void
+vdth_start(int x, int y, int tile, int heft, int face, bool ghost)
+{
+    Uint32 now = SDL_GetTicks();
+    vdth_t d;
+    double ux = 0.0, uy = 0.0;
+    int sx, sy, side;
+    size_t k, n = 0;
+
+    if (!isok(x, y))
+        return;
+    if (!on_level(&vfall_lev, &u.uz)) {
+        vfall_lev = u.uz;
+        vdth_list.clear(), vbr_list.clear();
+    }
+    if (vimp_last.t && now - vimp_last.t < 2000 && vimp_last.tx == x && vimp_last.ty == y
+        && (vimp_last.ax != x || vimp_last.ay != y)) { /* away from who struck it */
+        vtw_proj(x - vimp_last.ax, y - vimp_last.ay, &sx, &sy);
+        ux = sx, uy = sy;
+    } else if (vfl_end_t && now - vfl_end_t < 2000 && distmin(vfl_end_x, vfl_end_y, x, y) <= 1
+               && (vfl_end_dx != 0.0f || vfl_end_dy != 0.0f)) { /* along the missile's line */
+        ux = vfl_end_dx, uy = vfl_end_dy;
+    } else if (u.ux != x || u.uy != y) { /* away from you */
+        vtw_proj(x - u.ux, y - u.uy, &sx, &sy);
+        ux = sx, uy = sy;
+    } else {
+        vtw_proj(rand() % 2 ? 1 : -1, 0, &sx, &sy);
+        ux = sx, uy = sy;
+    }
+    for (k = 0; k < vdth_list.size(); k++) /* one body a square */
+        if (vdth_list[k].x != x || vdth_list[k].y != y)
+            vdth_list[n++] = vdth_list[k];
+    vdth_list.resize(n);
+    if (n >= 12)
+        return;
+    d.x = x, d.y = y, d.tile = tile, d.face = face, d.heft = heft, d.ghost = ghost;
+    /* back along the floor, on the side the blow pushed it: falling toward
+       you the flat sprite would turn edge-on and thin to a sliver */
+    side = ux > 0.5 ? 1 : ux < -0.5 ? -1 : (rand() % 2 ? 1 : -1);
+    vdth_floor(side * V_MAP_XMOD, -V_MAP_YMOD, &d.fx, &d.fy);
+    d.t0 = now, d.dur = ghost ? 520 : 600;
+    vdth_list.push_back(d);
+    vsp_live_t = now;
+}
+
+/* step 5 of the map: a body falling over on (j, i); false: none there */
+static bool
+vdth_draw(int j, int i, int x, int y)
+{
+    Uint32 now;
+    size_t k;
+    bool any = false;
+
+    if (vdth_list.empty())
+        return false;
+    now = SDL_GetTicks();
+    for (k = 0; k < vdth_list.size(); k++) {
+        const vdth_t &d = vdth_list[k];
+        vulture_tile *tile;
+        SDL_Surface *img;
+        double t = vfall_freeze >= 0.0 ? vfall_freeze : (double) (now - d.t0) / d.dur, ph, H, dx, dy;
+        int ix, iy, art, al, g;
+        float q[8];
+        SDL_Rect r;
+
+        if (d.x != j || d.y != i || t >= 1.0 || !(tile = vulture_get_tile(d.tile)) || !tile->graphic)
+            continue;
+        any = true;
+        img = tile->graphic, ix = x + tile->xmod, iy = y + tile->ymod;
+        art = vtw_art_facing(d.tile, tile->graphic); /* as vtw_put_tile_x faces it */
+        if (d.face != 0 && ((art == 0 && d.face < 0) || (art != 0 && art != d.face))) {
+            SDL_Surface *f = vtw_flipped(d.tile, tile->graphic);
+
+            if (f)
+                img = f, ix = x - tile->xmod - tile->graphic->w + 1;
+        }
+        if (d.ghost) { /* it thins away upward */
+            vtx_blit(img, ix, iy - (int) (18 * t), 1.0 - 0.1 * t, 1.0 + 0.15 * t, 0.0, false,
+                     (int) (220 * (1.0 - t)));
+            continue;
+        }
+        if (t < 0.55) { /* down, faster as it goes */
+            double u = t / 0.55;
+
+            ph = 1.35 * u * u;
+        } else if (t < 0.72) { /* it lands and rocks back a little */
+            ph = 1.35 - 0.1 * sin(3.14159 * (t - 0.55) / 0.17);
+        } else {
+            ph = 1.35;
+        }
+        H = img->h;
+        dx = H * d.fx * sin(ph), dy = H * (1.0 - cos(ph)) + H * d.fy * sin(ph);
+        al = t < 0.62 ? 255 : (int) (255 * (1.0 - (t - 0.62) / 0.38));
+        g = t < 0.3 ? 255 - (int) (150 * (1.0 - t / 0.3)) : 255; /* red from the blow, as s79 had it */
+        r.x = 0, r.y = 0, r.w = img->w, r.h = img->h;
+        q[0] = (float) (ix + dx), q[1] = (float) (iy + dy);
+        q[2] = (float) (ix + img->w + dx), q[3] = q[1];
+        q[4] = (float) (ix + img->w), q[5] = (float) (iy + img->h);
+        q[6] = (float) ix, q[7] = q[5];
+        vdr_quad_rgb(img, r, q, 255, g, g, al);
+        vdr_quad_normal(vulture_get_tile_normal(d.tile, img != tile->graphic), r, q, al);
+    }
+    return any;
+}
+
+/* the corpse a falling body leaves waits for it to land: the alpha to draw
+   what the map shows on (j, i) with (255: as usual) */
+static int
+vdth_object_alpha(int j, int i)
+{
+    Uint32 now;
+    size_t k;
+
+    if (vdth_list.empty() || !map_data || !isok(j, i) || !glyph_is_body(map_data->get_glyph(MAP_GLYPH, j, i)))
+        return 255;
+    now = SDL_GetTicks();
+    for (k = 0; k < vdth_list.size(); k++) {
+        const vdth_t &d = vdth_list[k];
+        double t;
+
+        if (d.x != j || d.y != i || d.ghost)
+            continue;
+        t = vfall_freeze >= 0.0 ? vfall_freeze : (double) (now - d.t0) / d.dur;
+        return t < 0.5 ? 0 : t >= 0.75 ? 255 : (int) (255 * (t - 0.5) / 0.25);
+    }
+    return 255;
+}
+
+/* the boulder art split once into the rock and the shadow baked under it
+   (translucent, dark, in its lower part); NULL: another art, rolled whole */
+static vbr_art_t *
+vbr_split(int tile_id)
+{
+    vulture_tile *tile;
+    SDL_Surface *src;
+    int x, y, n = 0, x0, y0, x1 = 0, y1 = 0;
+
+    if (vbr_art.tried)
+        return vbr_art.ok && vbr_art.tile == tile_id ? &vbr_art : NULL;
+    vbr_art.tried = true, vbr_art.tile = tile_id;
+    tile = vulture_get_tile(tile_id);
+    if (!tile || !tile->graphic
+        || !(src = SDL_ConvertSurfaceFormat(tile->graphic, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return NULL;
+    vbr_art.rock = SDL_CreateRGBSurfaceWithFormat(0, src->w, src->h, 32, SDL_PIXELFORMAT_ARGB8888);
+    vbr_art.shadow = SDL_CreateRGBSurfaceWithFormat(0, src->w, src->h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (!vbr_art.rock || !vbr_art.shadow) {
+        SDL_FreeSurface(src);
+        if (vbr_art.rock)
+            SDL_FreeSurface(vbr_art.rock);
+        if (vbr_art.shadow)
+            SDL_FreeSurface(vbr_art.shadow);
+        vbr_art.rock = vbr_art.shadow = NULL;
+        return NULL;
+    }
+    x0 = src->w, y0 = src->h;
+    SDL_LockSurface(src);
+    SDL_LockSurface(vbr_art.rock);
+    SDL_LockSurface(vbr_art.shadow);
+    for (y = 0; y < src->h; y++) {
+        const Uint32 *row = (const Uint32 *) ((const Uint8 *) src->pixels + y * src->pitch);
+        Uint32 *rk = (Uint32 *) ((Uint8 *) vbr_art.rock->pixels + y * vbr_art.rock->pitch);
+        Uint32 *sd = (Uint32 *) ((Uint8 *) vbr_art.shadow->pixels + y * vbr_art.shadow->pitch);
+
+        for (x = 0; x < src->w; x++) {
+            Uint32 p = row[x];
+            int a = (int) (p >> 24), r = (int) ((p >> 16) & 255), g = (int) ((p >> 8) & 255), b = (int) (p & 255);
+            bool sh = a > 0 && a < 200 && (r * 3 + g * 6 + b) / 10 < 70 && y > src->h * 0.55;
+
+            rk[x] = sh ? 0 : p;
+            sd[x] = sh ? p : 0;
+            if (!sh && a >= 128) {
+                n++;
+                if (x < x0)
+                    x0 = x;
+                if (x + 1 > x1)
+                    x1 = x + 1;
+                if (y < y0)
+                    y0 = y;
+                if (y + 1 > y1)
+                    y1 = y + 1;
+            }
+        }
+    }
+    SDL_UnlockSurface(vbr_art.shadow);
+    SDL_UnlockSurface(vbr_art.rock);
+    SDL_UnlockSurface(src);
+    SDL_FreeSurface(src);
+    SDL_SetSurfaceBlendMode(vbr_art.rock, SDL_BLENDMODE_BLEND);
+    SDL_SetSurfaceBlendMode(vbr_art.shadow, SDL_BLENDMODE_BLEND);
+    if (n < 200) {
+        SDL_FreeSurface(vbr_art.rock);
+        SDL_FreeSurface(vbr_art.shadow);
+        vbr_art.rock = vbr_art.shadow = NULL;
+        return NULL;
+    }
+    vbr_art.cx = (x0 + x1) / 2.0f, vbr_art.cy = (y0 + y1) / 2.0f;
+    vbr_art.rad = ((x1 - x0) + (y1 - y0)) / 4.0f;
+    { /* the rock's normals, without the shadow's */
+        SDL_Surface *nm = vulture_get_tile_normal(tile_id, false);
+
+        if (nm && nm->w == vbr_art.rock->w && nm->h == vbr_art.rock->h
+            && (vbr_art.nrock = SDL_ConvertSurfaceFormat(nm, SDL_PIXELFORMAT_ARGB8888, 0)) != NULL) {
+            SDL_LockSurface(vbr_art.nrock);
+            SDL_LockSurface(vbr_art.shadow);
+            for (y = 0; y < nm->h; y++) {
+                Uint32 *nr = (Uint32 *) ((Uint8 *) vbr_art.nrock->pixels + y * vbr_art.nrock->pitch);
+                const Uint32 *sd = (const Uint32 *) ((const Uint8 *) vbr_art.shadow->pixels + y * vbr_art.shadow->pitch);
+
+                for (x = 0; x < nm->w; x++)
+                    if (sd[x] >> 24)
+                        nr[x] = 0;
+            }
+            SDL_UnlockSurface(vbr_art.shadow);
+            SDL_UnlockSurface(vbr_art.nrock);
+            SDL_SetSurfaceBlendMode(vbr_art.nrock, SDL_BLENDMODE_BLEND);
+        }
+    }
+    vulture_gpu_hd_derive_cut(vbr_art.rock, tile->graphic, vbr_art.shadow, true); /* zoomed: its HD art */
+    vulture_gpu_hd_derive_cut(vbr_art.shadow, tile->graphic, vbr_art.shadow, false);
+    vbr_art.ok = true;
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "boulder art: rock %d px, centre %.0f,%.0f, radius %.0f\n", n,
+                      vbr_art.cx, vbr_art.cy, vbr_art.rad);
+    return &vbr_art;
+}
+
+/* img turned th radians (clockwise) about its point (cx, cy) - the sprite
+   transformer turns about the feet, so the feet are moved to make up */
+static void
+vbr_turn(SDL_Surface *img, SDL_Surface *nm, int dx, int dy, double cx, double cy, double th)
+{
+    double vx = cx - img->w / 2.0, vy = cy - img->h, c = cos(th), s = sin(th);
+    double mx = vx - (vx * c - vy * s), my = vy - (vx * s + vy * c);
+    int px = dx + (int) floor(mx + 0.5), py = dy + (int) floor(my + 0.5);
+
+    vtx_blit(img, px, py, 1.0, 1.0, th * 57.29578, false, 255);
+    if (nm && vulture_normal_capture && vulture_gpumap_on) /* s204: its own relief, turned with it */
+        vulture_gpumap_normal_ex(nm, px, py, 1.0, 1.0, th * 57.29578, 255);
+}
+
+static double
+vbr_ease(const vbr_t &r, Uint32 now) /* how far it has come: shoved, then friction */
+{
+    double t = (double) (now - r.t0) / r.dur;
+
+    if (vfall_freeze >= 0.0)
+        return vfall_freeze;
+    return t >= 1.0 ? 1.0 : 1.0 - (1.0 - t) * (1.0 - t);
+}
+
+/* step 4 of the map: a boulder rolling into (j, i) */
+static bool
+vbr_draw(int j, int i, int x, int y, int tile_id)
+{
+    Uint32 now;
+    vulture_tile *tile;
+    vbr_art_t *sp;
+    const vbr_t *r = NULL;
+    double e, mx, rad, th;
+    size_t k;
+    int bx, by;
+
+    if (vbr_list.empty())
+        return false;
+    now = SDL_GetTicks();
+    for (k = 0; k < vbr_list.size(); k++)
+        if (vbr_list[k].x == j && vbr_list[k].y == i
+            && (vfall_freeze >= 0.0 || now - vbr_list[k].t0 < vbr_list[k].dur))
+            r = &vbr_list[k];
+    if (!r || !(tile = vulture_get_tile(tile_id)) || !tile->graphic)
+        return false;
+    e = vbr_ease(*r, now);
+    bx = x + tile->xmod + (int) floor(r->ox * (1.0 - e) + 0.5);
+    by = y + tile->ymod + (int) floor(r->oy * (1.0 - e) + 0.5);
+    sp = vbr_split(tile_id);
+    rad = sp ? sp->rad : tile->graphic->h * 0.45;
+    /* the turn of a ball its size over the ground covered: across the
+       screen it reads as rolling; toward or away from you a little less */
+    mx = -r->ox;
+    if (fabs(mx) < 1.0)
+        mx = 0.35 * fabs(r->oy);
+    th = mx * e / (rad > 4.0 ? rad : 4.0);
+    if (sp) {
+        vdr_img(sp->shadow, NULL, bx, by, 255); /* the shadow slides; the rock rolls */
+        vbr_turn(sp->rock, sp->nrock, bx, by, sp->cx, sp->cy, th);
+    } else {
+        vbr_turn(tile->graphic, vulture_get_tile_normal(tile_id, false), bx, by, tile->graphic->w / 2.0,
+                 tile->graphic->h / 2.0, th);
+    }
+    return true;
+}
+
+static bool
+vbr_offset(int j, int i, int *ox, int *oy) /* a boulder rolling into (j, i): how far back it is */
+{
+    Uint32 now = SDL_GetTicks();
+    size_t k;
+
+    for (k = 0; k < vbr_list.size(); k++) {
+        const vbr_t &r = vbr_list[k];
+        double e;
+
+        if (r.x != j || r.y != i || (vfall_freeze < 0.0 && now - r.t0 >= r.dur))
+            continue;
+        e = vbr_ease(r, now);
+        *ox = (int) floor(r.ox * (1.0 - e) + 0.5), *oy = (int) floor(r.oy * (1.0 - e) + 0.5);
+        return true;
+    }
+    return false;
+}
+
+/* the core (dopush): a boulder pushed from (fx, fy) to (tx, ty) */
+extern "C" void
+vulture_boulder_roll(int fx, int fy, int tx, int ty)
+{
+    vbr_t r;
+    int sx, sy;
+    size_t k, n = 0;
+
+    /* the square it leaves: vision still has the boulder there when the
+       core moves it, so the square beyond counts as out of sight */
+    if (!levwin || !u.ux || !isok(fx, fy) || !isok(tx, ty) || (!cansee(fx, fy) && !cansee(tx, ty)))
+        return;
+    if (!on_level(&vfall_lev, &u.uz)) {
+        vfall_lev = u.uz;
+        vdth_list.clear(), vbr_list.clear();
+    }
+    vtw_proj(fx - tx, fy - ty, &sx, &sy);
+    for (k = 0; k < vbr_list.size(); k++) /* one roll a square */
+        if (vbr_list[k].x != tx || vbr_list[k].y != ty)
+            vbr_list[n++] = vbr_list[k];
+    vbr_list.resize(n);
+    if (n >= 8)
+        return;
+    r.x = tx, r.y = ty, r.ox = (float) sx, r.oy = (float) sy, r.t0 = SDL_GetTicks(), r.dur = 280;
+    vbr_list.push_back(r);
+    vsp_live_t = r.t0;
+}
+
+/* the overlay pass: falls and rolls that have run their course go */
+static void
+vfall_tick(Uint32 now)
+{
+    size_t k, n = 0;
+
+    if (!on_level(&vfall_lev, &u.uz)) {
+        vfall_lev = u.uz;
+        vdth_list.clear(), vbr_list.clear();
+    }
+    for (k = 0; k < vdth_list.size(); k++)
+        if (vfall_freeze >= 0.0 || now - vdth_list[k].t0 < vdth_list[k].dur)
+            vdth_list[n++] = vdth_list[k];
+    vdth_list.resize(n);
+    n = 0;
+    for (k = 0; k < vbr_list.size(); k++)
+        if (vfall_freeze >= 0.0 || now - vbr_list[k].t0 < vbr_list[k].dur)
+            vbr_list[n++] = vbr_list[k];
+    vbr_list.resize(n);
+    if (!vdth_list.empty() || !vbr_list.empty())
+        vsp_live_t = now; /* frames keep coming */
+}
+
+/* probe: s204 - VULTURE_SELFTEST_FALL: jackals killed beside you from two
+   sides (real blows), then boulders pushed two ways (the core's moverock),
+   frames shot as each plays */
+static Uint32 vfall_probe_t = 0;
+static int vfall_probe_n = 0, vfall_probe_sub = 0, vfall_probe_shots = 0;
+
+static void
+vfall_probe_shot(const char *tag)
+{
+    const char *dir = getenv("VULTURE_SELFTEST");
+    char p[700];
+    SDL_Surface *o;
+    SDL_Rect a;
+    int hx, hy;
+
+    if (!dir || vfall_probe_shots >= 40 || !vulture_screen || vulture_screen->w < 960 || vulture_screen->h < 540)
+        return;
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    vsp_screen(u.ux, u.uy, &hx, &hy);
+    a.w = 480, a.h = 320, a.x = hx - 240, a.y = hy - 190;
+    a.x = a.x < 0 ? 0 : a.x + a.w > vulture_screen->w ? vulture_screen->w - a.w : a.x;
+    a.y = a.y < 0 ? 0 : a.y + a.h > vulture_screen->h ? vulture_screen->h - a.h : a.y;
+    if (!(o = SDL_CreateRGBSurfaceWithFormat(0, a.w, a.h, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return;
+    snprintf(p, sizeof p, "%s\\fall%02d_%s_%02d.bmp", dir, vfall_probe_n, tag, vfall_probe_shots++);
+    if (vulture_frame_to_surface(o, &a))
+        SDL_SaveBMP(o, p);
+    SDL_FreeSurface(o);
+}
+
+static void vprobe_push_key(SDL_Keycode k); /* probe: s145, further down */
+
+static void
+vfall_probe_tick(Uint32 now)
+{
+    static const int ddx[8] = { 1, 1, 0, -1, -1, -1, 0, 1 }, ddy[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+    static const double hold[5] = { 0.1, 0.3, 0.5, 0.7, 0.9 };
+    static int last = -1;
+    int step = vfall_probe_n, k;
+
+    if (vfall_probe_sub > 0) { /* held at set points once the blow or the step has played */
+        int s = vfall_probe_sub - 1;
+
+        if (now - vfall_probe_t < 450)
+            return;
+        if (s == 0)
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "fall probe: %d falling, %d rolling, you at %d,%d\n",
+                              (int) vdth_list.size(), (int) vbr_list.size(), u.ux, u.uy);
+        vfall_freeze = hold[s];
+        vfall_probe_shot(step < 2 ? "fall" : "roll");
+        if (++vfall_probe_sub > 5)
+            vfall_freeze = -1.0, vfall_probe_sub = 0, vfall_probe_n++, vfall_probe_t = now;
+        return;
+    }
+    if (now - vfall_probe_t < 900)
+        return;
+    u.uhp = u.uhpmax;
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "fall probe %d\n", step);
+    switch (step) {
+    case 0:
+    case 1: { /* a jackal killed: first to the screen's right (map NE), then its left (SW) */
+        struct monst *m = NULL;
+
+        for (k = 0; k < 8 && !m; k++) {
+            int d = ((step == 0 ? 7 : 3) + k) % 8, x = u.ux + ddx[d], y = u.uy + ddy[d];
+
+            if (!isok(x, y))
+                continue;
+            if ((m = m_at(x, y)) != 0 && (m->mtame || m->mpeaceful))
+                m = NULL;
+            else if (!m && ACCESSIBLE(levl[x][y].typ))
+                m = makemon(&mons[PM_JACKAL], x, y, NO_MM_FLAGS);
+        }
+        if (!m) {
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "fall probe: no jackal\n");
+            vfall_probe_n++, vfall_probe_t = now;
+            return;
+        }
+        m->mhpmax = 60, m->mhp = 1;
+        u.uhitinc = 20;     /* the probe's blow lands */
+        vfall_freeze = 0.0; /* held from the start; the shots move it on */
+        (void) do_attack(m);
+        break;
+    }
+    case 2:
+    case 3: { /* a boulder the most open way (then another way); you walk into it */
+        int best = -1;
+
+        for (k = 0; k < 8; k++) {
+            int x1 = u.ux + ddx[k], y1 = u.uy + ddy[k], x2 = u.ux + 2 * ddx[k], y2 = u.uy + 2 * ddy[k];
+
+            if (k == last || !isok(x2, y2) || !ACCESSIBLE(levl[x1][y1].typ) || !ACCESSIBLE(levl[x2][y2].typ)
+                || m_at(x1, y1) || m_at(x2, y2) || OBJ_AT(x1, y1) || OBJ_AT(x2, y2) || t_at(x1, y1)
+                || t_at(x2, y2) || IS_DOOR(levl[x1][y1].typ) || IS_DOOR(levl[x2][y2].typ))
+                continue;
+            best = k;
+            if (ddx[k] && ddy[k] == 0) /* across the screen first */
+                break;
+        }
+        if (best < 0) {
+            vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "fall probe: nowhere to push\n");
+            vfall_probe_n++, vfall_probe_t = now;
+            return;
+        }
+        last = best;
+        (void) mksobj_at(BOULDER, u.ux + ddx[best], u.uy + ddy[best], FALSE, FALSE);
+        newsym(u.ux + ddx[best], u.uy + ddy[best]);
+        flush_screen(1);
+        vfall_freeze = 0.1; /* held from the start; the shots move it on */
+        { /* your step - Vulture moves by the screen, so the key for that way */
+            int sx, sy;
+
+            vtw_proj(ddx[best], ddy[best], &sx, &sy);
+            vprobe_push_key(sx > 0 ? (sy > 0 ? SDLK_n : sy < 0 ? SDLK_u : SDLK_l)
+                            : sx < 0 ? (sy > 0 ? SDLK_b : sy < 0 ? SDLK_y : SDLK_h)
+                                     : (sy > 0 ? SDLK_j : SDLK_k));
+        }
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "fall probe: walking %d,%d into a boulder\n",
+                          ddx[best], ddy[best]);
+        vfall_probe_sub = 1, vfall_probe_t = SDL_GetTicks();
+        return;
+    }
+    default:
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "fall probe: done, %d shots\n", vfall_probe_shots);
+        vfall_probe_t = 0;
+        return;
+    }
+    flush_screen(1);
+    vulture_tween_run(); /* the queued death plays, as the next frame would */
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "fall probe: %d falling\n", (int) vdth_list.size());
+    vfall_probe_sub = 1, vfall_probe_t = SDL_GetTicks();
+}
+
 /* the overlay pass, after vfx_draw */
 static void
 vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
@@ -5662,7 +6248,8 @@ vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
             }
     if (vsp_on_count < 0)
         vsp_on_count = 0;
-    vdr_tick(now); /* s203 */
+    vdr_tick(now);   /* s203 */
+    vfall_tick(now); /* s204 */
     vsp_draw_waves(now);
     vsp_draw_parts(now, t, dt);
     vfl_draw(now);    /* s202 */
@@ -6141,6 +6728,8 @@ vulture_idle_bob(bool at_map)
         vimp_probe_tick(now);
     if (vdr_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s203 */
         vdr_probe_tick(now);
+    if (vfall_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s204 */
+        vfall_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -9384,6 +9973,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_FALL")) { /* probe: s204 bodies falling, boulders rolling */
+            vfall_probe_t = SDL_GetTicks(), vfall_probe_n = 0, vfall_probe_sub = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_ITEM")) { /* probe: s136 pulse + glint */
@@ -15276,11 +15869,13 @@ levelwin::draw()
                 vmagic_sprite(j, i, x, y, map_data->get_glyph(MAP_TRAP, j, i)); /* s154 */
 
                 /* 4. Objects (s83: falling while a drop plays) */
-                if (map_obj != V_TILE_NONE && vfx_shadows) { /* s158: grounded */
+                if (map_obj != V_TILE_NONE && vfx_shadows && vdth_object_alpha(j, i) >= 255) { /* s158: grounded */
                     vulture_tile *ot = vulture_get_tile(map_obj);
+                    int rox = 0, roy = 0;
 
+                    vbr_offset(j, i, &rox, &roy); /* s204: under a boulder rolling in */
                     if (ot && ot->graphic)
-                        vshadow(x, y + 2, ot->graphic->w * 3 / 4, 90);
+                        vshadow(x + rox, y + 2 + roy, ot->graphic->w * 3 / 4, 90);
                 }
                 vanim_draw_object(j, i, x, y, map_obj);
 
@@ -15363,8 +15958,8 @@ levelwin::draw()
                             vulture_get_tile(V_MISC_HILITE_PET)->graphic);
                 }
 
-                /* s78: a slain monster sinking and fading */
-                vanim_draw_death(j, i, x, y);
+                /* s78 / s204: a slain monster falling over */
+                vdth_draw(j, i, x, y);
 
                 /* 6. Effects (s198: a ray is drawn as light by vsp_draw; an explosion pops) */
                 vsp_put_special(x, y, j, i, map_data->get_glyph(MAP_SPECIAL, j, i));

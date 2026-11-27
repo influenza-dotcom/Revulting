@@ -133,8 +133,8 @@ extern int vulture_save_frame_bmp(const char *path);
  * that does the normal-mapped relief and the light layer (vulture_sdl.cpp) */
 extern bool vulture_gpulit_ok(void);
 extern bool vulture_gpumap_shadow(SDL_Surface *s, const float *quad, const Uint8 *a4); /* s191 */
-extern bool vulture_gpumap_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad, int shade,
-                                int alpha); /* s203 */
+extern bool vulture_gpumap_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad, int r, int g,
+                                int b, int alpha); /* s203, s204 */
 /* s192: the living fog for the next vulture_gpulit_frame: the fog grid (beside
    the light grid; fresh = rebuilt), 256x256 noise, mist[8] = the map's anchor
    x, y, time s, thickness, colour r, g, b (0..255), - */
@@ -143,6 +143,8 @@ extern void vulture_gpu_use_gl(bool on); /* OpenGL while lit, SDL's default othe
 extern void vulture_gpumap_normal(SDL_Surface *s, int x, int y);
 extern void vulture_gpumap_normal_ex(SDL_Surface *s, int dx, int dy, double sx, double sy,
                                      double deg, int alpha);
+extern void vulture_gpumap_normal_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad,
+                                       int alpha); /* s204 */
 /* s190: kw / sw per relief cell (x256), pl: npl point lights, 12 floats each,
    rk: the relief's constants (levelwin.cpp's vl_rk), ixm / iym: 1 / V_MAP_XMOD,
    1 / V_MAP_YMOD */
