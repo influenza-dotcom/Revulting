@@ -7362,6 +7362,12 @@ vlid_probe_tick(Uint32 now)
  *    the wall it stands in (vhole_put, which vwall_draw now shares).
  */
 static bool vrock_on = true; /* s215: the solid rock mass (vrock_*) */
+/* s219: how the rock is drawn - 0 stone tops, low with high behind walls
+   (s218), 1 the same dark, 2 walls only (no band: the void, its dust and
+   the floors' slab faces), 3 one ceiling - all rock at wall height, flush
+   with the walls, 4 one ceiling, see-through where it would hide ground
+   you know */
+static int vrock_style = 4;
 
 struct vxr_face_t {
     float x0, y0, k; /* its foot: y = y0 + k (X - x0), X in [x0, x0 + 56] */
@@ -7583,7 +7589,7 @@ vvoid_draw(mapdata *md, double t)
 
     if (!md || !vfx_ambient || !u.ux || u.uswallow || Underwater || !vulture_screen)
         return;
-    if (vrock_on) /* s215: the dark is rock now, not a void */
+    if (vrock_on && vrock_style != 2) /* s215: the dark is rock now, not a void (s219: unless walls only) */
         return;
     W = vulture_screen->w + 240, H = vulture_screen->h + 240;
     vsp_screen(0, 0, &ox, &oy); /* where the map lies: the dust follows it, slower */
@@ -8608,6 +8614,14 @@ vdecal_draw(int j, int i, int x, int y, int style, bool rug, bool furniture)
  *    room's unseen floor is not rock.
  *  - Rock faces are dark like walls' outsides: toward rock, dark; toward
  *    open ground, as lit as it is (the s212 rule).
+ * IMPLEMENTATION_LOG s219: one ceiling.  The user: "the walls are drawn
+ * above the ceiling" - low rock with walls standing over it read wrong, and
+ * mixed heights read as broken.  Style 4 (the default): every block of the
+ * band at the walls' height, flush; rock that would hide ground you know
+ * (open ground's reach, which walls stop) is see-through - its top alone,
+ * faint, no faces.  Tops light themselves (a marker normal; vgl_fs leaves
+ * them out of the screen-space light grid, which lit them with the floor
+ * behind them on screen), shaded by their own square's light.
  */
 #define VROCK_D 3
 #define VROCK_LOW 18
@@ -8652,10 +8666,10 @@ vrock_wall_h(void) /* the walls' height now: their art's */
 }
 
 static SDL_Surface *
-vrock_cap(int var, bool normal) /* a block's top: the square's diamond, 112 x 44; or its normal map */
+vrock_cap(int var, bool normal, bool dark = false) /* a block's top: the square's diamond, 112 x 44; or its normal map */
 {
-    static SDL_Surface *c[3] = { NULL, NULL, NULL }, *n = NULL;
-    SDL_Surface **slot = normal ? &n : &c[var % 3], *s;
+    static SDL_Surface *c[2][3] = { { NULL, NULL, NULL }, { NULL, NULL, NULL } }, *n = NULL;
+    SDL_Surface **slot = normal ? &n : &c[dark ? 1 : 0][var % 3], *s;
     const int W = 2 * V_MAP_XMOD, H = 2 * V_MAP_YMOD;
     int x, y;
 
@@ -8672,12 +8686,13 @@ vrock_cap(int var, bool normal) /* a block's top: the square's diamond, 112 x 44
 
             if (a > 0.0) {
                 if (normal) {
-                    px = 0x008080FFu; /* straight up: no relief */
+                    px = 0x00808000u; /* s219: the marker - a top lights itself (vgl_fs) */
                 } else {
                     /* low-contrast grain, no rims (rims drew a grid of
                        tiles): the tops run together into one surface */
                     double nz = vsp_hash(x, y, 31 + var * 7), nb = vsp_hash(x / 4, y / 2, 57 + var);
-                    int v = 40 + (int) (nz * 9.0 + nb * 7.0) - (nb < 0.07 ? 10 : 0);
+                    int v = (dark ? 13 : 40) + (int) (nz * (dark ? 6.0 : 9.0) + nb * (dark ? 5.0 : 7.0))
+                            - (nb < 0.07 ? (dark ? 5 : 10) : 0); /* s219: dark rock */
 
                     v = v < 0 ? 0 : v > 255 ? 255 : v;
                     px = (Uint32) (v + 5) << 16 | (Uint32) (v + 2) << 8 | (Uint32) v;
@@ -8705,6 +8720,15 @@ vrock_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
     memset(vrock_reach, 0, sizeof vrock_reach);
     if (!vrock_on || !md)
         return;
+    {
+        static bool envd = false;
+
+        if (!envd) { /* probe / testing: VULTURE_ROCK_STYLE=n */
+            envd = true;
+            if (getenv("VULTURE_ROCK_STYLE"))
+                vrock_style = atoi(getenv("VULTURE_ROCK_STYLE"));
+        }
+    }
     for (y = 0; y < ROWNO; y++)
         for (x = 0; x < COLNO; x++)
             kind[y][x] = (unsigned char) (x >= 1 ? vrock_kind(md, x, y) : 0);
@@ -8742,7 +8766,7 @@ vrock_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
                 vrock_d[y][x] = -1; /* beside room ground you know: maybe floor, never rock */
                 continue;
             }
-            if (seed) {
+            if (seed && vrock_style != 2) { /* s219: walls only - no band */
                 vrock_d[y][x] = 1;
                 q[qt][0] = (short) x, q[qt][1] = (short) y, qt++;
             }
@@ -8795,7 +8819,7 @@ vrock_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
                     r = vrock_reach[ni][nj] - bk[k][2];
             }
             vrock_reach[i][j] = (signed char) (r >= 1 ? r : 0);
-            vrock_hh[i][j] = VROCK_LOW;
+            vrock_hh[i][j] = vrock_style >= 3 ? (unsigned char) hw : VROCK_LOW; /* s219: one ceiling */
         }
     /* front to back: rock behind a wall (or behind rock that rose) rises to
        the walls' height - unless open ground behind it would be hidden */
@@ -8849,19 +8873,51 @@ vrock_lip(int e)
     return l[e];
 }
 
+/* s219: a top's soft edge toward side e (0 screen up-left, 1 up-right, 2
+   down-right, 3 down-left): black, nothing at the far side, deep at that
+   edge - where the rock you know ends, it fades into the dark */
+static SDL_Surface *
+vrock_edge(int e)
+{
+    static SDL_Surface *s[4] = { NULL, NULL, NULL, NULL };
+    static const int su[4] = { -1, 1, 1, -1 }, sv[4] = { -1, -1, 1, 1 };
+    const int W = 2 * V_MAP_XMOD, H = 2 * V_MAP_YMOD;
+    int x, y;
+
+    if (s[e])
+        return s[e];
+    if (!(s[e] = SDL_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_ARGB8888)))
+        return NULL;
+    SDL_LockSurface(s[e]);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            double u = (x + 0.5 - W / 2.0) / (W / 2.0), v = (y + 0.5 - H / 2.0) / (H / 2.0);
+            double p = (su[e] * u + sv[e] * v + 1.0) / 2.0, a = 0.0;
+
+            if (fabs(u) + fabs(v) <= 1.03 && p > 0.0)
+                a = 235.0 * pow(p > 1.0 ? 1.0 : p, 1.4);
+            ((Uint32 *) ((Uint8 *) s[e]->pixels + (size_t) y * s[e]->pitch))[x] = (Uint32) (a + 0.5) << 24;
+        }
+    SDL_UnlockSurface(s[e]);
+    SDL_SetSurfaceBlendMode(s[e], SDL_BLENDMODE_BLEND);
+    return s[e];
+}
+
 /* a block's top at height h over the square drawn at (x, y), shaded sh
    (255 full), see-through round you by f; it occludes for the outlines.
    lips: bit 0 its up-left edge, bit 1 its up-right edge drop away */
 static void
-vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0)
+vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool dark = false, int ghost = 0,
+              int edges = 0)
 {
-    SDL_Surface *c = vrock_cap(var, false), *nm = vrock_cap(0, true);
+    SDL_Surface *c = vrock_cap(var, false, dark), *nm = ghost ? NULL : vrock_cap(0, true);
     int cx0 = x - V_MAP_XMOD, cy0 = y - V_MAP_YMOD - h, amin = 255;
     vxr_face_t fc;
 
     if (!c)
         return;
     SDL_SetSurfaceColorMod(c, (Uint8) sh, (Uint8) sh, (Uint8) sh);
+    SDL_SetSurfaceAlphaMod(c, (Uint8) (ghost ? ghost : 255)); /* s219: see-through */
     if (f > 0.0f && vwall_hole_on && vwall_amin < 250 && vulture_gpumap_on) {
         float hx = (float) vwall_hx, hy = (float) (vwall_hy - VWALL_BODY);
         float qx = hx < cx0 ? cx0 : hx > cx0 + c->w ? cx0 + c->w : hx;
@@ -8884,18 +8940,34 @@ vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0)
             vulture_gpumap_normal(nm, cx0, cy0);
     }
     SDL_SetSurfaceColorMod(c, 255, 255, 255);
+    SDL_SetSurfaceAlphaMod(c, 255);
+    for (int e = 0; e < 4; e++) { /* s219: the soft edges, into the dark */
+        SDL_Surface *es = (edges >> e) & 1 ? vrock_edge(e) : NULL;
+
+        if (!es)
+            continue;
+        SDL_SetSurfaceAlphaMod(es, (Uint8) (ghost ? ghost : 255));
+        if (amin < 255)
+            vulture_gpumap_holed(es, cx0, cy0, (float) vwall_hx, (float) (vwall_hy - VWALL_BODY), VWALL_R0,
+                                 VWALL_R1, amin);
+        else
+            vulture_put_img(cx0, cy0, es);
+        SDL_SetSurfaceAlphaMod(es, 255);
+    }
     for (int e = 0; e < 2; e++) { /* the lips */
         SDL_Surface *ls = (lips >> e) & 1 ? vrock_lip(e) : NULL;
 
         if (!ls)
             continue;
         SDL_SetSurfaceColorMod(ls, (Uint8) sh, (Uint8) sh, (Uint8) sh);
+        SDL_SetSurfaceAlphaMod(ls, (Uint8) (ghost ? ghost : 255));
         if (amin < 255)
             vulture_gpumap_holed(ls, cx0, cy0, (float) vwall_hx, (float) (vwall_hy - VWALL_BODY), VWALL_R0,
                                  VWALL_R1, amin);
         else
             vulture_put_img(cx0, cy0, ls);
         SDL_SetSurfaceColorMod(ls, 255, 255, 255);
+        SDL_SetSurfaceAlphaMod(ls, 255);
     }
     fc.x0 = (float) x, fc.y0 = (float) (y - h), fc.k = 0.0f, fc.h = 0;
     fc.seq = ++vxr_seq, fc.amin = amin, fc.cap = true;
@@ -9008,13 +9080,26 @@ vrock_wall_face(struct walls (*mw)[COLNO], int j, int i, int side)
                 : (full ? walls_full[st].south : walls_half[st].south);
 }
 
+/* s219: is the block at (j, i) see-through (style 4: band rock open
+   ground behind would be hidden by) - to its neighbours it is not there */
+static bool
+vrock_ghost_at(mapdata *md, int j, int i)
+{
+    int d;
+
+    if (vrock_style != 4 || !isok(j, i) || !vrock_hh[i][j] || md->get_glyph(MAP_BACK, j, i) == V_TILE_WALL_GENERIC)
+        return false;
+    d = vrock_d[i][j];
+    return d >= 1 && d <= VROCK_D && vrock_reach[i][j] >= 1;
+}
+
 /* end of a square in the second pass: its block - faces toward what lies
    lower in front, and its top */
 static void
 vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int ei, struct walls (*mw)[COLNO])
 {
-    static const int fadeby[VROCK_D + 1] = { 255, 255, 150, 70 };
-    int h, b, sh, side, hw, dd;
+    static const int fadeby[VROCK_D + 1] = { 255, 255, 255, 255 }; /* s219: one shade - soft edges instead */
+    int h, b, sh, side, hw, dd, ghost;
 
     if (!vrock_on || !md || !isok(j, i) || !(h = vrock_hh[i][j]))
         return;
@@ -9022,16 +9107,23 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
     hw = vrock_wall_h();
     dd = vrock_d[i][j] < 0 ? 0 : vrock_d[i][j] > VROCK_D ? VROCK_D : vrock_d[i][j];
     sh = b == V_TILE_WALL_GENERIC ? 255 : fadeby[dd];
+    ghost = vrock_style == 4 && b != V_TILE_WALL_GENERIC && vrock_reach[i][j] >= 1 ? 80 : 0; /* s219 */
     for (side = 0; side < 2; side++) { /* screen-south (side 2), screen-east (side 3) */
         int nj = side ? ej : sj, ni = side ? ei : si, nb, nh, face, dim;
         bool out = !isok(nj, ni);
 
         nb = out ? V_MISC_UNMAPPED_AREA : md->get_glyph(MAP_BACK, nj, ni);
         nh = out ? 0 : vrock_hh[ni][nj];
+        if (!out && vrock_ghost_at(md, nj, ni)) /* s219: see-through in front - this face shows */
+            nh = 0;
         dim = vrock_face_dim(nj, ni, nb);
-        face = side ? walls_full[V_WALL_ROUGH].east : walls_full[V_WALL_ROUGH].south;
-        if (vulture_opts.wall_style != V_WALL_DISPLAY_STYLE_FULL)
-            face = side ? walls_half[V_WALL_ROUGH].east : walls_half[V_WALL_ROUGH].south;
+        {
+            int rs = vrock_style == 1 || vrock_style == 4 ? V_WALL_DARK : V_WALL_ROUGH; /* s219: dark rock */
+
+            face = side ? walls_full[rs].east : walls_full[rs].south;
+            if (vulture_opts.wall_style != V_WALL_DISPLAY_STYLE_FULL)
+                face = side ? walls_half[rs].east : walls_half[rs].south;
+        }
         if (b == V_TILE_WALL_GENERIC) {
             /* a wall: its faces toward open ground come from get_wall_tiles;
                s218: toward anything lower that is not open ground (the low
@@ -9044,22 +9136,28 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
             }
             continue;
         }
-        if (vrock_open(nb) || (nh > 0 && nh < h)) {
+        if (ghost) /* s219: see-through rock has no faces - only its top, faint */
+            continue;
+        if (vrock_open(nb) || (nh < h && (nh > 0 || (!out && vrock_ghost_at(md, nj, ni))))) {
             if (h >= hw) {
                 vulture_tile *ft = vulture_get_tile(face);
 
                 if (ft && ft->graphic && sh < 255) /* darker with the band */
                     SDL_SetSurfaceColorMod(ft->graphic, (Uint8) sh, (Uint8) sh, (Uint8) sh);
-                vwall_draw(x, y, face, side ? 3 : 2, 0, -1, -1, dim);
+                if (ft && ft->graphic && ghost) /* s219: see-through */
+                    SDL_SetSurfaceAlphaMod(ft->graphic, (Uint8) ghost);
+                vwall_draw(x, y, face, side ? 3 : 2, 0, -1, -1, ghost ? 0 : dim);
                 if (ft && ft->graphic && sh < 255)
                     SDL_SetSurfaceColorMod(ft->graphic, 255, 255, 255);
+                if (ft && ft->graphic && ghost)
+                    SDL_SetSurfaceAlphaMod(ft->graphic, 255);
             } else {
                 vrock_low_face(x, y, face, h, sh, dim);
             }
         }
     }
     { /* the lips: where what lies behind is lower - the room, the corridor, a shelf */
-        int lips = 0, e;
+        int lips = 0, e, edges = 0;
 
         for (e = 0; e < 2; e++) {
             int oj, oi, nj, ni;
@@ -9070,8 +9168,34 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
                 lips |= 1 << e;
             else if (isok(nj, ni) && vrock_hh[ni][nj] > 0 && vrock_hh[ni][nj] < h)
                 lips |= 1 << e;
+            else if (!ghost && vrock_ghost_at(md, nj, ni)) /* s219: the solid ceiling's edge */
+                lips |= 1 << e;
         }
-        vrock_cap_put(x, y, h, sh, (j * 7 + i * 3) % 3, (float) (y - vwall_hy) / 22.0f, lips);
+        { /* s219: its own light - rock in the dark, a lit room's wall bright */
+            float lo = vl_light_at(j, i) / 0.7f;
+
+            lo = lo > 1.0f ? 1.0f : lo < 0.0f ? 0.0f : lo;
+            sh = (int) (sh * (0.55f + 0.45f * lo));
+        }
+        { /* s219: the soft edges - toward rock you do not know (or the map's edge) */
+            static const int ev[4][2] = { { -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 } };
+
+            for (e = 0; e < 4; e++) {
+                int oj, oi, nj, ni, nb;
+
+                v_rot(ev[e][0], ev[e][1], vulture_view_rot, &oj, &oi);
+                nj = j + oj, ni = i + oi;
+                if (!isok(nj, ni)) {
+                    edges |= 1 << e;
+                    continue;
+                }
+                nb = md->get_glyph(MAP_BACK, nj, ni);
+                if ((nb == V_MISC_UNMAPPED_AREA || nb == V_TILE_NONE) && !vrock_hh[ni][nj])
+                    edges |= 1 << e;
+            }
+        }
+        vrock_cap_put(x, y, h, sh, (j * 7 + i * 3) % 3, (float) (y - vwall_hy) / 22.0f, lips,
+                      vrock_style == 1 && b != V_TILE_WALL_GENERIC, ghost, edges); /* s219: dark / see-through */
     }
 }
 
@@ -9271,12 +9395,20 @@ static void
 vrock_probe_shot(const char *name)
 {
     char p[700];
+    int keep = vrock_style, s;
 
     levwin->set_view(u.ux, u.uy);
+    for (s = 0; s < 4; s++) { /* s219: each style, the same frame */
+        static const int sv[4] = { 3, 4, 2, 0 };
+
+        vrock_style = sv[s];
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "%s_s%d.bmp", getenv("VULTURE_SELFTEST"), name, sv[s]);
+        vulture_save_frame_bmp(p);
+    }
+    vrock_style = keep;
     levwin->force_redraw();
-    ROOTWIN->draw_windows();
-    snprintf(p, sizeof p, "%s" "\\" "%s.bmp", getenv("VULTURE_SELFTEST"), name);
-    vulture_save_frame_bmp(p);
     vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rock probe: %s at %d,%d\n", name, u.ux, u.uy);
 }
 

@@ -4807,6 +4807,37 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Cost: none measurable (idle frame median 19 vs 18 ms on a mapped level,
   hidden window; the band is a BFS over 1680 squares).
 
+### 219. One ceiling (walls flush with the rock; see-through over what you know)
+
+- The user played 218 and sent shots: "the walls are drawn above the
+  ceiling" (low rock with full-height walls standing over it) and a corridor
+  of mixed heights ("idk what's going on here").  Both 215 (full height, low
+  shelves cut out) and 218 (low, high behind walls) mixed heights; mixed
+  heights read as broken.  Shown four renders of the same views (probe
+  VULTURE_SELFTEST_ROCK now saves each style per shot: _s3 one ceiling solid,
+  _s4 one ceiling see-through, _s2 walls only, _s0 = 218), the user said to
+  pick the best: style 4.
+- vrock_style (env VULTURE_ROCK_STYLE): 0 the 218 rock, 1 the same dark, 2
+  walls only (no band; the void and its dust back), 3 one ceiling solid, 4 one
+  ceiling see-through (the default).
+- Style 4: every block of the band at the walls' height, flush with them.
+  Rock that would hide ground you know (open ground's reach, which walls
+  stop) is see-through: its top alone at alpha 80, no faces.  To its
+  neighbours a see-through block is not there: a wall behind it shows its
+  outside, solid rock behind it its face, and the solid ceiling gets a lip
+  along it.  Rock faces use the DARK wall art.
+- The GPU light grid is screen-space - each 8 px cell lit by the FLOOR under
+  it on screen - so a top drawn 75 px up took the light of the floor behind
+  it and read as floor.  Tops now record a marker normal (0.5, 0.5, 0):
+  vgl_fs skips the relief and the light grid for those pixels (the mist
+  still applies), and the top is shaded by its own square's light
+  (0.55 + 0.45 x light / VL_LIT: rock dark, a lit room's wall bright).
+- Self-lit, the band's stepped fade (255/150/70 by depth) showed as a
+  patchwork: one shade for the whole band now, and soft edges - a black
+  ramp on a top toward each side where the rock you know ends (vrock_edge).
+- Map pass time unchanged (tiles median 2-3 ms in both builds; tweens 8-10
+  frames per ~130 ms in both).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
