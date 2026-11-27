@@ -4850,6 +4850,27 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   wall you saw from its room (never beside a doorway, where its corridor
   starts).  It goes deeper only through seen rock.  The unknown stays dark.
 
+### 221. Last seen
+
+- The user: pets and monsters keep blinking in and out of the fog of war,
+  and (in "real-time until combat") a hostile stepping out of view ended
+  the fight, so the clock passed turns again and it walked back in and hit
+  you - over and over.
+- A creature you lose sight of stays where you last saw it: its sprite,
+  settling from solid to faint over 350 ms, then fading turn by turn (20
+  turns, a pet 40), lit like that square; behind a wall, a dim outline in
+  its colour (vxr).  It never follows the creature.  It goes when you see
+  that creature again, stand next to the spot and see it empty, something
+  else is seen there, it fades out, or you change level; a creature that
+  dies or leaves while you watch leaves none; none while hallucinating
+  (vghost_*; VULTURE_NO_GHOSTS turns it off).
+- vrt_combat / the pill: a hostile seen within the last 6 turns, within 12
+  squares, keeps the fight on - real time stays paused until you have acted
+  6 turns without seeing it.
+- Probe VULTURE_SELFTEST_GHOST: the creatures in sight moved 2-5 squares
+  off, then out of sight (rloc_to) - ghosts and "fight 1" - then 10 turns on
+  (fainter, "fight 0").
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

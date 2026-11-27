@@ -9396,6 +9396,257 @@ vstair_probe_tick(Uint32 now)
     }
 }
 
+/*
+ * IMPLEMENTATION_LOG s221: last seen.  The user: pets and monsters "run back
+ * and forth into fog of war" and blink out; and in "real-time until combat"
+ * a hostile stepping out of view ended the fight, so a moment later the
+ * clock passed turns again and it walked back in and hit you.
+ *  - A creature you lose sight of stays where you last saw it: its sprite,
+ *    faded, fading further turn by turn (VGHOST_TURNS; a pet longer), lit
+ *    as that square is.  Behind a wall it gets a dim outline (vxr).
+ *  - Only what you saw: it never moves with the creature.  It goes when you
+ *    see that creature again, stand next to the spot and see it empty,
+ *    something else is seen there, it fades out, or you change level.  A
+ *    creature that dies (or leaves) while you watch leaves none.  None while
+ *    hallucinating.
+ *  - A hostile seen in the last VGHOST_FIGHT turns, within 12, keeps the
+ *    fight on (vrt_combat): real time stays paused until you act and it has
+ *    stayed out of sight that long.
+ */
+#define VGHOST_TURNS 20
+#define VGHOST_PET_TURNS 40
+#define VGHOST_FIGHT 6
+struct vghost_t {
+    unsigned id;    /* the creature (m_id) */
+    int tile, face; /* how it was drawn */
+    int x, y;       /* where you last saw it */
+    long moves;     /* when (turns) */
+    Uint32 t_lost;  /* when it went out of sight (0 while seen) */
+    Uint8 rel;      /* 0 hostile, 1 peaceful, 2 pet */
+    bool seen;      /* seen this frame */
+};
+static std::vector<vghost_t> vghost_list;
+static long vghost_level = -1;
+
+static bool
+vghost_alive(unsigned id)
+{
+    struct monst *m;
+
+    for (m = fmon; m; m = m->nmon)
+        if (m->m_id == id && !DEADMONSTER(m))
+            return true;
+    return false;
+}
+
+/* once a frame, before the map pass: who you see, who you lost */
+static void
+vghost_update(mapdata *md)
+{
+    long lev = u.ux ? (long) ledger_no(&u.uz) : -1;
+    Uint32 now = SDL_GetTicks();
+    struct monst *m;
+    size_t k;
+
+    if (lev != vghost_level || !md || !u.ux || Hallucination || getenv("VULTURE_NO_GHOSTS")) {
+        vghost_list.clear();
+        vghost_level = lev;
+        return;
+    }
+    for (k = 0; k < vghost_list.size(); k++)
+        vghost_list[k].seen = false;
+    for (m = fmon; m; m = m->nmon) {
+        int t;
+
+        if (DEADMONSTER(m) || m == u.usteed || !isok(m->mx, m->my) || !canspotmon(m)
+            || !glyph_is_monster(glyph_at(m->mx, m->my)))
+            continue;
+        t = md->get_glyph(MAP_MON, m->mx, m->my);
+        if (t < 0 || t == V_TILE_NONE)
+            continue;
+        for (k = 0; k < vghost_list.size() && vghost_list[k].id != m->m_id; k++)
+            ;
+        if (k == vghost_list.size()) {
+            vghost_t g;
+
+            memset(&g, 0, sizeof g);
+            g.id = m->m_id;
+            vghost_list.push_back(g);
+        }
+        vghost_list[k].tile = t, vghost_list[k].face = vtw_face[m->my][m->mx];
+        vghost_list[k].x = m->mx, vghost_list[k].y = m->my, vghost_list[k].moves = svm.moves;
+        vghost_list[k].t_lost = 0, vghost_list[k].seen = true;
+        vghost_list[k].rel = (Uint8) (m->mtame ? 2 : m->mpeaceful ? 1 : 0);
+    }
+    for (k = 0; k < vghost_list.size();) {
+        vghost_t &g = vghost_list[k];
+        bool drop = false;
+
+        if (!g.seen) {
+            if (!g.t_lost) { /* gone this frame: died or left before your eyes, or out of sight */
+                if (!vghost_alive(g.id))
+                    drop = true;
+                else
+                    g.t_lost = now ? now : 1;
+            }
+            if (svm.moves - g.moves > (g.rel == 2 ? VGHOST_PET_TURNS : VGHOST_TURNS))
+                drop = true; /* faded out */
+            else if (distmin(u.ux, u.uy, g.x, g.y) <= 1 && cansee(g.x, g.y))
+                drop = true; /* you are right there: it is not */
+            else if (md->get_glyph(MAP_MON, g.x, g.y) != V_TILE_NONE)
+                drop = true; /* something else is seen there now */
+        }
+        if (drop)
+            vghost_list.erase(vghost_list.begin() + (long) k);
+        else
+            k++;
+    }
+}
+
+/* the map pass, a square with no creature seen on it: one you saw here */
+static void
+vghost_draw(int j, int i, int x, int y)
+{
+    Uint32 now = SDL_GetTicks();
+    size_t k;
+
+    for (k = 0; k < vghost_list.size(); k++) {
+        const vghost_t &g = vghost_list[k];
+        double age, life, a;
+        vxr_mon_t mr;
+
+        if (g.seen || g.x != j || g.y != i)
+            continue;
+        life = g.rel == 2 ? VGHOST_PET_TURNS : VGHOST_TURNS;
+        age = (double) (svm.moves - g.moves) / life;
+        a = 150.0 * pow(1.0 - (age > 1.0 ? 1.0 : age < 0.0 ? 0.0 : age), 0.7);
+        if (g.t_lost && now - g.t_lost < 350) /* it was just here, solid: settle into a ghost */
+            a = 255.0 + (a - 255.0) * (now - g.t_lost) / 350.0;
+        if (a < 6.0)
+            continue;
+        vtw_put_tile_x(x, y, g.tile, g.face, 1.0, 1.0, 0.0, false, (int) a);
+        mr.tile = g.tile, mr.face = g.face, mr.tx = x, mr.ty = y, mr.seq = ++vxr_seq; /* behind a wall: outlined */
+        mr.xs = mr.ys = 1.0, mr.deg = 0.0;
+        if (g.rel == 2)
+            mr.r = 80, mr.g = 160, mr.b = 80;
+        else if (g.rel == 1)
+            mr.r = 165, mr.g = 145, mr.b = 65;
+        else
+            mr.r = 170, mr.g = 60, mr.b = 45;
+        vxr_mons.push_back(mr);
+        return;
+    }
+}
+
+/* s221: a hostile you saw lately, near: the fight is not over */
+static bool
+vghost_fight(void)
+{
+    size_t k;
+
+    for (k = 0; k < vghost_list.size(); k++) {
+        const vghost_t &g = vghost_list[k];
+
+        if (!g.seen && g.rel == 0 && svm.moves - g.moves <= VGHOST_FIGHT
+            && distmin(u.ux, u.uy, g.x, g.y) <= 12)
+            return true;
+    }
+    return false;
+}
+
+/* probe: s221 - VULTURE_SELFTEST_GHOST: a jackal by you and your pet in
+   sight, then both moved where you cannot see - their ghosts; then ten
+   turns on, fainter */
+static Uint32 vghost_probe_t = 0;
+static int vghost_probe_n = 0;
+
+static void
+vghost_probe_shot(const char *name)
+{
+    char p[700];
+
+    levwin->set_view(u.ux, u.uy);
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    snprintf(p, sizeof p, "%s" "\\" "%s.bmp", getenv("VULTURE_SELFTEST"), name);
+    vulture_save_frame_bmp(p);
+}
+
+static void
+vghost_probe_tick(Uint32 now)
+{
+    if (now - vghost_probe_t < 900)
+        return;
+    vghost_probe_t = now;
+    switch (vghost_probe_n++) {
+    case 0: {
+        coord cc;
+        struct monst *jm;
+
+        int x, y, n = 0;
+        struct monst *pm;
+
+        /* every creature in sight moved 2-5 squares off, as far up the
+           screen as can be (no wall in front hides it) */
+        (void) jm, (void) cc;
+        for (pm = fmon; pm; pm = pm->nmon) {
+            int bx = -1, by = -1, bs = 9999;
+
+            if (DEADMONSTER(pm) || !canspotmon(pm))
+                continue;
+            for (y = 0; y < ROWNO; y++)
+                for (x = 1; x < COLNO; x++) {
+                    int dd = distmin(u.ux, u.uy, x, y);
+
+                    if (dd >= 2 && dd <= 5 && cansee(x, y) && ACCESSIBLE(levl[x][y].typ) && !m_at(x, y)
+                        && !u_at(x, y) && x + y + 3 * n < bs && goodpos(x, y, pm, 0))
+                        bs = x + y + 3 * n, bx = x, by = y;
+                }
+            if (bx >= 0) {
+                rloc_to(pm, bx, by);
+                n++;
+            }
+        }
+        flush_screen(1);
+        vghost_probe_shot("ghost_a_seen");
+        break;
+    }
+    case 1: {
+        struct monst *pm;
+        int moved = 0;
+
+        for (pm = fmon; pm; pm = pm->nmon) {
+            int x, y, done = 0;
+
+            if (DEADMONSTER(pm) || !canspotmon(pm))
+                continue;
+            for (x = 1; x < COLNO && !done; x++)
+                for (y = 0; y < ROWNO && !done; y++)
+                    if (distmin(u.ux, u.uy, x, y) > 8 && !cansee(x, y) && ACCESSIBLE(levl[x][y].typ)
+                        && !m_at(x, y) && goodpos(x, y, pm, 0)) {
+                        rloc_to(pm, x, y);
+                        done = 1, moved++;
+                    }
+        }
+        vision_recalc(0);
+        flush_screen(1);
+        vghost_probe_shot("ghost_b_lost");
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "ghost probe: moved %d out of sight, %d ghosts, fight %d\n",
+                          moved, (int) vghost_list.size(), vghost_fight() ? 1 : 0);
+        break;
+    }
+    case 2:
+        svm.moves += 10;
+        vghost_probe_shot("ghost_c_later");
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "ghost probe: 10 turns on, %d ghosts, fight %d\n",
+                          (int) vghost_list.size(), vghost_fight() ? 1 : 0);
+        break;
+    default:
+        vghost_probe_t = 0;
+        break;
+    }
+}
+
 /* probe: s218 - VULTURE_SELFTEST_ROCK: the rock mass where you play - the
    start room, its nearest door, a corridor walked, the level mapped, back
    in the room; VULTURE_ROCK_DARK=1: the level unlit and forgotten, then a
@@ -10124,6 +10375,8 @@ vulture_idle_bob(bool at_map)
         vstair_probe_tick(now);
     if (vrock_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s218 */
         vrock_probe_tick(now);
+    if (vghost_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s221 */
+        vghost_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -13370,6 +13623,10 @@ vselftest(void)
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
             break;
         }
+        if (getenv("VULTURE_SELFTEST_GHOST")) { /* probe: s221 last seen */
+            vghost_probe_t = SDL_GetTicks(), vghost_probe_n = 0;
+            break;
+        }
         if (getenv("VULTURE_SELFTEST_ROCK")) { /* probe: s218 the rock mass where you play */
             vrock_probe_t = SDL_GetTicks(), vrock_probe_n = 0;
             break;
@@ -16015,6 +16272,8 @@ vrt_combat(void)
             && !m->msleeping && m->mcanmove && couldsee(m->mx, m->my)
             && distmin(u.ux, u.uy, m->mx, m->my) <= 12)
             fight = true;
+    if (!fight && vghost_fight()) /* s221: one stepped out of sight - still a fight */
+        fight = true;
     if (fight)
         vrt_combat_until = now + VRT_RESUME_MS;
     return fight || now < vrt_combat_until;
@@ -16094,6 +16353,8 @@ vrt_draw(void)
                     && !mm->msleeping && mm->mcanmove && couldsee(mm->mx, mm->my)
                     && distmin(u.ux, u.uy, mm->mx, mm->my) <= 12)
                     fight = true;
+            if (!fight && vghost_fight()) /* s221 */
+                fight = true;
         }
     }
     if (m == 0)
@@ -19277,6 +19538,7 @@ levelwin::draw()
     vxr_faces.clear(), vxr_mons.clear(), vxr_seq = 0; /* s210 */
     vtorch_list.clear(); /* s211 */
     vrock_prepare(map_data, view_x, view_y, map_tr_y, diff, sum); /* s215: the rock mass */
+    vghost_update(map_data); /* s221: who you see, who you lost */
     vwall_hole_on = u.ux && !u.uswallow && !vwall_probe_off; /* s209: the walls in front of you see-through round you */
     if (vwall_hole_on) {
         double o = vulture_opts.wall_opacity;
@@ -19479,6 +19741,8 @@ levelwin::draw()
                         vulture_put_img(
                             tx + cur_tile->xmod, ty + cur_tile->ymod - 10,
                             vulture_get_tile(V_MISC_HILITE_PET)->graphic);
+                } else if (!vghost_list.empty()) {
+                    vghost_draw(j, i, x, y); /* s221: last seen here */
                 }
 
                 /* s78 / s204: a slain monster falling over */
