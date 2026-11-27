@@ -146,6 +146,7 @@ extern void vulture_gpumap_normal_ex(SDL_Surface *s, int dx, int dy, double sx, 
                                      double deg, int alpha);
 extern void vulture_gpumap_normal_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad,
                                        int alpha); /* s204 */
+extern void vulture_gpumap_set_grade(int r, int g, int b); /* s212: the area's colour grade */
 /* s209: see-through round (cx, cy): alpha amin within r0, solid past r1 */
 extern void vulture_gpumap_holed(SDL_Surface *s, int x, int y, float cx, float cy, float r0, float r1,
                                  int amin);

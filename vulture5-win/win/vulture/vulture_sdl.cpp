@@ -460,6 +460,9 @@ static float vgm_vpx = 0.0f, vgm_vpy = 0.0f;
 static SDL_Texture *vgm_dof_t[3] = { NULL, NULL, NULL }; /* s205: the map halved, quartered, eighthed */
 static int vgm_dof_w = 0, vgm_dof_h = 0;
 static int vgm_focus_y = -1; /* s205: where the camera focuses (you), 1x map space; < 0: the middle */
+static SDL_Texture *vgm_bl_t[4] = { NULL, NULL, NULL, NULL }; /* s212: bloom - the map halved .. /16 */
+static int vgm_bl_w = 0, vgm_bl_h = 0;
+static Uint8 vgm_grade[3] = { 255, 255, 255 }; /* s212: the area's colour grade (a multiply) */
 extern SDL_Surface *vulture_load_surface(char *srcbuf, unsigned int buflen); /* vulture_gfl.h */
 
 /*
@@ -735,6 +738,12 @@ static void vgm_drop(bool destroy)
 			vgm_dof_t[k] = NULL;
 		}
 		vgm_dof_w = vgm_dof_h = 0;
+		for (k = 0; k < 4; k++) { /* s212: the bloom steps */
+			if (destroy && vgm_bl_t[k])
+				SDL_DestroyTexture(vgm_bl_t[k]);
+			vgm_bl_t[k] = NULL;
+		}
+		vgm_bl_w = vgm_bl_h = 0;
 	}
 	vgm_valid = false;
 	vgm_blend = -1;
@@ -1386,6 +1395,112 @@ static void vgm_dof_pass(void)
 	SDL_SetTextureAlphaMod(prev, 255);
 }
 
+/* s212: bloom and the colour grade.  The brightest of the map layer -
+   flames, lava, glints, a lit spell - bleeds soft light round itself: the
+   composed map is halved, everything under a threshold taken off (a
+   reverse-subtract fill, so only what pokes above it stays), halved three
+   times more, and the steps added back upscaled - each a wider, softer
+   glow.  Then the area's grade: a multiply over the map (the Mines warm,
+   Sokoban cool, Gehennom red...).  The overlay - effects, text, the HUD -
+   goes on after, untouched.  VULTURE_NO_BLOOM / _BLOOM_T / _BLOOM (percent). */
+static void vgm_bloom_pass(void)
+{
+	static int off = -1, T = 230, pct = 100; /* 215 hazed white marble over */
+	static SDL_BlendMode sub = SDL_BLENDMODE_INVALID;
+	static bool sub_ok = true;
+	SDL_Texture *prev = vgm_out;
+	int W = 0, H = 0, k;
+
+	if (off < 0) {
+		const char *e;
+
+		off = getenv("VULTURE_NO_BLOOM") ? 1 : 0;
+		if ((e = getenv("VULTURE_BLOOM_T")) && atoi(e) > 0 && atoi(e) < 255)
+			T = atoi(e);
+		if ((e = getenv("VULTURE_BLOOM")) && atoi(e) >= 0 && atoi(e) <= 400)
+			pct = atoi(e);
+		/* the GL renderer takes one operation for colour and alpha both: the
+		   alpha's factors (0, 1) keep it as it was either way */
+		sub = SDL_ComposeCustomBlendMode(SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE, SDL_BLENDOPERATION_REV_SUBTRACT,
+		                                 SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_ONE, SDL_BLENDOPERATION_REV_SUBTRACT);
+	}
+	if (!vgm_out)
+		return;
+	SDL_QueryTexture(vgm_out, NULL, NULL, &W, &H);
+	if (W < 128 || H < 128)
+		return;
+	if (!off && sub_ok && pct > 0) {
+		if (vgm_bl_w != W || vgm_bl_h != H) {
+			for (k = 0; k < 4; k++) {
+				if (vgm_bl_t[k])
+					SDL_DestroyTexture(vgm_bl_t[k]);
+				vgm_bl_t[k] = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET,
+				                                W >> (k + 1), H >> (k + 1));
+			}
+			vgm_bl_w = W, vgm_bl_h = H;
+		}
+		for (k = 0; k < 4 && vgm_bl_t[k]; k++)
+			;
+		if (k == 4) {
+			for (k = 0; k < 4; k++) {
+				SDL_SetRenderTarget(vulture_gpu, vgm_bl_t[k]);
+				SDL_RenderSetClipRect(vulture_gpu, NULL);
+				SDL_SetTextureBlendMode(prev, SDL_BLENDMODE_NONE);
+				SDL_SetTextureColorMod(prev, 255, 255, 255);
+				SDL_SetTextureAlphaMod(prev, 255);
+				SDL_SetTextureScaleMode(prev, SDL_ScaleModeLinear);
+				SDL_RenderCopy(vulture_gpu, prev, NULL, NULL);
+				if (k == 0) { /* only what pokes above the threshold stays */
+					if (SDL_SetRenderDrawBlendMode(vulture_gpu, sub) != 0) {
+						sub_ok = false;
+						vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "bloom: no subtract blending - off\n");
+						break;
+					}
+					SDL_SetRenderDrawColor(vulture_gpu, (Uint8) T, (Uint8) T, (Uint8) T, 255);
+					SDL_RenderFillRect(vulture_gpu, NULL);
+					SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_NONE);
+				}
+				prev = vgm_bl_t[k];
+			}
+			SDL_SetRenderTarget(vulture_gpu, vgm_out);
+			SDL_RenderSetClipRect(vulture_gpu, NULL);
+			if (sub_ok) {
+				/* tight, then wider and wider: the wide ones twice */
+				static const int reps[4] = { 1, 1, 2, 2 };
+
+				for (k = 0; k < 4; k++) {
+					int amount = 255 * reps[k] * pct / 100;
+
+					SDL_SetTextureBlendMode(vgm_bl_t[k], SDL_BLENDMODE_ADD);
+					SDL_SetTextureScaleMode(vgm_bl_t[k], SDL_ScaleModeLinear);
+					SDL_SetTextureAlphaMod(vgm_bl_t[k], 255);
+					for (; amount > 0; amount -= 255) { /* past 255, it goes on again */
+						Uint8 c = (Uint8) (amount > 255 ? 255 : amount);
+
+						SDL_SetTextureColorMod(vgm_bl_t[k], c, c, c);
+						SDL_RenderCopy(vulture_gpu, vgm_bl_t[k], NULL, NULL);
+					}
+				}
+			}
+		}
+	}
+	SDL_SetRenderTarget(vulture_gpu, vgm_out);
+	if (vgm_grade[0] != 255 || vgm_grade[1] != 255 || vgm_grade[2] != 255) {
+		SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_MOD);
+		SDL_SetRenderDrawColor(vulture_gpu, vgm_grade[0], vgm_grade[1], vgm_grade[2], 255);
+		SDL_RenderFillRect(vulture_gpu, NULL);
+		SDL_SetRenderDrawBlendMode(vulture_gpu, SDL_BLENDMODE_NONE);
+	}
+}
+
+/* s212: levelwin, each frame: the colour grade of where you are */
+void vulture_gpumap_set_grade(int r, int g, int b)
+{
+	vgm_grade[0] = (Uint8) (r < 0 ? 0 : r > 255 ? 255 : r);
+	vgm_grade[1] = (Uint8) (g < 0 ? 0 : g > 255 ? 255 : g);
+	vgm_grade[2] = (Uint8) (b < 0 ? 0 : b > 255 ? 255 : b);
+}
+
 /* s205: levelwin, each frame: where you are on the map layer (1x) */
 void vulture_gpumap_set_focus(int y)
 {
@@ -1436,6 +1551,7 @@ static void vgm_compose(void)
 		} else
 			SDL_RenderCopy(vulture_gpu, vgm_tex, &vgm_zsrc, &vgm_zdst);
 	}
+	vgm_bloom_pass(); /* s212: bright things glow; the area's colour grade */
 	vgm_dof_pass(); /* s205: the far map softens, under the sharp overlay */
 	SDL_SetTextureScaleMode(vulture_gpu_tex, SDL_ScaleModeNearest);
 	if (vgm_blend == 1) {

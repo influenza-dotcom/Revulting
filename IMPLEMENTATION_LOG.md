@@ -4641,6 +4641,37 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   fourth square plus "no decorated walls" left brick rooms (4 in 5 squares
   decorated) with one torch.  Probe VULTURE_SELFTEST_TORCH.
 
+### 212. Bloom, colour grades, dark wall outsides, item outlines
+
+- Bloom (vgm_bloom_pass, vulture_sdl.cpp, in vgm_compose before the depth
+  of field): vgm_out's map is halved, a reverse-subtract fill takes off
+  everything under T per channel, three more halvings, and the four steps
+  are added back upscaled (the two widest twice).  The overlay is not
+  bloomed.  ⭐ The legacy GL renderer refuses a custom blend mode whose
+  colour and alpha OPERATIONS differ (GL_SupportsBlendMode) - the first
+  try logged "no subtract blending" and switched itself off; the alpha now
+  uses REV_SUBTRACT too, with factors (0, 1) so it is unchanged.  T 215
+  hazed white marble over; T 230.  VULTURE_NO_BLOOM / _BLOOM_T / _BLOOM.
+- Colour grades (vgrade_area -> vulture_gpumap_set_grade, a MOD fill over
+  the map in the same pass): Mines warm, Sokoban cool, Gehennom red,
+  Ludios gold, Vlad's violet, Medusa sea-green, Quest faint violet, each
+  Plane its element; the main dungeon untouched.  Probe
+  VULTURE_SELFTEST_GRADE forces each in turn on one view.
+- The user, mid-round: "the outside of the walls shouldnt be lit".  The
+  converted front faces (s209) are a wall's OUTSIDE but were lit like the
+  room.  vwall_draw now darkens them (vhole_dim: the same tile again in
+  black at alpha dim, holed the same way if it is in the circle) by what
+  the wall faces beyond it: rock (IS_OBSTRUCTED, the 5.0 name for IS_ROCK)
+  is dark (190); open ground lends its light-grid light, and ground you
+  have not seen has none.  ⭐ The light grid gives the stone round a lit
+  room about 0.5 (logged), so it cannot say "dark" by itself.  A
+  decorated wall's outside is plain brick (banners and paintings hang
+  inside).
+- The user, mid-round: "also have outlines for items".  The object step
+  records each item as an outline candidate too (pale blue); vxr_draw
+  maps it like a creature with no turn or scale.  Probe XRAY now also
+  drops a chest behind a front wall.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

@@ -7398,31 +7398,55 @@ static int vxr_seq = 0;
 static bool vwall_hole_on = false;
 static int vwall_hx = 0, vwall_hy = 0; /* your feet on screen this frame */
 static int vwall_amin = 77;            /* how solid a wall stays at the circle's middle */
+static float vl_light_at(int x, int y); /* s212: the light grid at a square (last computed) */
+#define VWALL_DIM 190                   /* s212: a wall's outside facing the dark: this much black over it */
 static bool vwall_probe_off = false;   /* probe: the same view with no circle */
 
 static int
 vwall_outer(int tile) /* a front wall's tile: its style's face toward you (back-wall art); -1 none */
 {
-    int k;
+    int k, o;
 
     for (k = 0; k < V_WALL_STYLE_MAX; k++) {
+        /* s212: the outside of a decorated wall (a banner, a painting, a
+           niche, a pillar) is plain brick - the decorations hang inside */
+        o = k > V_WALL_BRICK && k <= V_WALL_BRICK + 4 ? V_WALL_BRICK : k;
         if (walls_full[k].north == tile)
-            return walls_full[k].south;
+            return walls_full[o].south;
         if (walls_full[k].west == tile)
-            return walls_full[k].east;
+            return walls_full[o].east;
         if (walls_half[k].north == tile)
-            return walls_half[k].south;
+            return walls_half[o].south;
         if (walls_half[k].west == tile)
-            return walls_half[k].east;
+            return walls_half[o].east;
     }
     return -1;
 }
 
+/* s212: black at alpha dim over a tile just laid at (rx0, ry0) - holed as it
+   was (amin < 255), or as see-through as it was (soft, no GPU map) */
+static void
+vhole_dim(SDL_Surface *g, int rx0, int ry0, int dim, int amin, int soft)
+{
+    if (dim <= 0 || !g)
+        return;
+    SDL_SetSurfaceColorMod(g, 0, 0, 0);
+    SDL_SetSurfaceAlphaMod(g, (Uint8) (dim * (soft >= 0 ? soft : 255) / 255));
+    if (amin < 255 && vulture_gpumap_on)
+        vulture_gpumap_holed(g, rx0, ry0, (float) vwall_hx, (float) (vwall_hy - VWALL_BODY), VWALL_R0, VWALL_R1,
+                             amin);
+    else
+        vulture_put_img(rx0, ry0, g);
+    SDL_SetSurfaceColorMod(g, 255, 255, 255);
+    SDL_SetSurfaceAlphaMod(g, 255);
+}
+
 /* s210: a tile at (x, y) (the square's point), see-through round you by
    the amount f (<= 0 solid, 1 the full circle) if its rect reaches the
-   circle; returns how solid the circle's middle was (255: drawn plain) */
+   circle; returns how solid the circle's middle was (255: drawn plain).
+   s212: dim > 0 darkens it (a wall's outside, facing the dark) */
 static int
-vhole_put(int x, int y, int tile, int shade, float f)
+vhole_put(int x, int y, int tile, int shade, float f, int dim = 0)
 {
     vulture_tile *t;
 
@@ -7447,32 +7471,39 @@ vhole_put(int x, int y, int tile, int shade, float f)
                         vulture_gpumap_normal_holed(nm, (int) rx0, (int) ry0, cx, cy, VWALL_R0, VWALL_R1,
                                                     amin);
                 }
+                vhole_dim(t->graphic, (int) rx0, (int) ry0, dim, amin, -1); /* s212 */
             } else { /* no GPU map: the whole tile, as see-through as its nearest point */
                 float d = sqrtf((qx - cx) * (qx - cx) + (qy - cy) * (qy - cy)), g;
+                int a;
 
                 g = d <= VWALL_R0 ? 0.0f : (d - VWALL_R0) / (VWALL_R1 - VWALL_R0);
                 g = g * g * (3.0f - 2.0f * g);
-                SDL_SetSurfaceAlphaMod(t->graphic, (Uint8) (amin + (255 - amin) * g));
+                a = (int) (amin + (255 - amin) * g);
+                SDL_SetSurfaceAlphaMod(t->graphic, (Uint8) a);
                 vulture_put_tile_shaded(x, y, tile, shade);
                 SDL_SetSurfaceAlphaMod(t->graphic, 255);
+                vhole_dim(t->graphic, (int) rx0, (int) ry0, dim, 255, a); /* s212 */
             }
             return amin;
         }
     }
     vulture_put_tile_shaded(x, y, tile, shade);
+    if (dim > 0 && tile >= 0 && tile != V_TILE_NONE && (t = vulture_get_tile_shaded(tile, shade)) != NULL
+        && t->graphic) /* s212: a wall's outside, darkened */
+        vhole_dim(t->graphic, x + t->xmod, y + t->ymod, dim, 255, -1);
     return 255;
 }
 
 /* steps 1 and 7 of the map: a wall tile of the square drawn at (x, y) - side
    0 west, 1 north (a room's front walls), 2 south, 3 east (its back walls) */
 static void
-vwall_draw(int x, int y, int tile, int side, int shade)
+vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1)
 {
     const float k = (float) V_MAP_YMOD / V_MAP_XMOD;
     bool eface = side == 0 || side == 3; /* an east face: its foot runs up to the right */
     vulture_tile *t;
     float foot;
-    int out, amin;
+    int out, amin, dim = 0;
 
     if (tile < 0 || tile == V_TILE_NONE)
         return;
@@ -7484,11 +7515,23 @@ vwall_draw(int x, int y, int tile, int side, int shade)
         tile = out; /* the face toward you, on this edge */
         x += side == 0 ? -V_MAP_XMOD : V_MAP_XMOD;
         y -= V_MAP_YMOD;
+        /* s212: it is the wall's OUTSIDE - lit by what it faces (the square
+           beyond the wall, (ox, oy)), not by the room.  Rock beyond is dark
+           (the light grid gives the stone round a lit room half its light);
+           open ground beyond lends its own light - and ground you have not
+           seen has none, so nothing shows that you don't know */
+        if (!isok(ox, oy) || IS_OBSTRUCTED(levl[ox][oy].typ)) {
+            dim = VWALL_DIM;
+        } else {
+            float lo = vl_light_at(ox, oy) / 0.7f;
+
+            dim = (int) (VWALL_DIM * (lo >= 1.0f ? 0.0f : lo <= 0.0f ? 1.0f : 1.0f - lo));
+        }
     }
     /* the wall's foot, carried on to where you stand: in front of you
        (lower on the screen) it hides you; at your side or behind, not */
     foot = eface ? y + V_MAP_YMOD - (vwall_hx - x) * k : y + (vwall_hx - x + V_MAP_XMOD) * k;
-    amin = vhole_put(x, y, tile, shade, (foot - vwall_hy + 11.0f) / 22.0f);
+    amin = vhole_put(x, y, tile, shade, (foot - vwall_hy + 11.0f) / 22.0f, dim);
     if ((t = vulture_get_tile_shaded(tile, shade)) != NULL && t->graphic) { /* s210: what it may hide */
         vxr_face_t fc;
 
@@ -7697,7 +7740,7 @@ vxr_draw(void)
         if (!tile || !tile->graphic || fabs(c.xs) < 0.15 || fabs(c.ys) < 0.15)
             continue;
         /* as vtw_put_tile_x drew it */
-        art = vtw_art_facing(c.tile, tile->graphic);
+        art = c.face ? vtw_art_facing(c.tile, tile->graphic) : 0;
         flip = c.face != 0 && ((art == 0 && c.face < 0) || (art != 0 && art != c.face));
         img = tile->graphic, dx = c.tx + tile->xmod;
         if (flip) {
@@ -7797,8 +7840,8 @@ vxr_probe_tick(Uint32 now)
     if (vxr_probe_n == 0) {
         int x, y, placed = 0;
 
-        for (y = 1; y < ROWNO - 1 && placed < 2; y++)
-            for (x = 2; x < COLNO - 1 && placed < 2; x++) {
+        for (y = 1; y < ROWNO - 1 && placed < 3; y++)
+            for (x = 2; x < COLNO - 1 && placed < 3; x++) {
                 int sj, si, ej, ei;
                 struct monst *mm;
                 bool front;
@@ -7812,6 +7855,13 @@ vxr_probe_tick(Uint32 now)
                         || (isok(x + ej, y + ei) && IS_WALL(levl[x + ej][y + ei].typ));
                 if (!front)
                     continue;
+                if (placed == 2) { /* s212: and an item */
+                    (void) mksobj_at(CHEST, x, y, FALSE, FALSE);
+                    newsym(x, y);
+                    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "xray probe: chest at %d,%d\n", x, y);
+                    placed++;
+                    continue;
+                }
                 if ((mm = makemon(&mons[placed ? PM_GNOME : PM_JACKAL], x, y, NO_MM_FLAGS)) != 0) {
                     if (placed)
                         mm->mpeaceful = 1;
@@ -8005,6 +8055,76 @@ vtorch_probe_tick(Uint32 now)
         vtorch_probe_t = 0;
 }
 
+/*
+ * IMPLEMENTATION_LOG s212: the colour of where you are.  Each part of the
+ * dungeon gets its own grade, a multiply over the map layer done on the
+ * GPU with the bloom (vgm_bloom_pass): the Mines warm, Sokoban cool,
+ * Gehennom red, Fort Ludios gold, Vlad's Tower violet, Medusa's island
+ * sea-green, the Quest faintly violet, each Plane its element; the main
+ * dungeon untouched.  Probe VULTURE_SELFTEST_GRADE shoots each in turn.
+ */
+static const char *vgrade_probe_name = NULL; /* probe: an area forced for a shot */
+
+static void
+vgrade_area(int *r, int *g, int *b)
+{
+    const char *f = vgrade_probe_name;
+
+    *r = *g = *b = 255;
+    if (f ? !strcmp(f, "astral") : Is_astralevel(&u.uz))
+        *r = 232, *g = 238, *b = 255;
+    else if (f ? !strcmp(f, "fire") : Is_firelevel(&u.uz))
+        *r = 255, *g = 212, *b = 184;
+    else if (f ? !strcmp(f, "water") : Is_waterlevel(&u.uz))
+        *r = 208, *g = 228, *b = 255;
+    else if (f ? !strcmp(f, "earth") : Is_earthlevel(&u.uz))
+        *r = 246, *g = 232, *b = 214;
+    else if (f ? !strcmp(f, "air") : Is_airlevel(&u.uz))
+        *r = 238, *g = 247, *b = 255;
+    else if (f ? !strcmp(f, "gehennom") : In_hell(&u.uz))
+        *r = 255, *g = 200, *b = 176;
+    else if (f ? !strcmp(f, "mines") : In_mines(&u.uz))
+        *r = 255, *g = 236, *b = 206;
+    else if (f ? !strcmp(f, "sokoban") : In_sokoban(&u.uz))
+        *r = 218, *g = 232, *b = 255;
+    else if (f ? !strcmp(f, "ludios") : Is_knox(&u.uz))
+        *r = 255, *g = 242, *b = 200;
+    else if (f ? !strcmp(f, "vlad") : In_V_tower(&u.uz))
+        *r = 226, *g = 210, *b = 246;
+    else if (f ? !strcmp(f, "medusa") : Is_medusa_level(&u.uz))
+        *r = 212, *g = 244, *b = 236;
+    else if (f ? !strcmp(f, "quest") : In_quest(&u.uz))
+        *r = 242, *g = 232, *b = 255;
+}
+
+/* probe: s212 - VULTURE_SELFTEST_GRADE: the same view as each area */
+static Uint32 vgrade_probe_t = 0;
+static int vgrade_probe_n = 0;
+
+static void
+vgrade_probe_tick(Uint32 now)
+{
+    static const char *const nm[6] = { "dungeon", "mines", "sokoban", "gehennom", "vlad", "medusa" };
+    char p[700];
+
+    if (now - vgrade_probe_t < 900)
+        return;
+    if (vgrade_probe_n > 0) { /* the last one, shot */
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "grade_%s.bmp", getenv("VULTURE_SELFTEST"), nm[vgrade_probe_n - 1]);
+        vulture_save_frame_bmp(p);
+    }
+    if (vgrade_probe_n >= 6) {
+        vgrade_probe_name = NULL, vgrade_probe_t = 0;
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "grade probe: done\n");
+        return;
+    }
+    vgrade_probe_name = vgrade_probe_n == 0 ? "none" : nm[vgrade_probe_n];
+    vgrade_probe_n++, vgrade_probe_t = SDL_GetTicks();
+    levwin->force_redraw();
+}
+
 /* the overlay pass, after vfx_draw */
 static void
 vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
@@ -8026,6 +8146,12 @@ vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
 
         vfx_mover_screen(u.ux, u.uy, cx, cy, vx, vy, &fx, &fy);
         vulture_gpumap_set_focus(fy - 30);
+    }
+    { /* s212: the colour of where you are */
+        int gr, gg, gb;
+
+        vgrade_area(&gr, &gg, &gb);
+        vulture_gpumap_set_grade(gr, gg, gb);
     }
     if (vsp_on_count > 0)
         for (y = 0; y < ROWNO; y++)
@@ -8555,6 +8681,8 @@ vulture_idle_bob(bool at_map)
         vxr_probe_tick(now);
     if (vtorch_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s211 */
         vtorch_probe_tick(now);
+    if (vgrade_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s212 */
+        vgrade_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -11798,6 +11926,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_GRADE")) { /* probe: s212 the areas' colour */
+            vgrade_probe_t = SDL_GetTicks(), vgrade_probe_n = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_TORCH")) { /* probe: s211 torches */
@@ -15652,6 +15784,13 @@ vl_add(int cx, int cy, double radius, double inten, double r, double g, double b
         }
 }
 
+/* s212: the light grid at a square, as last computed (0 in rock, the void) */
+static float
+vl_light_at(int x, int y)
+{
+    return isok(x, y) ? vl_L[y][x] : 0.0f;
+}
+
 /* s149: the colour of a magical trap's light right now (0 = not magical);
    *pu gets its pulse */
 static bool
@@ -17724,12 +17863,12 @@ levelwin::draw()
 
             /* 1. West and north walls (s209: a room's front walls - solid,
                their face toward you; see-through round you) */
-            if (nwx >= 1 && nwx < COLNO && nwy >= 0 && nwy < ROWNO)
+            if (nwx >= 1 && nwx < COLNO && nwy >= 0 && nwy < ROWNO) /* s212: its outside faces (nex, ney) */
                 vwall_draw(x, y, maptile_wall[i][j].west, 0,
-                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nwx, nwy)); /* s187 */
-            if (nnx >= 1 && nnx < COLNO && nny >= 0 && nny < ROWNO)
+                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nwx, nwy), nex, ney); /* s187 */
+            if (nnx >= 1 && nnx < COLNO && nny >= 0 && nny < ROWNO) /* s212: its outside faces (nsx, nsy) */
                 vwall_draw(x, y, maptile_wall[i][j].north, 1,
-                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nnx, nny)); /* s187 */
+                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nnx, nny), nsx, nsy); /* s187 */
 
             /* shortcut for unmapped case */
             if (map_back != V_MISC_UNMAPPED_AREA || map_obj != V_TILE_NONE) {
@@ -17765,6 +17904,14 @@ levelwin::draw()
                         vshadow(x + rox, y + 2 + roy, ot->graphic->w * 3 / 4, 90);
                 }
                 vanim_draw_object(j, i, x, y, map_obj);
+                if (map_obj != V_TILE_NONE) { /* s212: an item the walls in front of it may hide */
+                    vxr_mon_t mr;
+
+                    mr.tile = map_obj, mr.face = 0, mr.tx = x, mr.ty = y, mr.seq = ++vxr_seq;
+                    mr.xs = mr.ys = 1.0, mr.deg = 0.0;
+                    mr.r = 165, mr.g = 225, mr.b = 255; /* items: pale blue */
+                    vxr_mons.push_back(mr);
+                }
 
                 /* 5. Monsters */
                 /* s193: invisible and not seeing it, the game shows nothing
