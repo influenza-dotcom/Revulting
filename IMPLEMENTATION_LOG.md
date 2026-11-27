@@ -4598,6 +4598,31 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Probe VULTURE_SELFTEST_WALLS: you behind a front wall (shot with and
   without the circle), then just inside a front doorway (the same two).
 
+### 210. What the walls hide: outlines; doors in the circle
+
+- The user, asked what else: "do all of these in order" - eight items:
+  outlines through walls, doors in the circle, wall torches, bloom and
+  colour grading, water reflections, floor details, a stairs transition,
+  a frame-rate check.  This is the first two.
+- Outlines (vxr_draw, overlay pass, unlit): full-height walls hide
+  whatever stands behind them.  vwall_draw records every face it lays as
+  a foot line (y = y0 + k (X - x0) over 56 px) and a height (-ymod of its
+  art); the monster step records each creature with its pose (tile,
+  facing, tx/ty, scale, turn).  A creature's pixels that a LATER face
+  covers are drawn as an outline band (2 px, alpha 215) and a faint fill
+  (48) in its colour - red hostile, yellow peaceful, green tame, grey if
+  only remembered or sensed - mapped back through the same scale and turn
+  about the feet that vtx_blit used, flipped as vtw_put_tile_x chose.
+  Where the see-through circle already shows it the outline fades by the
+  wall's own alpha there.  Masks are cached per tile and facing.  You get
+  none (the circle shows you).
+- Doors: a door square's furniture in a wall in front of you is laid with
+  vhole_put (split out of vwall_draw, which shares it), by how far in
+  front of your feet the door's square is.
+- Probe VULTURE_SELFTEST_XRAY places a sleeping hostile jackal and a
+  peaceful gnome behind front walls; seen in the shots instead: a jackal's
+  legs and a newt wholly behind a front wall, outlined in red.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
