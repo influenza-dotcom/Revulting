@@ -8622,6 +8622,13 @@ vdecal_draw(int j, int i, int x, int y, int style, bool rug, bool furniture)
  * faint, no faces.  Tops light themselves (a marker normal; vgl_fs leaves
  * them out of the screen-space light grid, which lit them with the floor
  * behind them on screen), shaded by their own square's light.
+ * IMPLEMENTATION_LOG s220: "shadows have ceilings too? very jarring to
+ * explore corridors" - the dark ahead of you in a corridor was capped (an
+ * unseen square beside a corridor counted as rock - the corridor's way on is
+ * one) and opened as you walked.  The band is now rock you have SEEN (stone
+ * beside where you walked; all of it once the level is mapped), and the one
+ * square just outside a wall you saw from its room (not beside a doorway);
+ * deeper only through seen rock.  The unknown stays dark.
  */
 #define VROCK_D 3
 #define VROCK_LOW 18
@@ -8757,12 +8764,16 @@ vrock_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
                 if (!isok(nx, ny))
                     continue;
                 kk = kind[ny][nx];
-                if (kk == 2 || (kk == 1 && (seen || wroom[ny][nx])) || (seen && kk))
+                /* s220: rock you have seen; or just outside a wall you saw from
+                   its room.  NOT an unseen square beside a corridor - the
+                   corridor's own way on is one: the dark ahead got a ceiling
+                   that opened as you walked */
+                if ((seen && kk) || (!seen && kk == 1 && wroom[ny][nx]))
                     seed = true;
                 room = room || kk == 3;
                 door = door || kk == 4;
             }
-            if (!seen && (room || (door && !seed))) {
+            if (!seen && (room || door)) { /* s220: nor beside a doorway - where its corridor starts */
                 vrock_d[y][x] = -1; /* beside room ground you know: maybe floor, never rock */
                 continue;
             }
@@ -8782,7 +8793,8 @@ vrock_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
         for (k = 0; k < 4; k++) {
             int nx = cx + d4[k][0], ny = cy + d4[k][1];
 
-            if (isok(nx, ny) && vrock_d[ny][nx] == VROCK_D + 1) {
+            if (isok(nx, ny) && vrock_d[ny][nx] == VROCK_D + 1
+                && svl.level.locations[nx][ny].seenv) { /* s220: only rock you have seen */
                 vrock_d[ny][nx] = (signed char) (d + 1);
                 q[qt][0] = (short) nx, q[qt][1] = (short) ny, qt++;
             }

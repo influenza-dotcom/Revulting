@@ -4838,6 +4838,18 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Map pass time unchanged (tiles median 2-3 ms in both builds; tweens 8-10
   frames per ~130 ms in both).
 
+### 220. Ceilings only over rock you know
+
+- The user, exploring a dark corridor (F12 shot): "it looks like shadows
+  have ceilings too? very jarring to explore corridors".  An unseen square
+  beside a known corridor counted as rock - but the corridor's own way on is
+  such a square, so the dark ahead was capped and opened as you walked (the
+  shot shows "It's solid stone." from walking into the guessed rock).
+- The band is now: rock you have SEEN (stone beside where you walked; all
+  of it once the level is magic-mapped), plus the one square just outside a
+  wall you saw from its room (never beside a doorway, where its corridor
+  starts).  It goes deeper only through seen rock.  The unknown stays dark.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
