@@ -4541,6 +4541,63 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   only repeated the art's band; on the front walls - whose bodies are
   ghost panels - they floated over the floor like rails.
 
+### 209. Full-height solid walls, see-through round you; shine; the void's depth
+
+- The user: "do both [shine; depth in the void], make all walls completely
+  visible but let me see through them if im around them in a circle", then
+  mid-round "make it so walls are full height and not half height".
+- Full height: the default at every layer - vulture_opt.cpp's compiled
+  default, levelwin's style-switch fallback (walls_full), the shipped
+  gamedata/config/vulture.conf (and the two playable build folders' copies,
+  untracked) and the user's own %APPDATA% conf (wall_style=full; it wins
+  over the shipped one).  The July QoL round (section 28) had set half
+  height because full walls hid what stood behind them; the circle below
+  is what makes full height playable.  F7 still toggles.
+- Front walls solid (levelwin vwall_draw / vwall_outer): a room's front
+  walls are its south / east wall squares' north / west tiles - the walls'
+  room side seen from behind, drawn by the art as faint black panels.  They
+  are now drawn as their style's OUTER face instead (the style's south /
+  east tile - brick face plus top band), moved onto the same edge: the
+  north tile's face drawn at (x + 56, y - 22), the west tile's at
+  (x - 56, y - 22).  Every wall stands on the room's edge (a thin-wall
+  model): back faces and front faces meet at the room's corner points, so
+  corners close with no extra pieces.  Side effect: a front doorway's two
+  jambs stick out one square toward you, framing the door as a short
+  passage.
+- The circle: a wall face whose FOOT LINE, carried on to your x, runs in
+  front of your feet (lower on the screen) is laid with
+  vulture_gpumap_holed - an SDL_RenderGeometry grid of 6 px cells whose
+  vertex alpha falls to wall_opacity within 56 px of your body's middle
+  (feet - 34) and returns by 124 px; its normal map is recorded the same
+  way (vgm_nrec.holed) so the relief light matches.  Walls beside and
+  behind you never fade (the foot-line test, not a row test: a back wall's
+  face on your own row, 56 px to your side, has its foot line 22 px BEHIND
+  you).  Crossing a doorway the amount eases over 22 px of foot distance,
+  so the hole fades rather than pops.  The software path fades the whole
+  face by its nearest point.
+- wall_opacity now means how solid walls stay inside the circle (1.0 turns
+  the circle off).  Default 0.3 (was 0.6, which would leave you 40%
+  visible); the conf text and the manual say so.
+- Doorway sides: get_wall_decor styles a wall side by the floor it faces,
+  so faces toward a doorway or corridor (rough floor) came out ROUGH
+  (brown rock) - unnoticed while front walls were faint panels, glaring
+  once solid.  get_wall_tiles now styles such a side by a room floor
+  beside the wall square (orthogonal first, then diagonal - a door next to
+  a corner has its jamb on the corner block, which touches the room only
+  corner to corner).  Walls with no room floor near (mines, corridors)
+  stay rough.
+- Shine (vgl_fs + vl_nmap): the point-light glint is scaled by a gloss
+  from the albedo - (1 - saturation) x smoothstep(0.25, 0.75, brightest
+  channel): grey and bright (metal, armour, wet stone) up to 2.6x, colour
+  (cloth, wood, skin) and dark 0.6x; cap 40 -> 96.  Same in the CPU relief.
+- The void's depth (vvoid_draw, overlay pass): 70 + 40 dim blue-grey motes
+  in two layers that follow the map at 0.45 / 0.72 of its motion (a
+  parallax as the view scrolls), drift slowly and twinkle; drawn only where
+  the screen point's square, the two behind it (slab faces hang down) and
+  six in front (walls rise up) are all unmapped.
+- Probe VULTURE_SELFTEST_WALLS: you behind a front wall (shot with and
+  without the circle), then just inside a front doorway (the same two).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

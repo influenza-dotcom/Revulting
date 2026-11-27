@@ -171,8 +171,8 @@ levelwin::init()
         walltiles = (struct walls *) walls_half;
         break;
 
-    default:
-        walltiles = (struct walls *) walls_half;
+    default: /* s209: full height */
+        walltiles = (struct walls *) walls_full;
         break;
     }
 
@@ -7347,6 +7347,226 @@ vlid_probe_tick(Uint32 now)
     vlid_probe_sub = 1, vlid_probe_t = SDL_GetTicks();
 }
 
+/*
+ * IMPLEMENTATION_LOG s209: walls you see whole - and through, round you;
+ * the void's depth.
+ *  - A room's front walls (its south / east wall squares' north / west
+ *    tiles: the walls' room side seen from behind, faint black panels) are
+ *    drawn as their style's outer face instead - the back-wall art (a brick
+ *    face and its top) facing you, moved onto that edge: every wall solid,
+ *    standing on the room's edge.
+ *  - Walls in front of you are see-through round you: a wall whose foot
+ *    runs in front of where you stand, over a circle about your body, is
+ *    laid as a grid whose alpha falls to wall_opacity within VWALL_R0 and
+ *    comes back by VWALL_R1 (vulture_gpumap_holed; its normals the same).
+ *    Walls beside and behind you stay solid.
+ *  - The void: two layers of dust drift deep below the rooms, moving slower
+ *    than the map when the view scrolls (a parallax), drawn only where no
+ *    floor, wall or slab face can be.
+ */
+#define VWALL_R0 56.0f
+#define VWALL_R1 124.0f
+#define VWALL_BODY 34 /* your body's middle, above your feet */
+static bool vwall_hole_on = false;
+static int vwall_hx = 0, vwall_hy = 0; /* your feet on screen this frame */
+static int vwall_amin = 77;            /* how solid a wall stays at the circle's middle */
+static bool vwall_probe_off = false;   /* probe: the same view with no circle */
+
+static int
+vwall_outer(int tile) /* a front wall's tile: its style's face toward you (back-wall art); -1 none */
+{
+    int k;
+
+    for (k = 0; k < V_WALL_STYLE_MAX; k++) {
+        if (walls_full[k].north == tile)
+            return walls_full[k].south;
+        if (walls_full[k].west == tile)
+            return walls_full[k].east;
+        if (walls_half[k].north == tile)
+            return walls_half[k].south;
+        if (walls_half[k].west == tile)
+            return walls_half[k].east;
+    }
+    return -1;
+}
+
+/* steps 1 and 7 of the map: a wall tile of the square drawn at (x, y) - side
+   0 west, 1 north (a room's front walls), 2 south, 3 east (its back walls) */
+static void
+vwall_draw(int x, int y, int tile, int side, int shade)
+{
+    vulture_tile *t;
+    bool eface = side == 0 || side == 3; /* an east face: its foot runs up to the right */
+    int out;
+
+    if (tile < 0 || tile == V_TILE_NONE)
+        return;
+    if (side <= 1) {
+        if ((out = vwall_outer(tile)) < 0) {
+            vulture_put_tile_shaded(x, y, tile, shade);
+            return;
+        }
+        tile = out; /* the face toward you, on this edge */
+        x += side == 0 ? -V_MAP_XMOD : V_MAP_XMOD;
+        y -= V_MAP_YMOD;
+    }
+    if (vwall_hole_on && vwall_amin < 250 && (t = vulture_get_tile_shaded(tile, shade)) != NULL && t->graphic) {
+        const float k = (float) V_MAP_YMOD / V_MAP_XMOD;
+        float cx = (float) vwall_hx, cy = (float) (vwall_hy - VWALL_BODY);
+        float rx0 = (float) (x + t->xmod), ry0 = (float) (y + t->ymod);
+        float rx1 = rx0 + t->graphic->w, ry1 = ry0 + t->graphic->h;
+        float qx = cx < rx0 ? rx0 : cx > rx1 ? rx1 : cx, qy = cy < ry0 ? ry0 : cy > ry1 ? ry1 : cy;
+        /* the wall's foot, carried on to where you stand: in front of you
+           (lower on the screen) it hides you; at your side or behind, not */
+        float foot = eface ? y + V_MAP_YMOD - (vwall_hx - x) * k : y + (vwall_hx - x + V_MAP_XMOD) * k;
+        float f = (foot - vwall_hy + 11.0f) / 22.0f;
+
+        if (f > 0.0f && (qx - cx) * (qx - cx) + (qy - cy) * (qy - cy) < VWALL_R1 * VWALL_R1) {
+            int amin;
+
+            f = f >= 1.0f ? 1.0f : f * f * (3.0f - 2.0f * f); /* stepping through a door: it fades */
+            amin = (int) (255.0f - (255.0f - vwall_amin) * f + 0.5f);
+            if (vulture_gpumap_on) {
+                vulture_gpumap_holed(t->graphic, (int) rx0, (int) ry0, cx, cy, VWALL_R0, VWALL_R1, amin);
+                if (vulture_normal_capture) {
+                    SDL_Surface *nm = vulture_get_tile_normal(tile, false);
+
+                    if (nm)
+                        vulture_gpumap_normal_holed(nm, (int) rx0, (int) ry0, cx, cy, VWALL_R0, VWALL_R1,
+                                                    amin);
+                }
+            } else { /* no GPU map: the whole face, as see-through as its nearest point */
+                float d = sqrtf((qx - cx) * (qx - cx) + (qy - cy) * (qy - cy)), g;
+
+                g = d <= VWALL_R0 ? 0.0f : (d - VWALL_R0) / (VWALL_R1 - VWALL_R0);
+                g = g * g * (3.0f - 2.0f * g);
+                SDL_SetSurfaceAlphaMod(t->graphic, (Uint8) (amin + (255 - amin) * g));
+                vulture_put_tile_shaded(x, y, tile, shade);
+                SDL_SetSurfaceAlphaMod(t->graphic, 255);
+            }
+            return;
+        }
+    }
+    vulture_put_tile_shaded(x, y, tile, shade);
+}
+
+/* the void's dust: is screen point (sx, sy) clear of the dungeon - nothing
+   mapped on its square, behind it (whose slab face hangs into it) or up to
+   two rows in front (whose walls rise over it) */
+static bool
+vvoid_open(mapdata *md, int sx, int sy)
+{
+    static const int nb[9][2] = { { 0, 0 }, { -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 },
+                                  { 1, 1 }, { 2, 1 }, { 1, 2 }, { 2, 2 } };
+    double A = (double) (sx - vsp_cx) / V_MAP_XMOD, B = (double) (sy - vsp_cy) / V_MAP_YMOD;
+    int va = (int) floor((A + B) / 2.0 + 0.5), vb = (int) floor((B - A) / 2.0 + 0.5), k;
+
+    for (k = 0; k < 9; k++) {
+        int dj, di, j, i, b;
+
+        v_rot(va + nb[k][0], vb + nb[k][1], vulture_view_rot, &dj, &di);
+        j = vsp_vx + dj, i = vsp_vy + di;
+        if (j < 1 || j >= COLNO || i < 0 || i >= ROWNO)
+            continue;
+        b = md->get_glyph(MAP_BACK, j, i);
+        if (b != V_MISC_UNMAPPED_AREA && b != V_TILE_NONE)
+            return false;
+    }
+    return true;
+}
+
+/* the overlay pass: dust drifting deep in the void, slower than the map */
+static void
+vvoid_draw(mapdata *md, double t)
+{
+    int ox, oy, k, layer, W, H;
+
+    if (!md || !vfx_ambient || !u.ux || u.uswallow || Underwater || !vulture_screen)
+        return;
+    W = vulture_screen->w + 240, H = vulture_screen->h + 240;
+    vsp_screen(0, 0, &ox, &oy); /* where the map lies: the dust follows it, slower */
+    for (layer = 0; layer < 2; layer++) {
+        double f = layer ? 0.72 : 0.45;
+        int n = layer ? 40 : 70;
+
+        for (k = 0; k < n; k++) {
+            double ph = vsp_hash(k, layer, 47) * 6.2832;
+            double px = vsp_hash(k, layer, 41) * W + ox * f + t * (vsp_hash(k, layer, 51) - 0.5) * 7.0;
+            double py = vsp_hash(layer, k, 43) * H + oy * f + t * (vsp_hash(k, layer, 53) - 0.5) * 4.0;
+            int sx, sy;
+
+            px = fmod(px, (double) W), py = fmod(py, (double) H);
+            sx = (int) (px < 0 ? px + W : px) - 120, sy = (int) (py < 0 ? py + H : py) - 120;
+            if (!vvoid_open(md, sx, sy))
+                continue;
+            vsp_blob(sx, sy, layer ? 1.6 : 1.0, 150, 165, 200,
+                     (int) ((layer ? 120 : 70) * (0.6 + 0.4 * sin(t * 0.9 + ph))), true);
+        }
+    }
+}
+
+/* probe: s209 - VULTURE_SELFTEST_WALLS: you stand just behind a front wall
+   (a floor square whose screen down-left or down-right neighbour is wall),
+   shot, and the same with no circle; then just inside a doorway in a front
+   wall, the same two */
+static Uint32 vwall_probe_t = 0;
+static int vwall_probe_n = 0; /* 0 move behind, 1 shoot, 2 no circle, 3 move to a door, 4 shoot, 5 no circle */
+
+static void
+vwall_probe_tick(Uint32 now)
+{
+    char p[700];
+
+    if (now - vwall_probe_t < 1200)
+        return;
+    vwall_probe_t = SDL_GetTicks();
+    if (vwall_probe_n == 0 || vwall_probe_n == 3) {
+        int x, y, bx = 0, by = 0, best = 9999;
+
+        for (y = 1; y < ROWNO - 1; y++)
+            for (x = 2; x < COLNO - 1; x++) {
+                int sj, si, ej, ei, d;
+                bool front;
+
+                if (levl[x][y].typ != ROOM || m_at(x, y) || !levl[x][y].seenv)
+                    continue;
+                v_rot(0, 1, vulture_view_rot, &sj, &si);
+                v_rot(1, 0, vulture_view_rot, &ej, &ei);
+                if (vwall_probe_n == 3) /* a doorway in front of you */
+                    front = (isok(x + sj, y + si) && IS_DOOR(levl[x + sj][y + si].typ))
+                            || (isok(x + ej, y + ei) && IS_DOOR(levl[x + ej][y + ei].typ));
+                else
+                    front = (isok(x + sj, y + si) && IS_WALL(levl[x + sj][y + si].typ))
+                            || (isok(x + ej, y + ei) && IS_WALL(levl[x + ej][y + ei].typ));
+                if (!front)
+                    continue;
+                d = distmin(u.ux, u.uy, x, y) + (levl[x][y].lit ? 0 : 40);
+                if (d < best)
+                    best = d, bx = x, by = y;
+            }
+        if (bx && (bx != u.ux || by != u.uy)) {
+            teleds(bx, by, TELEDS_NO_FLAGS);
+            vision_recalc(0);
+        }
+        flush_screen(1);
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "walls probe %d: you at %d,%d\n", vwall_probe_n, u.ux,
+                          u.uy);
+    } else {
+        static const char *const nm[6] = { "", "behind", "behind_solid", "", "door", "door_solid" };
+
+        vwall_probe_off = vwall_probe_n == 2 || vwall_probe_n == 5;
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "walls_%s.bmp", getenv("VULTURE_SELFTEST"), nm[vwall_probe_n]);
+        vulture_save_frame_bmp(p);
+        vwall_probe_off = false;
+    }
+    if (++vwall_probe_n >= 6) {
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "walls probe: done\n");
+        vwall_probe_t = 0;
+    }
+}
+
 /* the overlay pass, after vfx_draw */
 static void
 vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
@@ -7395,6 +7615,7 @@ vsp_draw(mapdata *md, int cx, int cy, int vx, int vy)
     vdr_tick(now);   /* s203 */
     vfall_tick(now); /* s204 */
     vlife_tick(now); /* s206 */
+    vvoid_draw(md, t); /* s209 */
     vlive_furniture(md, t); /* s206 */
     vsp_draw_waves(now);
     vsp_draw_parts(now, t, dt);
@@ -7890,6 +8111,8 @@ vulture_idle_bob(bool at_map)
         vlife_probe_tick(now);
     if (vlid_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s207 */
         vlid_probe_tick(now);
+    if (vwall_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s209 */
+        vwall_probe_tick(now);
     vsoak_tick(at_map); /* probe: s166 automated play */
     if (!at_map || !levwin || vulture_windows_inited != TRUE || vtw_animating
         || vanim_kind || vanim_input_waiting())
@@ -11133,6 +11356,10 @@ vselftest(void)
         }
         if (getenv("VULTURE_SELFTEST_DOOR")) { /* probe: s203 doors swinging, things used */
             vdr_probe_t = SDL_GetTicks(), vdr_probe_n = 0, vdr_probe_sub = 0;
+            break;
+        }
+        if (getenv("VULTURE_SELFTEST_WALLS")) { /* probe: s209 walls round you */
+            vwall_probe_t = SDL_GetTicks(), vwall_probe_n = 0;
             break;
         }
         if (getenv("VULTURE_SELFTEST_LID") || getenv("VULTURE_SELFTEST_ARC")) { /* probe: s207 lids, arcs */
@@ -15447,9 +15674,19 @@ vl_nmap(int x0, int y0, int x1, int y1, int gx0, int gy0, int FS)
                 d *= vl_rk[4] * (float) a / 255.0f;
                 d = d > 0.55f ? 0.55f : d < -0.5f ? -0.5f : d;
                 m = vl_rk[5] * (float) a;
-                sr = sr * m > 40.0f ? 40.0f : sr * m;
-                sg = sg * m > 40.0f ? 40.0f : sg * m;
-                sb = sb * m > 40.0f ? 40.0f : sb * m;
+                { /* s209: shine, by material - as vgl_fs */
+                    int cr = (int) ((p >> rs) & 255), cg = (int) ((p >> gs) & 255), cb = (int) ((p >> bs) & 255);
+                    int mx = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
+                    int mn = cr < cg ? (cr < cb ? cr : cb) : (cg < cb ? cg : cb);
+                    float e = ((float) mx / 255.0f - 0.25f) / 0.5f, gloss;
+
+                    e = e < 0.0f ? 0.0f : e > 1.0f ? 1.0f : e;
+                    gloss = (mx > 5 ? 1.0f - (float) (mx - mn) / (float) mx : 0.0f) * e * e * (3.0f - 2.0f * e);
+                    m *= 0.6f + 2.0f * gloss;
+                }
+                sr = sr * m > 96.0f ? 96.0f : sr * m;
+                sg = sg * m > 96.0f ? 96.0f : sg * m;
+                sb = sb * m > 96.0f ? 96.0f : sb * m;
                 r = (int) ((float) ((p >> rs) & 255) * (1.0f + d) + sr);
                 g = (int) ((float) ((p >> gs) & 255) * (1.0f + d) + sg);
                 b2 = (int) ((float) ((p >> bs) & 255) * (1.0f + d) + sb);
@@ -16979,6 +17216,13 @@ levelwin::draw()
         }
     }
     vslab_draw(); /* s205: over the void's tiles, under everything standing */
+    vwall_hole_on = u.ux && !u.uswallow && !vwall_probe_off; /* s209: the walls in front of you see-through round you */
+    if (vwall_hole_on) {
+        double o = vulture_opts.wall_opacity;
+
+        vwall_amin = (int) ((o < 0.0 ? 0.0 : o > 1.0 ? 1.0 : o) * 255.0 + 0.5);
+        vfx_mover_screen(u.ux, u.uy, map_centre_x, map_centre_y, view_x, view_y, &vwall_hx, &vwall_hy);
+    }
     vhp.ok = false; /* s193 */
     if (vl_fog && vfx_shadows) { /* s191: shadows cast by the lights, on the floor */
         SDL_Rect cr = { (Sint16) this->abs_x, (Sint16) this->abs_y, (Uint16) this->w,
@@ -17016,15 +17260,14 @@ levelwin::draw()
             nwx += j, nwy += i, nnx += j, nny += i;
             nex += j, ney += i, nsx += j, nsy += i;
 
-            /* 1. West and north walls */
+            /* 1. West and north walls (s209: a room's front walls - solid,
+               their face toward you; see-through round you) */
             if (nwx >= 1 && nwx < COLNO && nwy >= 0 && nwy < ROWNO)
-                vulture_put_tile_shaded(
-                    x, y, maptile_wall[i][j].west,
-                    vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nwx, nwy)); /* s187 */
+                vwall_draw(x, y, maptile_wall[i][j].west, 0,
+                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nwx, nwy)); /* s187 */
             if (nnx >= 1 && nnx < COLNO && nny >= 0 && nny < ROWNO)
-                vulture_put_tile_shaded(
-                    x, y, maptile_wall[i][j].north,
-                    vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nnx, nny)); /* s187 */
+                vwall_draw(x, y, maptile_wall[i][j].north, 1,
+                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nnx, nny)); /* s187 */
 
             /* shortcut for unmapped case */
             if (map_back != V_MISC_UNMAPPED_AREA || map_obj != V_TILE_NONE) {
@@ -17144,15 +17387,14 @@ levelwin::draw()
                 vsp_put_special(x, y, j, i, map_data->get_glyph(MAP_SPECIAL, j, i));
             }
 
-            /* 7. South & East walls */
+            /* 7. South & East walls (s209: see-through round you when you
+               are behind them) */
             if (nsx >= 1 && nsx < COLNO && nsy >= 0 && nsy < ROWNO)
-                vulture_put_tile_shaded(
-                    x, y, maptile_wall[i][j].south,
-                    vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nsx, nsy)); /* s187 */
+                vwall_draw(x, y, maptile_wall[i][j].south, 2,
+                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nsx, nsy)); /* s187 */
             if (nex >= 1 && nex < COLNO && ney >= 0 && ney < ROWNO)
-                vulture_put_tile_shaded(
-                    x, y, maptile_wall[i][j].east,
-                    vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nex, ney)); /* s187 */
+                vwall_draw(x, y, maptile_wall[i][j].east, 3,
+                           vl_fog ? 0 : map_data->get_glyph(MAP_DARKNESS, nex, ney)); /* s187 */
         }
     }
 
@@ -18558,7 +18800,27 @@ levelwin::get_wall_tiles(int y, int x)
         if (nx >= 0 && nx < COLNO && ny >= 0 && ny < ROWNO) {
             bg = map_data->get_glyph(MAP_BACK, nx, ny);
             if (bg != V_TILE_WALL_GENERIC && bg != V_MISC_UNMAPPED_AREA) {
-                style = get_wall_decor(bg, y, x, ny, nx);
+                int fbg = bg, fx = nx, fy = ny, k2;
+
+                /* s209: a room wall's face toward a doorway or a corridor is
+                   that room's wall seen from there - the room's style, not
+                   the corridor's rough rock (solid full-height front walls
+                   made the doorways' rough sides stand out) */
+                if (bg == V_TILE_FLOOR_ROUGH || bg == V_TILE_FLOOR_ROUGH_LIT)
+                    for (k2 = 0; k2 < 8; k2++) { /* beside it first, then corner to corner */
+                        static const int ndx[8] = { -1, 0, 1, 0, -1, 1, 1, -1 };
+                        static const int ndy[8] = { 0, -1, 0, 1, -1, -1, 1, 1 };
+                        int ox = x + ndx[k2], oy = y + ndy[k2], b2;
+
+                        if (ox < 0 || ox >= COLNO || oy < 0 || oy >= ROWNO)
+                            continue;
+                        b2 = map_data->get_glyph(MAP_BACK, ox, oy);
+                        if (b2 == V_TILE_FLOOR_COBBLESTONE || b2 == V_MISC_FLOOR_NOT_VISIBLE) {
+                            fbg = b2, fx = ox, fy = oy;
+                            break;
+                        }
+                    }
+                style = get_wall_decor(fbg, y, x, fy, fx);
                 tile = (side == 0) ? walltiles[style].west
                        : (side == 1) ? walltiles[style].north
                        : (side == 2) ? walltiles[style].east

@@ -276,11 +276,11 @@ void vulture_read_options(void)
   std::string userdir = vulture_get_userdir();
 	
 	/* initialize these, in case they aren't set in the config file */
-	/* half-height walls + 0.6 opacity: full-height walls occlude the squares
-	 * behind them badly (S/E faces draw after monsters); this also matches
-	 * levelwin's own fallback, whose style switch defaults to walls_half */
-	vulture_opts.wall_opacity = 0.6;
-	vulture_opts.wall_style = V_WALL_DISPLAY_STYLE_HALF_HEIGHT;
+	/* s209: full-height walls; the walls in front of you turn see-through
+	 * round you (levelwin vwall_draw), wall_opacity being how solid they stay
+	 * there.  This also matches levelwin's own fallback (walls_full) */
+	vulture_opts.wall_opacity = 0.3;
+	vulture_opts.wall_style = V_WALL_DISPLAY_STYLE_FULL;
 	vulture_opts.width = 800;
 	vulture_opts.height = 600;
 	/* default OFF: user confs written by vulture_write_userconfig() before

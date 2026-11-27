@@ -558,6 +558,9 @@ struct vgm_nrec {
 	bool quad;    /* s204: src laid into the quad q (a door leaf, a falling body) */
 	float q[8];
 	SDL_Rect src;
+	bool holed;   /* s209: see-through round (hcx, hcy): hamin within hr0, solid past hr1 */
+	float hcx, hcy, hr0, hr1;
+	int hamin;
 };
 static std::vector<vgm_nrec> vgm_nlist; /* this frame's normal-map draws */
 static SDL_Rect vgm_clip;               /* the region the map pass redrew */
@@ -658,7 +661,13 @@ void main()
                         }
                     }
                     d = clamp(d * u_rkb.x * a / 255.0, -0.5, 0.55);
-                    spc = min(spc * (u_rkb.y * a), vec3(40.0));
+                    { /* s209: shine - grey and bright (metal, armour, wet stone) catch the
+                         light; colourful (cloth, wood, skin) and dark stay matte */
+                        float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+                        float gloss = (mx > 0.02 ? 1.0 - (mx - mn) / mx : 0.0) * smoothstep(0.25, 0.75, mx);
+
+                        spc = min(spc * (u_rkb.y * a) * (0.6 + 2.0 * gloss), vec3(96.0));
+                    }
                     rgb = min(rgb * (1.0 + d) + spc, 255.0);
                 }
             }
@@ -2012,7 +2021,7 @@ void vulture_gpumap_normal(SDL_Surface *s, int x, int y)
 	if (!vulture_gpumap_on || !s)
 		return;
 	r.s = s, r.x = x, r.y = y, r.ex = false, r.sx = r.sy = 1.0, r.deg = 0.0, r.alpha = 255;
-	r.quad = false;
+	r.quad = false, r.holed = false;
 	vgm_nlist.push_back(r);
 }
 
@@ -2024,7 +2033,92 @@ void vulture_gpumap_normal_ex(SDL_Surface *s, int dx, int dy, double sx, double 
 	if (!vulture_gpumap_on || !s)
 		return;
 	r.s = s, r.x = dx, r.y = dy, r.ex = true, r.sx = sx, r.sy = sy, r.deg = deg, r.alpha = alpha;
-	r.quad = false;
+	r.quad = false, r.holed = false;
+	vgm_nlist.push_back(r);
+}
+
+/* s209: a texture t laid at (x, y), w x h on the 1x map, coloured (r, g, b)
+   and faded (a), with a round hole: alpha amin within r0 of (cx, cy), full
+   past r1, smoothly between - a grid of 6 px cells whose vertices carry it */
+static void vgm_holed_geometry(SDL_Texture *t, float x, float y, float w, float h, float cx, float cy,
+                               float r0, float r1, int amin, Uint8 r, Uint8 g, Uint8 b, Uint8 a, bool view)
+{
+	static std::vector<SDL_Vertex> v;
+	static std::vector<int> idx;
+	int nx = (int) (w / 6.0f) + 1, ny = (int) (h / 6.0f) + 1, i, j;
+
+	if (w <= 0.0f || h <= 0.0f)
+		return;
+	v.resize((size_t) (nx + 1) * (size_t) (ny + 1));
+	idx.resize((size_t) nx * (size_t) ny * 6);
+	for (j = 0; j <= ny; j++)
+		for (i = 0; i <= nx; i++) {
+			float u = (float) i / nx, s = (float) j / ny, px = x + w * u, py = y + h * s, al;
+			float d = sqrtf((px - cx) * (px - cx) + (py - cy) * (py - cy));
+			SDL_Vertex &q = v[(size_t) j * (nx + 1) + i];
+
+			if (d <= r0) {
+				al = (float) amin;
+			} else if (d >= r1) {
+				al = 255.0f;
+			} else {
+				float f = (d - r0) / (r1 - r0);
+
+				f = f * f * (3.0f - 2.0f * f);
+				al = amin + (255.0f - amin) * f;
+			}
+			q.position.x = view ? vgm_vx(px) : px, q.position.y = view ? vgm_vy(py) : py;
+			q.color.r = r, q.color.g = g, q.color.b = b;
+			q.color.a = (Uint8) (al * a / 255.0f);
+			q.tex_coord.x = u, q.tex_coord.y = s;
+		}
+	for (j = 0; j < ny; j++)
+		for (i = 0; i < nx; i++) {
+			int k = (j * nx + i) * 6, a0 = j * (nx + 1) + i;
+
+			idx[k] = a0, idx[k + 1] = a0 + 1, idx[k + 2] = a0 + nx + 2;
+			idx[k + 3] = a0, idx[k + 4] = a0 + nx + 2, idx[k + 5] = a0 + nx + 1;
+		}
+	SDL_RenderGeometry(vulture_gpu, t, &v[0], (int) v.size(), &idx[0], (int) idx.size());
+}
+
+/* s209: a surface on the map layer at (x, y) as vulture_gpumap_blit puts it,
+   see-through round (cx, cy) - a wall in front of you */
+void vulture_gpumap_holed(SDL_Surface *s, int x, int y, float cx, float cy, float r0, float r1, int amin)
+{
+	SDL_Texture *t;
+	SDL_BlendMode bm = SDL_BLENDMODE_BLEND;
+	Uint8 r = 255, g = 255, b = 255, a = 255;
+
+	if (!vulture_gpumap_on || !s || !(t = vgm_texture(s)))
+		return;
+	SDL_GetSurfaceBlendMode(s, &bm);
+	SDL_GetSurfaceColorMod(s, &r, &g, &b);
+	SDL_GetSurfaceAlphaMod(s, &a);
+	if (vgm_view) { /* s201: the HD art, if there is some */
+		SDL_Texture *ht = vgm_hd_texture(s);
+
+		if (ht)
+			t = ht;
+	}
+	SDL_SetTextureBlendMode(t, bm);
+	SDL_SetTextureColorMod(t, 255, 255, 255);
+	SDL_SetTextureAlphaMod(t, 255);
+	SDL_SetTextureScaleMode(t, vgm_view ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+	vgm_holed_geometry(t, (float) x, (float) y, (float) s->w, (float) s->h, cx, cy, r0, r1, amin, r, g, b, a,
+	                   vgm_view);
+}
+
+/* s209: its normal map, holed the same way */
+void vulture_gpumap_normal_holed(SDL_Surface *s, int x, int y, float cx, float cy, float r0, float r1, int amin)
+{
+	vgm_nrec r;
+
+	if (!vulture_gpumap_on || !s)
+		return;
+	r.s = s, r.x = x, r.y = y, r.ex = false, r.sx = r.sy = 1.0, r.deg = 0.0, r.alpha = 255;
+	r.quad = false, r.holed = true;
+	r.hcx = cx, r.hcy = cy, r.hr0 = r0, r.hr1 = r1, r.hamin = amin;
 	vgm_nlist.push_back(r);
 }
 
@@ -2038,7 +2132,7 @@ void vulture_gpumap_normal_quad(SDL_Surface *s, const SDL_Rect *src, const float
 	if (!vulture_gpumap_on || !s || !quad)
 		return;
 	r.s = s, r.x = r.y = 0, r.ex = false, r.sx = r.sy = 1.0, r.deg = 0.0, r.alpha = alpha;
-	r.quad = true;
+	r.quad = true, r.holed = false;
 	for (k = 0; k < 8; k++)
 		r.q[k] = quad[k];
 	if (src)
@@ -2177,6 +2271,13 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			SDL_GetSurfaceBlendMode(r.s, &bm);
 			SDL_SetTextureBlendMode(t, bm);
 			SDL_SetTextureColorMod(t, 255, 255, 255);
+			if (r.holed) { /* s209: as vulture_gpumap_holed laid it */
+				SDL_SetTextureAlphaMod(t, 255);
+				SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+				vgm_holed_geometry(t, (float) r.x, (float) r.y, (float) r.s->w, (float) r.s->h, r.hcx, r.hcy,
+				                   r.hr0, r.hr1, r.hamin, 255, 255, 255, 255, vgm_tex_view);
+				continue;
+			}
 			if (r.quad && r.s->w > 0 && r.s->h > 0) { /* s204: as vulture_gpumap_quad laid it */
 				static const int qidx[6] = { 0, 1, 2, 0, 2, 3 };
 				SDL_Vertex v[4];
