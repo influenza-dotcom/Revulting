@@ -8821,6 +8821,17 @@ vrock_kind(mapdata *md, int x, int y)
     return 3;
 }
 
+/* s231: a doorway set in a wall line (walls either side, as you know
+   them): the wall's top runs on over it - a lintel, not a notch in the
+   ceiling */
+static bool
+vrock_lintel(mapdata *md, int x, int y)
+{
+    return vrock_kind(md, x, y) == 4
+           && ((vrock_kind(md, x - 1, y) == 1 && vrock_kind(md, x + 1, y) == 1)
+               || (vrock_kind(md, x, y - 1) == 1 && vrock_kind(md, x, y + 1) == 1));
+}
+
 static int
 vrock_wall_h(void) /* the walls' height now: their art's */
 {
@@ -9032,11 +9043,11 @@ vtop_prepare(mapdata *md, struct walls (*mw)[COLNO])
             for (x = 1; x < COLNO; x++) {
                 int kd = vrock_kind(md, x, y);
 
-                if (pass == 0 && kd == 1) {
+                if (pass == 0 && (kd == 1 || (kd == 4 && vrock_lintel(md, x, y)))) { /* s231: a lintel too */
                     int st = vrock_wall_stone(mw, x, y);
 
                     vtop_style[y][x] = (signed char) (st >= 0 ? st : V_WALL_DARK);
-                } else if (pass == 1 && (kd == 2 || kd == 4)) {
+                } else if (pass == 1 && (kd == 2 || kd == 4) && vtop_style[y][x] < 0) { /* s231: not a lintel again */
                     vtop_style[y][x] = (signed char) V_WALL_DARK;
                 } else {
                     continue;
@@ -9162,6 +9173,8 @@ vrock_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
             b = md->get_glyph(MAP_BACK, j, i);
             if (vrock_open(b)) {
                 vrock_reach[i][j] = 5;
+                if (vrock_lintel(md, j, i)) /* s231: a top over the doorway */
+                    vrock_hh[i][j] = (unsigned char) hw;
                 continue;
             }
             if (b == V_TILE_WALL_GENERIC) {
@@ -9580,11 +9593,13 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
 {
     static const int fadeby[VROCK_D + 1] = { 255, 255, 255, 255 }; /* s219: one shade - soft edges instead */
     int h, b, sh, side, hw, dd, ghost;
+    bool lintel;
 
     if (!vrock_on || !md || !isok(j, i) || !(h = vrock_hh[i][j]))
         return;
     b = md->get_glyph(MAP_BACK, j, i);
-    if (b != V_TILE_WALL_GENERIC) { /* s224: a lone block (no rock, no wall beside it) floats like a loose tile */
+    lintel = vrock_open(b); /* s231: a doorway's top - only a lintel is open ground with a height */
+    if (b != V_TILE_WALL_GENERIC && !lintel) { /* s224: a lone block (no rock, no wall beside it) floats like a loose tile */
         static const int n4[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
         int k4, nn = 0;
 
@@ -9596,13 +9611,13 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
     }
     hw = vrock_wall_h();
     dd = vrock_d[i][j] < 0 ? 0 : vrock_d[i][j] > VROCK_D ? VROCK_D : vrock_d[i][j];
-    sh = b == V_TILE_WALL_GENERIC ? 255 : fadeby[dd];
-    ghost = vrock_style == 4 && b != V_TILE_WALL_GENERIC && vrock_reach[i][j] >= 1 ? 80 : 0; /* s219 */
-    if (!ghost && b != V_TILE_WALL_GENERIC && vcut_r[i][j] < 168) /* s223: over the room you are in */
+    sh = b == V_TILE_WALL_GENERIC || lintel ? 255 : fadeby[dd];
+    ghost = vrock_style == 4 && b != V_TILE_WALL_GENERIC && !lintel && vrock_reach[i][j] >= 1 ? 80 : 0; /* s219 */
+    if (!ghost && b != V_TILE_WALL_GENERIC && !lintel && vcut_r[i][j] < 168) /* s223: over the room you are in */
         ghost = vcut_r[i][j];
-    if (b == V_TILE_WALL_GENERIC && vcut_now < 255) /* s223: a front wall of your room: its top too */
+    if ((b == V_TILE_WALL_GENERIC || lintel) && vcut_now < 255) /* s223: a front wall of your room: its top too */
         ghost = vcut_now;
-    for (side = 0; side < 2; side++) { /* screen-south (side 2), screen-east (side 3) */
+    for (side = 0; side < 2 && !lintel; side++) { /* screen-south (side 2), screen-east (side 3); s231: a lintel has none */
         int nj = side ? ej : sj, ni = side ? ei : si, nb, nh, face, dim;
         bool out = !isok(nj, ni);
 

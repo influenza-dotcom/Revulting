@@ -4979,6 +4979,16 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   vtop_fog (from the wall's vl_F, carried through the band with its stone
   and light; vl_fog_at) tints a remembered top cold (x0.80, x0.90, x1.12).
 
+### 231. Lintels over doorways
+
+- A doorway is not a wall square, so the ceiling had a black notch over
+  every door.  A doorway set in a wall line (known walls either side,
+  vrock_lintel) gets the walls' height and a top - only the top: the door's
+  art is its face - in the stone and light of the wall beside it, see-through
+  with its wall in the room you are in.  It stays open ground for reach.
+  (vtop_prepare's corridor pass skips what the wall pass set - doorways
+  were first given their wall's stone, then dark rock.)
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
