@@ -9967,6 +9967,43 @@ vghost_update(mapdata *md)
     }
 }
 
+/* s228: a sprite as a memory - washed out to a cool grey (a faint sprite in
+   full colour read as a live see-through one, like an invisible creature you
+   can see); cached per tile and facing */
+static SDL_Surface *
+vghost_surface(SDL_Surface *src, int key)
+{
+    static std::vector<std::pair<int, SDL_Surface *> > cache;
+    SDL_Surface *s;
+    size_t k;
+    int x, y;
+
+    for (k = 0; k < cache.size(); k++)
+        if (cache[k].first == key)
+            return cache[k].second;
+    if (cache.size() >= 256 || !src || !(s = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return NULL;
+    SDL_LockSurface(s);
+    for (y = 0; y < s->h; y++)
+        for (x = 0; x < s->w; x++) {
+            Uint32 *pp = (Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch) + x, p = *pp;
+            double r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255, l = 0.30 * r + 0.59 * g + 0.11 * b;
+            int nr, ng, nb;
+
+            if (!(p >> 24))
+                continue;
+            nr = (int) (r + (l * 0.86 - r) * 0.75), ng = (int) (g + (l * 0.94 - g) * 0.75);
+            nb = (int) (b + (l * 1.10 + 6.0 - b) * 0.75);
+            nr = nr < 0 ? 0 : nr > 255 ? 255 : nr, ng = ng < 0 ? 0 : ng > 255 ? 255 : ng;
+            nb = nb < 0 ? 0 : nb > 255 ? 255 : nb;
+            *pp = (p & 0xFF000000u) | (Uint32) nr << 16 | (Uint32) ng << 8 | (Uint32) nb;
+        }
+    SDL_UnlockSurface(s);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    cache.push_back(std::make_pair(key, s));
+    return s;
+}
+
 /* the map pass, a square with no creature seen on it: one you saw here */
 static void
 vghost_draw(int j, int i, int x, int y)
@@ -9988,7 +10025,31 @@ vghost_draw(int j, int i, int x, int y)
             a = 255.0 + (a - 255.0) * (now - g.t_lost) / 350.0;
         if (a < 6.0)
             continue;
-        vtw_put_tile_x(x, y, g.tile, g.face, 1.0, 1.0, 0.0, false, (int) a);
+        { /* s228: washed out - a memory, not a live see-through creature */
+            vulture_tile *tl = vulture_get_tile(g.tile);
+            SDL_Surface *img, *gs;
+            int art, dx;
+            bool flip;
+
+            if (!tl || !tl->graphic)
+                continue;
+            art = vtw_art_facing(g.tile, tl->graphic);
+            flip = g.face != 0 && ((art == 0 && g.face < 0) || (art != 0 && art != g.face));
+            img = tl->graphic, dx = x + tl->xmod;
+            if (flip) {
+                SDL_Surface *fl = vtw_flipped(g.tile, tl->graphic);
+
+                if (fl)
+                    img = fl, dx = x - tl->xmod - tl->graphic->w + 1;
+                else
+                    flip = false;
+            }
+            gs = vghost_surface(img, g.tile * 2 + (flip ? 1 : 0));
+            vtx_blit(gs ? gs : img, dx, y + tl->ymod, 1.0, 1.0, 0.0, false, a >= 255.0 ? 254 : (int) a);
+            if (g.t_lost && now - g.t_lost < 350 && gs) /* settling: its colour drains out */
+                vtx_blit(img, dx, y + tl->ymod, 1.0, 1.0, 0.0, false,
+                         (int) (254.0 * (1.0 - (now - g.t_lost) / 350.0)));
+        }
         mr.tile = g.tile, mr.face = g.face, mr.tx = x, mr.ty = y, mr.seq = ++vxr_seq; /* behind a wall: outlined */
         mr.xs = mr.ys = 1.0, mr.deg = 0.0;
         if (g.rel == 2)

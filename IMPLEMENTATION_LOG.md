@@ -4954,6 +4954,13 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   5.6 -> 9.2 ms in the hidden window, which is vsync phase as much as GPU
   (it swings run to run, see 217).
 
+### 228. Last-seen ghosts read as memories
+
+- A faint ghost in full colour read like a live see-through creature (an
+  invisible one you can see): ghosts are drawn washed out to a cool grey
+  (vghost_surface: 75% toward a cool luma, cached per tile and facing), and
+  while settling (350 ms) the colour drains out of it.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
