@@ -1693,6 +1693,71 @@ vpp_wanted(void)
    art's own angle (23.13); VULTURE_TILT overrides */
 static float vpp_probe_tilt = -1.0f; /* probe: s235 the same frame at other tilts */
 
+/*
+ * IMPLEMENTATION_LOG s236: turning the camera.  The view turns freely:
+ * vulture_view_yaw is the camera's turn past the quarter turn
+ * vulture_view_rot, kept within (-45, 45] - past that the quarter turn takes
+ * over (the map is laid out from that side: its walls, its order) and the
+ * turn carries on from -45, the same camera, so nothing jumps.  A right drag
+ * turns it; PageUp / PageDown turn smoothly to the next quarter.
+ */
+static double vcam_left = 0.0;  /* an animated turn still to make (degrees) */
+static Uint32 vcam_last = 0;
+static bool vcam_rdrag = false; /* the right button is turning the camera */
+static int vcam_racc = 0;       /* how far it has dragged (px) before it turns */
+
+static void
+vcam_turn(double deg)
+{
+    vulture_view_yaw += deg;
+    while (vulture_view_yaw > 45.0) {
+        vulture_view_yaw -= 90.0;
+        vulture_view_rot = (vulture_view_rot + 1) & 3;
+    }
+    while (vulture_view_yaw <= -45.0) {
+        vulture_view_yaw += 90.0;
+        vulture_view_rot = (vulture_view_rot + 3) & 3;
+    }
+}
+
+static bool
+vcam_busy(Uint32 now)
+{
+    (void) now;
+    return fabs(vcam_left) > 0.05;
+}
+
+/* each frame, before anything is laid out: the animated turn's next step
+   (it eases out over about a quarter second) */
+static void
+vcam_tick(void)
+{
+    Uint32 now = SDL_GetTicks();
+    double dt = vcam_last ? (now - vcam_last) / 1000.0 : 0.016, step;
+
+    vcam_last = now;
+    if (fabs(vcam_left) <= 0.05) {
+        vcam_left = 0.0;
+        return;
+    }
+    dt = dt > 0.1 ? 0.1 : dt < 0.0 ? 0.0 : dt;
+    step = vcam_left * (1.0 - exp(-dt / 0.07));
+    if (fabs(vcam_left - step) < 0.3)
+        step = vcam_left;
+    vcam_turn(step);
+    vcam_left -= step;
+}
+
+/* PageUp / PageDown: on to the next quarter turn that way (dir -1, +1) */
+static void
+vcam_quarter(int dir)
+{
+    double a = (vulture_view_rot & 3) * 90.0 + vulture_view_yaw + vcam_left, target;
+
+    target = dir > 0 ? (floor(a / 90.0 + 1e-6) + 1.0) * 90.0 : (ceil(a / 90.0 - 1e-6) - 1.0) * 90.0;
+    vcam_left += target - a;
+}
+
 static float
 vpp_tilt(void)
 {
@@ -1727,7 +1792,7 @@ vpp_extent(int w, int h, int *ex, int *ey)
     *ex = *ey = 0;
     if (!vpp_wanted())
         return;
-    vulture_persp_reach((float) w, (float) h, vpp_distance(h), vpp_tilt(), 0.0f, ex, ey); /* s235 */
+    vulture_persp_reach((float) w, (float) h, vpp_distance(h), vpp_tilt(), (float) vulture_view_yaw, ex, ey); /* s235, s236 */
 }
 
 /* a point laid on the iso picture, as it is seen (outside the map pass) */
@@ -8459,6 +8524,119 @@ vtorch_draw(int x, int y, int j, int i, int fj, int fi, int tile, bool eface)
     vulture_persp_restore(ppm, pps); /* s233 */
 }
 
+/* probe: s236 - VULTURE_SELFTEST_TURN: the room you start in seen at a
+   series of turns (44 and 46 straddle the quarter turn's handover) */
+static Uint32 vcam_probe_t = 0;
+static int vcam_probe_n = 0;
+
+static void
+vcam_probe_tick(Uint32 now)
+{
+    static const int ang[9] = { 0, 15, 30, 44, 46, 60, 90, 135, 200 };
+    char p[700];
+
+    if (now - vcam_probe_t < (vcam_probe_n ? 400u : 2500u))
+        return;
+    vcam_probe_t = SDL_GetTicks();
+    if (vcam_probe_n >= 9) {
+        vulture_view_rot = 0, vulture_view_yaw = 0.0, vcam_left = 0.0;
+        levwin->force_redraw();
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "turn probe: done\n");
+        vcam_probe_t = 0;
+        return;
+    }
+    vulture_view_rot = 0, vulture_view_yaw = 0.0, vcam_left = 0.0;
+    vcam_turn((double) ang[vcam_probe_n]);
+    levwin->set_view(u.ux, u.uy);
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    snprintf(p, sizeof p, "%s" "\\" "turn_%03d.bmp", getenv("VULTURE_SELFTEST"), ang[vcam_probe_n]);
+    vulture_save_frame_bmp(p);
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "turn probe: %d deg - rot %d yaw %.1f\n", ang[vcam_probe_n],
+                      vulture_view_rot, vulture_view_yaw);
+    vcam_probe_n++;
+}
+
+/* probe: s236 - VULTURE_SELFTEST_RDRAG: a right drag pushed as real mouse
+   events (press, moves with the button held, release): the camera turns and
+   no right click comes of it; then PageDown, shot mid-turn and after */
+static Uint32 vcam_drag_probe_t = 0;
+static int vcam_drag_probe_n = 0;
+
+static void
+vcam_drag_probe_push(Uint32 type, int x, int y, int xrel, Uint32 state)
+{
+    extern SDL_Window *vulture_sdl_window;
+    SDL_Event e;
+
+    memset(&e, 0, sizeof e);
+    e.type = type;
+    if (type == SDL_MOUSEMOTION) {
+        e.motion.windowID = vulture_sdl_window ? SDL_GetWindowID(vulture_sdl_window) : 0;
+        e.motion.x = x, e.motion.y = y, e.motion.xrel = xrel, e.motion.yrel = 0, e.motion.state = state;
+    } else {
+        e.button.windowID = vulture_sdl_window ? SDL_GetWindowID(vulture_sdl_window) : 0;
+        e.button.button = SDL_BUTTON_RIGHT, e.button.state = type == SDL_MOUSEBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED;
+        e.button.clicks = 1, e.button.x = x, e.button.y = y;
+    }
+    SDL_PushEvent(&e);
+}
+
+static void
+vcam_drag_probe_tick(Uint32 now)
+{
+    char p[700];
+    int cx = vulture_screen ? vulture_screen->w / 2 : 960, cy = vulture_screen ? vulture_screen->h / 2 : 540, k;
+
+    if (now - vcam_drag_probe_t < (vcam_drag_probe_n ? 300u : 2500u))
+        return;
+    vcam_drag_probe_t = SDL_GetTicks();
+    switch (vcam_drag_probe_n++) {
+    case 0:
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rdrag probe: before - rot %d yaw %.1f\n", vulture_view_rot,
+                          vulture_view_yaw);
+        vcam_drag_probe_push(SDL_MOUSEBUTTONDOWN, cx, cy, 0, 0);
+        break;
+    case 1:
+        for (k = 1; k <= 10; k++)
+            vcam_drag_probe_push(SDL_MOUSEMOTION, cx + 12 * k, cy, 12, SDL_BUTTON_RMASK);
+        break;
+    case 2:
+        vcam_drag_probe_push(SDL_MOUSEBUTTONUP, cx + 120, cy, 0, 0);
+        break;
+    case 3:
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "rdrag.bmp", getenv("VULTURE_SELFTEST"));
+        vulture_save_frame_bmp(p);
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rdrag probe: after the drag - rot %d yaw %.1f, dragging %d\n",
+                          vulture_view_rot, vulture_view_yaw, (int) vcam_rdrag);
+        {
+            SDL_Event e;
+
+            memset(&e, 0, sizeof e);
+            e.type = SDL_KEYDOWN, e.key.keysym.sym = SDLK_PAGEDOWN, e.key.keysym.scancode = SDL_SCANCODE_PAGEDOWN;
+            e.key.state = SDL_PRESSED;
+            e.key.windowID = 0;
+            SDL_PushEvent(&e);
+        }
+        break;
+    case 4:
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rdrag probe: PageDown - rot %d yaw %.1f, still to turn %.1f\n",
+                          vulture_view_rot, vulture_view_yaw, vcam_left);
+        break;
+    default:
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "rdrag_page.bmp", getenv("VULTURE_SELFTEST"));
+        vulture_save_frame_bmp(p);
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rdrag probe: done - rot %d yaw %.1f, still to turn %.1f\n",
+                          vulture_view_rot, vulture_view_yaw, vcam_left);
+        vcam_drag_probe_t = 0;
+        break;
+    }
+}
+
 /* probe: s211 - VULTURE_SELFTEST_TORCH: the room you start in, twice, a
    quarter second apart (the flames move) */
 static Uint32 vtorch_probe_t = 0;
@@ -11230,6 +11408,10 @@ vulture_idle_bob(bool at_map)
         vxr_probe_tick(now);
     if (vtorch_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s211 */
         vtorch_probe_tick(now);
+    if (vcam_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s236 */
+        vcam_probe_tick(now);
+    if (vcam_drag_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s236 */
+        vcam_drag_probe_tick(now);
     if (vgrade_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s212 */
         vgrade_probe_tick(now);
     if (vrefl_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s213 */
@@ -11251,7 +11433,8 @@ vulture_idle_bob(bool at_map)
         for (q = 0; q < vfx_list.size(); q++)
             if (vfx_list[q].kind == 3 && now - vfx_list[q].t0 < vfx_list[q].dur)
                 marker = true;
-        if (now - last < ((vsp_active(now) || vstair_busy(now) || vcut_busy(now)) ? 16u : marker ? 25u : vidle_interval)) /* s198, s216, s223: 60 fps */
+        if (now - last < ((vsp_active(now) || vstair_busy(now) || vcut_busy(now) || vcam_busy(now)) ? 16u
+                          : marker ? 25u : vidle_interval)) /* s198, s216, s223, s236: 60 fps */
             return;
     }
     last = now;
@@ -14506,6 +14689,10 @@ vselftest(void)
             vgrade_probe_t = SDL_GetTicks(), vgrade_probe_n = 0;
             break;
         }
+        if (getenv("VULTURE_SELFTEST_TURN")) /* probe: s236 turning the camera */
+            vcam_probe_t = SDL_GetTicks(), vcam_probe_n = 0;
+        if (getenv("VULTURE_SELFTEST_RDRAG")) /* probe: s236 a right drag */
+            vcam_drag_probe_t = SDL_GetTicks(), vcam_drag_probe_n = 0;
         if (getenv("VULTURE_SELFTEST_TORCH")) { /* probe: s211 torches */
             vtorch_probe_t = SDL_GetTicks(), vtorch_probe_n = 0;
             break;
@@ -17583,8 +17770,9 @@ vcontrols_page(void)
         "  Alt\tevery enemy's reach: the squares they can hit you from",
         "  Mouse wheel\tzoom in and out",
         "  Middle-drag\tmove the camera",
+        "  Right-drag\tturn the camera, any angle",
         "  Click your portrait\tcentre the camera on you (double-click: keep it there)",
-        "  PageUp / PageDown\tturn the view",
+        "  PageUp / PageDown\tturn the view a quarter",
         "  Shift+Tab\tthe level map",
         "",
         "Gear and items",
@@ -20199,6 +20387,12 @@ levelwin::draw()
         cur_dlevel = u.uz.dlevel;
     }
 
+    vcam_tick(); /* s236: an animated turn's step - before anything is laid out */
+    if (!vpp_wanted() && (vulture_view_yaw != 0.0 || vcam_left != 0.0)) { /* no camera: quarter turns only */
+        vcam_turn(vcam_left), vcam_left = 0.0;
+        vcam_turn(vulture_view_yaw > 0.0 ? 90.0 - vulture_view_yaw : -vulture_view_yaw);
+        vulture_view_yaw = 0.0;
+    }
     /* s75: tween offsets (camera + movers) and facing for this frame */
     vtw_prepare(view_x, view_y);
     vfx_scan(); /* s85: damage numbers / blood from HP changes */
@@ -20331,7 +20525,8 @@ levelwin::draw()
         vulture_gpumap_abandon();
     /* s233: the camera - its axis the window's middle (the map glides under it) */
     vulture_persp_frame(vgm && vpp_wanted(), (float) (this->abs_x + this->w / 2),
-                        (float) (this->abs_y + this->h / 2), vpp_distance(this->h), vpp_tilt(), 0.0f); /* s235: tilted */
+                        (float) (this->abs_y + this->h / 2), vpp_distance(this->h), vpp_tilt(),
+                        (float) vulture_view_yaw); /* s235: tilted; s236: turned */
     vl_gpu_frame = vgm && vl_on; /* s185 */
     /* s187: while lighting is on, the light layer draws the fog of war -
        remembered squares' tiles aren't darkened (vl_render's own test) */
@@ -21039,6 +21234,28 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
     /* s79: middle-mouse drag grabs the map (Dota 2 style): the map follows
      * the mouse, i.e. the camera moves the opposite way.  Whole tiles of
      * drag become view shifts; the remainder is a pixel offset. */
+    if ((state & SDL_BUTTON_RMASK) && !(state & SDL_BUTTON_MMASK) && vulture_persp_live()) {
+        /* s236: a right drag turns the camera (a right click without one
+           still clicks) - every waiting motion folded into this move */
+        SDL_Event mev;
+        int dx = xrel;
+
+        SDL_PumpEvents();
+        while (SDL_PeepEvents(&mev, 1, SDL_PEEKEVENT, SDL_MOUSEMOTION, SDL_MOUSEMOTION) > 0
+               && (mev.motion.state & SDL_BUTTON_RMASK)) {
+            SDL_PeepEvents(&mev, 1, SDL_GETEVENT, SDL_MOUSEMOTION, SDL_MOUSEMOTION);
+            vulture_handle_global_event(&mev);
+            dx += mev.motion.xrel;
+        }
+        vcam_racc += dx < 0 ? -dx : dx;
+        if (vcam_rdrag || vcam_racc > 6) {
+            vcam_rdrag = true;
+            vcam_left = 0.0;
+            vcam_turn(dx * 0.30);
+            force_redraw();
+        }
+        return V_EVENT_HANDLED_REDRAW;
+    }
     if (state & SDL_BUTTON_MMASK) {
         extern int vulture_render_scale;
         int sc = vulture_render_scale > 0 ? vulture_render_scale : 1;
@@ -21211,6 +21428,13 @@ levelwin::handle_mousebuttonup_event(window *target, void *result,
 
     /* s79: releasing a middle-mouse drag snaps the leftover pixels away, so
      * clicks map to squares exactly again */
+    if (button == SDL_BUTTON_RIGHT) { /* s236: the end of a right drag that turned the camera is no click */
+        bool turned = vcam_rdrag;
+
+        vcam_rdrag = false, vcam_racc = 0;
+        if (turned)
+            return V_EVENT_HANDLED_REDRAW;
+    }
     if (button == SDL_BUTTON_LEFT && vulture_swallow_lclick_up) {
         vulture_swallow_lclick_up = false; /* s128: it only stopped you */
         if (SDL_GetTicks() - vulture_swallow_lclick_t < 1500)
@@ -21502,6 +21726,11 @@ levelwin::handle_keydown_event(window *target, void *result, int sym, int mod,
      * starts at the stock angle. */
     case SDLK_PAGEUP:
     case SDLK_PAGEDOWN:
+        if (vpp_wanted() && vulture_gpumap_valid()) { /* s236: turned smoothly, through the camera */
+            vcam_quarter(sym == SDLK_PAGEUP ? -1 : 1);
+            force_redraw();
+            return V_EVENT_HANDLED_REDRAW;
+        }
         vulture_view_rot = (vulture_view_rot + ((sym == SDLK_PAGEUP) ? 3 : 1))
                            & 3;
         force_redraw();

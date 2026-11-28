@@ -294,7 +294,7 @@ void vulture_read_options(void)
 	vulture_opts.gpu = 1; /* s168: on unless the conf says gpu=0 */
 	vulture_opts.depth_blur = 1; /* s205 */
 	vulture_opts.perspective = 150; /* s233; s234: 130 -> 150 */
-	vulture_opts.camera_tilt = 40; /* s235 */
+	vulture_opts.camera_tilt = 0; /* s235; s236: the art's own angle (the user) */
 	/* 0 = auto-fit the overview map; see map::map() */
 	vulture_opts.map_zoom = 0;
 	/* classic permadeath unless the player opts out */

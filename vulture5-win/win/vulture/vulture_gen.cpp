@@ -379,6 +379,7 @@ void vulture_oom(int do_exit, const char *file, int line)
  * (dx, dy) -> (-dy, dx) per quarter turn.  Case is kept (run keys).
  */
 int vulture_view_rot = 0;
+double vulture_view_yaw = 0.0; /* s236 */
 
 int vulture_rotate_dirkey(int key)
 {
@@ -387,8 +388,13 @@ int vulture_rotate_dirkey(int key)
 	static const int ddx[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
 	static const int ddy[8] = { 0, -1, -1, -1, 0, 1, 1, 1 };
 	int i, r, dx, dy, t, upper = 0;
+	/* s236: the camera turns freely - a key's screen direction goes to the
+	   map direction nearest it, in eighths (a quarter turn is two) */
+	double ang = (vulture_view_rot & 3) * 90.0 + vulture_view_yaw;
+	int oct = (int) (ang >= 0.0 ? ang / 45.0 + 0.5 : ang / 45.0 - 0.5);
 
-	if (!(vulture_view_rot & 3))
+	oct = ((oct % 8) + 8) % 8;
+	if (!oct)
 		return key;
 
 	for (i = 0; i < 8; i++) {
@@ -404,16 +410,8 @@ int vulture_rotate_dirkey(int key)
 
 	dx = ddx[i];
 	dy = ddy[i];
-	for (r = vulture_view_rot & 3; r > 0; r--) {
-		t = dx;
-		dx = -dy;
-		dy = t;
-	}
-	for (i = 0; i < 8; i++)
-		if (ddx[i] == dx && ddy[i] == dy)
-			break;
-	if (i == 8)
-		return key;
+	(void) r, (void) t, (void) dx, (void) dy;
+	i = (i + oct) & 7; /* s236: an eighth a step (the table runs round the compass) */
 	if (iflags.num_pad)
 		return digits[i];
 	return upper ? (lower[i] & ~0x20) : lower[i];

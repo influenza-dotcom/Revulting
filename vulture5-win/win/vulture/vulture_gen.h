@@ -83,6 +83,7 @@ extern int vulture_translate_key(int cmd_key);
 /* IMPLEMENTATION_LOG s62: view rotation (0-3 quarter turns) and the map-
    direction-key rotation that keeps movement keys screen-relative */
 extern int vulture_view_rot;
+extern double vulture_view_yaw; /* s236: the camera's turn past vulture_view_rot, (-45, 45] degrees */
 extern int vulture_rotate_dirkey(int key);
 extern int vulture_numpad_to_hjkl(int cmd_key, int shift);
 extern int vulture_make_nh_key(int sym, int mod, int ch);

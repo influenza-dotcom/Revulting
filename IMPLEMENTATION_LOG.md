@@ -5087,6 +5087,27 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - The extents the camera sees past the window come from the corners'
   inverse (vulture_persp_reach).
 
+### 236. Turning the camera
+
+- The user: "make the camera tilt the old angle, but let me rotate the
+  view".  camera_tilt's default is 0 again (the art's own 23 degrees).
+- The view turns freely.  vulture_view_yaw (vulture_gen.cpp) is the
+  camera's turn past the quarter turn vulture_view_rot, kept within
+  (-45, 45]: past that the quarter turn takes over - the map laid out from
+  that side, its walls and its order - and the turn carries on from -45.
+  It is the same camera, so nothing jumps: at 45 degrees the faces that
+  swap are edge-on (the TURN probe's 44 and 46 match).
+- A right drag turns it (0.3 degrees a pixel; a right click without a drag
+  still clicks - the release after a turning drag is swallowed).  PageUp /
+  PageDown ease to the next quarter turn (about a quarter second), at 60
+  fps.  Without the camera (perspective 0, no GPU map) they turn a quarter
+  at once as before.
+- Movement keys name screen directions: a key goes to the map direction
+  nearest its screen direction, in eighths (vulture_rotate_dirkey).
+- Probes: VULTURE_SELFTEST_TURN (the start room at 0, 15, 30, 44, 46, 60,
+  90, 135, 200 degrees), VULTURE_SELFTEST_RDRAG (a right drag pushed as
+  mouse events, then PageDown).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
