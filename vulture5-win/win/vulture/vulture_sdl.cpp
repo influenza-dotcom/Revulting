@@ -452,6 +452,10 @@ struct vgm_hdkey {   /* where a surface's HD art comes from */
 static std::unordered_map<SDL_Surface *, vgm_hdkey> vgm_hd_src;
 static std::unordered_map<std::string, SDL_Texture *> vgm_hd_cache; /* by vgm_hd_name */
 static std::unordered_map<std::string, bool> vgm_hd_none;           /* art that isn't there */
+/* s229: HD art made in code for a 1x surface made in code (a wall's top, a
+   washed-out ghost): the 2x surface kept, its texture made when wanted */
+static std::unordered_map<SDL_Surface *, SDL_Surface *> vgm_hd_made;
+static std::unordered_map<SDL_Surface *, SDL_Texture *> vgm_hd_made_t;
 static int vgm_hd_state = -1;     /* tiles_hd/: -1 not looked yet, 0 absent, 1 there */
 static bool vgm_view = false;     /* this frame's map is drawn at the zoom */
 static bool vgm_tex_view = false; /* the map layer holds a map drawn so */
@@ -733,6 +737,14 @@ static void vgm_drop(bool destroy)
 				SDL_DestroyTexture(hi->second);
 		vgm_hd_cache.clear();
 		vgm_hd_none.clear();
+		{ /* s229 */
+			std::unordered_map<SDL_Surface *, SDL_Texture *>::iterator mi;
+
+			if (destroy)
+				for (mi = vgm_hd_made_t.begin(); mi != vgm_hd_made_t.end(); ++mi)
+					SDL_DestroyTexture(mi->second);
+			vgm_hd_made_t.clear();
+		}
 	}
 	vgm_tex = vgm_out = vgm_big = vgm_rgb = NULL;
 	{ /* s205: the depth-of-field steps */
@@ -879,6 +891,22 @@ static SDL_Texture *vgm_hd_texture(SDL_Surface *s)
 	long n;
 	int x, y;
 
+	{ /* s229: art made in code */
+		std::unordered_map<SDL_Surface *, SDL_Surface *>::iterator mi = vgm_hd_made.find(s);
+
+		if (mi != vgm_hd_made.end()) {
+			std::unordered_map<SDL_Surface *, SDL_Texture *>::iterator ti = vgm_hd_made_t.find(s);
+
+			if (ti != vgm_hd_made_t.end())
+				return ti->second;
+			if ((t = SDL_CreateTexture(vulture_gpu, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC,
+			                           mi->second->w, mi->second->h)) != NULL) {
+				SDL_UpdateTexture(t, NULL, mi->second->pixels, mi->second->pitch);
+				vgm_hd_made_t[s] = t;
+			}
+			return t;
+		}
+	}
 	if (si == vgm_hd_src.end())
 		return NULL;
 	name = vgm_hd_name(si->second);
@@ -1020,6 +1048,85 @@ void vulture_gpu_hd_derive_cut(SDL_Surface *copy, SDL_Surface *orig, SDL_Surface
 	k = it->second;
 	k.cut = mask, k.cutout = outside;
 	vgm_hd_src[copy] = k;
+}
+
+/* s229: a registered surface's HD art as a new ARGB surface - mirrored and
+   tinted as its variant says (a cut is not applied) - or NULL; the caller
+   frees it */
+SDL_Surface *vulture_gpu_hd_surface(SDL_Surface *s)
+{
+	std::unordered_map<SDL_Surface *, vgm_hdkey>::iterator si = vgm_hd_src.find(s);
+	SDL_Surface *raw = NULL, *c;
+	FILE *fp;
+	long n;
+	int x, y;
+
+	if (!s || si == vgm_hd_src.end() || vgm_hd_state != 1)
+		return NULL;
+	if ((fp = fopen(si->second.path.c_str(), "rb")) != NULL) {
+		fseek(fp, 0, SEEK_END);
+		n = ftell(fp);
+		rewind(fp);
+		if (n > 0) {
+			char *data = new char[n];
+
+			if (fread(data, (size_t) n, 1, fp) == 1)
+				raw = vulture_load_surface(data, (unsigned int) n);
+			delete[] data;
+		}
+		fclose(fp);
+	}
+	c = raw ? SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_ARGB8888, 0) : NULL;
+	if (raw)
+		SDL_FreeSurface(raw);
+	if (!c || c->w != s->w * 2 || c->h != s->h * 2) {
+		if (c)
+			SDL_FreeSurface(c);
+		return NULL;
+	}
+	if (SDL_LockSurface(c) == 0) {
+		const vgm_hdkey &k = si->second;
+
+		for (y = 0; y < c->h; y++) {
+			Uint32 *row = (Uint32 *) ((Uint8 *) c->pixels + (size_t) y * c->pitch);
+
+			if (k.flip)
+				for (x = 0; x < c->w / 2; x++) {
+					Uint32 tmp = row[x];
+
+					row[x] = row[c->w - 1 - x], row[c->w - 1 - x] = tmp;
+				}
+			if (k.rgb != 256 || k.alpha != 256)
+				for (x = 0; x < c->w; x++) {
+					Uint32 p = row[x];
+					Uint32 A = ((p >> 24) * (Uint32) k.alpha) >> 8;
+					Uint32 R = (((p >> 16) & 255) * (Uint32) k.rgb) >> 8;
+					Uint32 G = (((p >> 8) & 255) * (Uint32) k.rgb) >> 8;
+					Uint32 B = ((p & 255) * (Uint32) k.rgb) >> 8;
+
+					row[x] = (A > 255 ? 255 : A) << 24 | (R > 255 ? 255 : R) << 16
+						| (G > 255 ? 255 : G) << 8 | (B > 255 ? 255 : B);
+				}
+		}
+		SDL_UnlockSurface(c);
+	}
+	return c;
+}
+
+/* s229: the HD art of a 1x surface made in code (taken over: freed with it never) */
+void vulture_gpu_hd_set_made(SDL_Surface *s1x, SDL_Surface *hd)
+{
+	std::unordered_map<SDL_Surface *, SDL_Texture *>::iterator ti;
+
+	if (!s1x || !hd)
+		return;
+	if (vgm_hd_made.count(s1x))
+		SDL_FreeSurface(vgm_hd_made[s1x]);
+	vgm_hd_made[s1x] = hd;
+	if ((ti = vgm_hd_made_t.find(s1x)) != vgm_hd_made_t.end()) {
+		SDL_DestroyTexture(ti->second);
+		vgm_hd_made_t.erase(ti);
+	}
 }
 
 bool vulture_gpumap_hd_ok(void)

@@ -4961,6 +4961,17 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   (vghost_surface: 75% toward a cool luma, cached per tile and facing), and
   while settling (350 ms) the colour drains out of it.
 
+### 229. Sharp tops and ghosts on a zoomed map
+
+- Zoomed in, walls come from tiles_hd but the tops (made in code from the
+  1x face art) and the washed-out ghosts were blown up - blocky next to the
+  sharp walls.  vulture_sdl: vulture_gpu_hd_surface (a registered
+  surface's HD art as a surface, its flip/tint applied) and
+  vulture_gpu_hd_set_made (the HD double of a surface made in code: kept,
+  its texture remade after a renderer reset; vgm_hd_texture looks there
+  first).  vrock_top_warp lays the face at either scale; vrock_top_tex and
+  vghost_surface make both.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

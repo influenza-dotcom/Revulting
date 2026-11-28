@@ -8885,58 +8885,38 @@ vrock_cap(int var, bool normal, bool dark = false) /* a block's top: the square'
 static signed char vtop_style[ROWNO][COLNO]; /* the stone each top is (-1: the plain grain) */
 static float vtop_light[ROWNO][COLNO];       /* the light it is lit by */
 
+/* s225/s226: a wall face's art laid flat on a top's diamond, at a scale
+   (1: the 1x art, 2: its HD double) - along the wall and into it, the
+   face's shading down its height divided out (stucco striped every top) */
 static SDL_Surface *
-vrock_top_tex(int style)
+vrock_top_warp(SDL_Surface *src, int fh, int sc)
 {
-    static SDL_Surface *c[V_WALL_STYLE_MAX][2];
-    bool full = vulture_opts.wall_style == V_WALL_DISPLAY_STYLE_FULL;
-    const int W = 2 * V_MAP_XMOD, H = 2 * V_MAP_YMOD;
-    vulture_tile *wt;
-    SDL_Surface *src, *s;
-    double ar = 0, ag = 0, ab = 0, an = 0;
-    int x, y, fh;
+    const int W = 2 * V_MAP_XMOD * sc, H = 2 * V_MAP_YMOD * sc;
+    SDL_Surface *s;
+    double ar = 0, ag = 0, ab = 0, an = 0, rowm[256][4];
+    int x, y;
 
-    if (style < 0 || style >= V_WALL_STYLE_MAX)
+    if (!src || !(s = SDL_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_ARGB8888)))
         return NULL;
-    if (c[style][full ? 0 : 1])
-        return c[style][full ? 0 : 1];
-    wt = vulture_get_tile(full ? walls_full[style].south : walls_half[style].south);
-    if (!wt || !wt->graphic || !(src = SDL_ConvertSurfaceFormat(wt->graphic, SDL_PIXELFORMAT_ARGB8888, 0)))
-        return NULL;
-    if (!(s = SDL_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_ARGB8888))) {
-        SDL_FreeSurface(src);
-        return NULL;
-    }
-    fh = -wt->ymod; /* the face's height (75 full, 43 half) */
     SDL_LockSurface(src);
     SDL_LockSurface(s);
-    /* s226: the mean colour of each row down the face (the face is skewed:
-       column ax starts at 22 ax / 56) - its shading top to bottom, divided
-       out below (laid flat, it striped every top) */
-    double rowm[128][4];
-
     memset(rowm, 0, sizeof rowm);
-    for (x = 0; x < src->w; x++)
+    for (x = 0; x < src->w; x++) /* each row's mean down the (skewed) face, and the face's */
         for (y = 0; y < src->h; y++) {
             Uint32 p = ((Uint32 *) ((Uint8 *) src->pixels + (size_t) y * src->pitch))[x];
             int r = y - (int) (22.0 * x / 56.0);
 
-            if ((p >> 24) < 200 || r < 0 || r >= 128)
+            if ((p >> 24) < 200)
                 continue;
-            rowm[r][0] += (p >> 16) & 255, rowm[r][1] += (p >> 8) & 255, rowm[r][2] += p & 255, rowm[r][3]++;
-        }
-    for (y = 0; y < 128; y++)
-        if (rowm[y][3] > 0)
-            rowm[y][0] /= rowm[y][3], rowm[y][1] /= rowm[y][3], rowm[y][2] /= rowm[y][3];
-    for (y = 0; y < src->h; y++) /* the face's mean colour: for any hole */
-        for (x = 0; x < src->w; x++) {
-            Uint32 p = ((Uint32 *) ((Uint8 *) src->pixels + (size_t) y * src->pitch))[x];
-
-            if ((p >> 24) >= 200)
-                ar += (p >> 16) & 255, ag += (p >> 8) & 255, ab += p & 255, an++;
+            ar += (p >> 16) & 255, ag += (p >> 8) & 255, ab += p & 255, an++;
+            if (r >= 0 && r < 256)
+                rowm[r][0] += (p >> 16) & 255, rowm[r][1] += (p >> 8) & 255, rowm[r][2] += p & 255, rowm[r][3]++;
         }
     if (an > 0)
         ar /= an, ag /= an, ab /= an;
+    for (y = 0; y < 256; y++)
+        if (rowm[y][3] > 0)
+            rowm[y][0] /= rowm[y][3], rowm[y][1] /= rowm[y][3], rowm[y][2] /= rowm[y][3];
     for (y = 0; y < H; y++)
         for (x = 0; x < W; x++) {
             double u = (x + 0.5 - W / 2.0) / (W / 2.0), v = (y + 0.5 - H / 2.0) / (H / 2.0);
@@ -8944,23 +8924,23 @@ vrock_top_tex(int style)
             Uint32 px = 0;
 
             if (fabs(u) + fabs(v) <= 1.03) {
-                int ax, ay;
+                int ax, ay, rr, ch;
                 Uint32 q;
 
                 a = a < 0.0 ? 0.0 : a > 1.0 ? 1.0 : a, b = b < 0.0 ? 0.0 : b > 1.0 ? 1.0 : b;
-                ax = (int) (b * (src->w - 2));
-                ay = (int) (22.0 * ax / 56.0 + 4.0 + a * (fh - 10));
+                ax = (int) (b * (src->w - 2 * sc));
+                ay = (int) (22.0 * ax / 56.0 + 4.0 * sc + a * (fh - 10) * sc);
                 ax = ax < 0 ? 0 : ax >= src->w ? src->w - 1 : ax;
                 ay = ay < 0 ? 0 : ay >= src->h ? src->h - 1 : ay;
                 q = ((Uint32 *) ((Uint8 *) src->pixels + (size_t) ay * src->pitch))[ax];
                 if ((q >> 24) < 128) { /* off the face: its mean colour */
                     q = (Uint32) ar << 16 | (Uint32) ag << 8 | (Uint32) ab;
-                } else { /* s226: this row's shading out, the face's mean in */
-                    int rr = ay - (int) (22.0 * ax / 56.0), ch;
+                } else { /* this row's shading out, the face's mean in */
                     double cc[3] = { (double) ((q >> 16) & 255), (double) ((q >> 8) & 255), (double) (q & 255) },
                            mm[3] = { ar, ag, ab };
 
-                    if (rr >= 0 && rr < 128 && rowm[rr][3] > 3)
+                    rr = ay - (int) (22.0 * ax / 56.0);
+                    if (rr >= 0 && rr < 256 && rowm[rr][3] > 3)
                         for (ch = 0; ch < 3; ch++) {
                             double f = rowm[rr][ch] > 4.0 ? mm[ch] / rowm[rr][ch] : 1.0;
 
@@ -8975,8 +8955,38 @@ vrock_top_tex(int style)
         }
     SDL_UnlockSurface(s);
     SDL_UnlockSurface(src);
-    SDL_FreeSurface(src);
     SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    return s;
+}
+
+static SDL_Surface *
+vrock_top_tex(int style)
+{
+    static SDL_Surface *c[V_WALL_STYLE_MAX][2];
+    bool full = vulture_opts.wall_style == V_WALL_DISPLAY_STYLE_FULL;
+    vulture_tile *wt;
+    SDL_Surface *src, *s;
+
+    if (style < 0 || style >= V_WALL_STYLE_MAX)
+        return NULL;
+    if (c[style][full ? 0 : 1])
+        return c[style][full ? 0 : 1];
+    wt = vulture_get_tile(full ? walls_full[style].south : walls_half[style].south);
+    if (!wt || !wt->graphic || !(src = SDL_ConvertSurfaceFormat(wt->graphic, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return NULL;
+    s = vrock_top_warp(src, -wt->ymod, 1);
+    SDL_FreeSurface(src);
+    if (s && vulture_gpumap_hd_ok()) { /* s229: zoomed, its top from the wall's HD art - sharp like the wall */
+        SDL_Surface *hd = vulture_gpu_hd_surface(wt->graphic);
+
+        if (hd) {
+            SDL_Surface *s2 = vrock_top_warp(hd, -wt->ymod, 2);
+
+            SDL_FreeSurface(hd);
+            if (s2)
+                vulture_gpu_hd_set_made(s, s2);
+        }
+    }
     c[style][full ? 0 : 1] = s;
     return s;
 }
@@ -10000,6 +10010,29 @@ vghost_surface(SDL_Surface *src, int key)
         }
     SDL_UnlockSurface(s);
     SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    if (vulture_gpumap_hd_ok()) { /* s229: its HD double washed out the same way, for a zoomed map */
+        SDL_Surface *hd = vulture_gpu_hd_surface(src);
+
+        if (hd) {
+            SDL_LockSurface(hd);
+            for (y = 0; y < hd->h; y++)
+                for (x = 0; x < hd->w; x++) {
+                    Uint32 *pp = (Uint32 *) ((Uint8 *) hd->pixels + (size_t) y * hd->pitch) + x, p = *pp;
+                    double r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255, l = 0.30 * r + 0.59 * g + 0.11 * b;
+                    int nr, ng, nb;
+
+                    if (!(p >> 24))
+                        continue;
+                    nr = (int) (r + (l * 0.86 - r) * 0.75), ng = (int) (g + (l * 0.94 - g) * 0.75);
+                    nb = (int) (b + (l * 1.10 + 6.0 - b) * 0.75);
+                    nr = nr < 0 ? 0 : nr > 255 ? 255 : nr, ng = ng < 0 ? 0 : ng > 255 ? 255 : ng;
+                    nb = nb < 0 ? 0 : nb > 255 ? 255 : nb;
+                    *pp = (p & 0xFF000000u) | (Uint32) nr << 16 | (Uint32) ng << 8 | (Uint32) nb;
+                }
+            SDL_UnlockSurface(hd);
+            vulture_gpu_hd_set_made(s, hd);
+        }
+    }
     cache.push_back(std::make_pair(key, s));
     return s;
 }
@@ -10229,12 +10262,22 @@ vrock_probe_tick(Uint32 now)
     if (now - vrock_probe_t < 900)
         return;
     vrock_probe_t = now;
-    if (getenv("VULTURE_ROCK_MINES")) { /* the Gnomish Mines: walls everywhere */
+    if (getenv("VULTURE_ROCK_MINES") || getenv("VULTURE_ROCK_SPECIAL")) { /* the Mines, or a special level */
         switch (vrock_probe_n++) {
         case 0: {
             d_level nl;
+            const char *sp = getenv("VULTURE_ROCK_SPECIAL");
 
-            nl.dnum = mines_dnum, nl.dlevel = (xint16) atoi(getenv("VULTURE_ROCK_MINES"));
+            if (sp && !strcmp(sp, "oracle")) {
+                nl = oracle_level;
+            } else if (sp && !strcmp(sp, "bigroom") && bigroom_level.dlevel) {
+                nl = bigroom_level;
+            } else if (sp && !strcmp(sp, "soko")) {
+                nl.dnum = sokoban_dnum, nl.dlevel = 1;
+                nl.dlevel = (xint16) dunlevs_in_dungeon(&nl); /* the way in is its lowest level */
+            } else {
+                nl.dnum = mines_dnum, nl.dlevel = (xint16) atoi(getenv("VULTURE_ROCK_MINES") ? getenv("VULTURE_ROCK_MINES") : "1");
+            }
             goto_level(&nl, FALSE, FALSE, FALSE);
             vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rock probe: in the mines, depth %d\n",
                               (int) depth(&u.uz));
