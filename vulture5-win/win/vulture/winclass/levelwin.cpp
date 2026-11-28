@@ -9088,7 +9088,7 @@ vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool 
         return;
     SDL_SetSurfaceColorMod(c, (Uint8) sh, (Uint8) sh, (Uint8) sh);
     SDL_SetSurfaceAlphaMod(c, (Uint8) (ghost ? ghost : 255)); /* s219: see-through */
-    if (f > 0.0f && vwall_hole_on && vwall_amin < 250 && vulture_gpumap_on) {
+    if (f > 0.0f && vwall_hole_on && vwall_amin < 250 && vulture_gpumap_on && !ghost) { /* s224: not a see-through top */
         float hx = (float) vwall_hx, hy = (float) (vwall_hy - VWALL_BODY);
         float qx = hx < cx0 ? cx0 : hx > cx0 + c->w ? cx0 + c->w : hx;
         float qy = hy < cy0 ? cy0 : hy > cy0 + c->h ? cy0 + c->h : hy;
@@ -9124,7 +9124,7 @@ vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool 
             vulture_put_img(cx0, cy0, es);
         SDL_SetSurfaceAlphaMod(es, 255);
     }
-    for (int e = 0; e < 2; e++) { /* the lips */
+    for (int e = 0; e < 2 && !ghost; e++) { /* the lips (s224: none on a see-through top - a grid over the floor) */
         SDL_Surface *ls = (lips >> e) & 1 ? vrock_lip(e) : NULL;
 
         if (!ls)
@@ -9277,7 +9277,7 @@ vcut_mark(mapdata *md, int room, double kk, int vx, int vy, int tr, int diff, in
 {
     static signed char rr[ROWNO][COLNO];
     static const int bk[3][3] = { { -1, 0, 1 }, { 0, -1, 1 }, { -1, -1, 2 } }; /* behind: UL, UR, up */
-    int ii, jj, k, a = 255 - (int) ((255 - vwall_amin) * kk + 0.5), ra = 255 - (int) ((255 - 80) * kk + 0.5);
+    int ii, jj, k, a = 255 - (int) ((255 - vwall_amin) * kk + 0.5), ra = 255 - (int) ((255 - 45) * kk + 0.5); /* s224: 45 */
     struct mkroom *mr;
 
     if (room < 0 || kk <= 0.0)
@@ -9327,8 +9327,20 @@ vcut_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
     memset(vcut_r, 255, sizeof vcut_r);
     vcut_now = 255;
     if (md && u.ux && !u.uswallow && vwall_hole_on && vwall_amin < 250 && !getenv("VULTURE_NO_ROOMCUT") && !vcut_probe_off) {
-        int rn = levl[u.ux][u.uy].roomno;
+        int rn = levl[u.ux][u.uy].roomno, k;
 
+        /* IMPLEMENTATION_LOG s224: standing in a doorway you are still at
+           that room - the room beside the door, not none (the walls faded
+           back in and out at every door you went through) */
+        if (rn < ROOMOFFSET && IS_DOOR(levl[u.ux][u.uy].typ))
+            for (k = 0; k < 4 && rn < ROOMOFFSET; k++) {
+                static const int ddx[4] = { 1, -1, 0, 0 }, ddy[4] = { 0, 0, 1, -1 };
+                int nx = u.ux + ddx[k], ny = u.uy + ddy[k];
+
+                if (isok(nx, ny) && levl[nx][ny].roomno >= ROOMOFFSET
+                    && md->get_glyph(MAP_BACK, nx, ny) != V_MISC_UNMAPPED_AREA)
+                    rn = levl[nx][ny].roomno;
+            }
         if (rn >= ROOMOFFSET && rn - ROOMOFFSET < (MAXNROFROOMS + 1) * 2)
             room = rn - ROOMOFFSET;
     }
@@ -9375,6 +9387,16 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
     if (!vrock_on || !md || !isok(j, i) || !(h = vrock_hh[i][j]))
         return;
     b = md->get_glyph(MAP_BACK, j, i);
+    if (b != V_TILE_WALL_GENERIC) { /* s224: a lone block (no rock, no wall beside it) floats like a loose tile */
+        static const int n4[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+        int k4, nn = 0;
+
+        for (k4 = 0; k4 < 4; k4++)
+            if (isok(j + n4[k4][0], i + n4[k4][1]) && vrock_hh[i + n4[k4][1]][j + n4[k4][0]])
+                nn++;
+        if (!nn)
+            return;
+    }
     hw = vrock_wall_h();
     dd = vrock_d[i][j] < 0 ? 0 : vrock_d[i][j] > VROCK_D ? VROCK_D : vrock_d[i][j];
     sh = b == V_TILE_WALL_GENERIC ? 255 : fadeby[dd];
@@ -9446,12 +9468,7 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
             else if (!ghost && vrock_ghost_at(md, nj, ni)) /* s219: the solid ceiling's edge */
                 lips |= 1 << e;
         }
-        { /* s219: its own light - rock in the dark, a lit room's wall bright */
-            float lo = vl_light_at(j, i) / 0.7f;
-
-            lo = lo > 1.0f ? 1.0f : lo < 0.0f ? 0.0f : lo;
-            sh = (int) (sh * (0.55f + 0.45f * lo));
-        }
+        sh = sh * 72 / 100; /* s219, s224: one shade for every top (per-square light made a patchwork) */
         { /* s219: the soft edges - toward rock you do not know (or the map's edge) */
             static const int ev[4][2] = { { -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 } };
 

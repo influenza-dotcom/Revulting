@@ -4904,6 +4904,23 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   skip what shows through a see-through-all-over face (vxr_face_t.cut).
   Probe ROCK saves a _s4nocut frame to compare.
 
+### 224. Polish: the ceiling and the room you are in
+
+- The user: stop adding, polish what we have.  Found with the ROCK probe
+  and fixed:
+  - Standing in a doorway counted as outside the room, so its walls faded
+    back in and out at every door: a doorway belongs to the room beside it.
+  - See-through tops drew their lips - a faint grid of diamonds over the
+    floor below: none on a see-through top.
+  - The rock over the room you are in darkened its front rows: 45 alpha
+    (was 80).
+  - Per-square light on tops (lit rooms' wall tops brighter than the rock
+    beside them) read as a patchwork: one shade for every top.
+  - The see-through circle cut into tops that are see-through already; over
+    rock it showed a darker crescent: no circle on a see-through top.
+  - A lone block of seen rock with no rock or wall beside it floated like a
+    loose tile: not drawn.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
