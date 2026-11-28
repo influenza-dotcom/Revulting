@@ -2444,6 +2444,14 @@ void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, double sy
 
 	if (!vulture_gpumap_on || !s || sx <= 0.0 || sy <= 0.0 || !(t = vgm_texture(s)))
 		return;
+	SDL_BlendMode sbm = SDL_BLENDMODE_BLEND; /* s239: an added surface (a rim of light) stays added, in its colour */
+	Uint8 scr = 255, scg = 255, scb = 255;
+
+	SDL_GetSurfaceBlendMode(s, &sbm);
+	if (sbm == SDL_BLENDMODE_ADD)
+		SDL_GetSurfaceColorMod(s, &scr, &scg, &scb);
+	else
+		sbm = SDL_BLENDMODE_BLEND, scr = 255, scg = (Uint8) (red ? 77 : 255), scb = (Uint8) (red ? 77 : 255);
 	if (vpp_active() && vpp_mode == 2) { /* s233: a billboard - the pose scaled about its square's foot */
 		SDL_Texture *ht = vgm_view ? vgm_hd_texture(s) : NULL;
 
@@ -2455,8 +2463,8 @@ void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, double sy
 		if (vgm_view)
 			d.x = vgm_vx(d.x), d.y = vgm_vy(d.y), d.w *= vgm_vsx, d.h *= vgm_vsy;
 		c.x = d.w * 0.5f, c.y = d.h;
-		SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
-		SDL_SetTextureColorMod(t, 255, red ? 77 : 255, red ? 77 : 255);
+		SDL_SetTextureBlendMode(t, sbm);
+		SDL_SetTextureColorMod(t, scr, scg, scb);
 		SDL_SetTextureAlphaMod(t, (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
 		SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
 		SDL_RenderCopyExF(vulture_gpu, t, NULL, &d, deg, &c, SDL_FLIP_NONE);
@@ -2469,11 +2477,11 @@ void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, double sy
 		if (ht)
 			t = ht;
 		vpp_pose(s, dx, dy, sx, sy, deg, q);
-		SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+		SDL_SetTextureBlendMode(t, sbm);
 		SDL_SetTextureColorMod(t, 255, 255, 255);
 		SDL_SetTextureAlphaMod(t, 255);
 		SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
-		vpp_emit(t, q, 0.0f, 0.0f, 1.0f, 1.0f, 255, (Uint8) (red ? 77 : 255), (Uint8) (red ? 77 : 255),
+		vpp_emit(t, q, 0.0f, 0.0f, 1.0f, 1.0f, scr, scg, scb,
 		         (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha), NULL, vgm_view);
 		return;
 	}
@@ -2489,8 +2497,8 @@ void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, double sy
 		d.x = vgm_vx(d.x), d.y = vgm_vy(d.y), d.w *= vgm_vsx, d.h *= vgm_vsy;
 		c.x = d.w * 0.5f, c.y = d.h;
 	}
-	SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
-	SDL_SetTextureColorMod(t, 255, red ? 77 : 255, red ? 77 : 255);
+	SDL_SetTextureBlendMode(t, sbm);
+	SDL_SetTextureColorMod(t, scr, scg, scb);
 	SDL_SetTextureAlphaMod(t, (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
 	SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
 	SDL_RenderCopyExF(vulture_gpu, t, NULL, &d, deg, &c, SDL_FLIP_NONE);

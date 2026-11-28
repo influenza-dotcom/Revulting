@@ -1149,6 +1149,79 @@ vspr_turned(SDL_Surface *s, SDL_Surface *nm, int b, bool normal)
     return o;
 }
 
+/*
+ * IMPLEMENTATION_LOG s239: a rim of light.  A creature drawn near a torch,
+ * a lamp or a glowing thing catches its light on the edge of its shape that
+ * faces it - a soft band two or three pixels deep, added in the light's
+ * colour, stronger the nearer and brighter the light - the way a rendered
+ * figure is picked out against the dark.  Kept per sprite and direction.
+ */
+static int vrim_j = -1, vrim_i = -1; /* the creature being drawn (step 5 of the map), or none */
+static bool vrim_off = false;        /* probe: s239 the same frame without */
+static std::map<std::pair<SDL_Surface *, int>, SDL_Surface *> vrim_masks;
+struct vrim_t {
+    int dir, al;
+    Uint8 r, g, b;
+};
+static int vrim_lights(int j, int i, vrim_t *out); /* the two strongest lights' rims on square (j, i) */
+
+/* s's edge toward screen direction dir (eighths from the right, clockwise): white, faded inward */
+static SDL_Surface *
+vrim_mask(SDL_Surface *s, int dir)
+{
+    std::pair<SDL_Surface *, int> key(s, dir);
+    std::map<std::pair<SDL_Surface *, int>, SDL_Surface *>::iterator it = vrim_masks.find(key);
+    SDL_Surface *c, *o;
+    double a = dir * 3.14159265358979 / 4.0;
+    float ux = (float) cos(a), uy = (float) sin(a);
+    int w, h, x, y, k;
+
+    if (it != vrim_masks.end())
+        return it->second;
+    if (vrim_masks.size() > 600) {
+        for (it = vrim_masks.begin(); it != vrim_masks.end(); ++it)
+            if (it->second)
+                vulture_gpu_forget(it->second), SDL_FreeSurface(it->second);
+        vrim_masks.clear();
+    }
+    vrim_masks[key] = NULL;
+    if (!s || s->w <= 0 || s->h <= 0 || s->w > 512 || s->h > 512)
+        return NULL;
+    if (!(c = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return NULL;
+    w = c->w, h = c->h;
+    if (!(o = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888))) {
+        SDL_FreeSurface(c);
+        return NULL;
+    }
+    SDL_LockSurface(c);
+    SDL_LockSurface(o);
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            float st = 0.0f;
+
+            vspr_px(o, x, y) = 0;
+            if ((vspr_px(c, x, y) >> 24) <= 128)
+                continue;
+            for (k = 1; k <= 3; k++) {
+                int xx = (int) floorf(x + 0.5f + ux * k), yy = (int) floorf(y + 0.5f + uy * k);
+
+                if (xx < 0 || yy < 0 || xx >= w || yy >= h || (vspr_px(c, xx, yy) >> 24) <= 128) {
+                    st = k == 1 ? 1.0f : k == 2 ? 0.55f : 0.25f;
+                    break;
+                }
+            }
+            if (st > 0.0f)
+                vspr_px(o, x, y) = ((Uint32) (st * 255.0f) << 24) | 0x00FFFFFFu;
+        }
+    SDL_UnlockSurface(o);
+    SDL_UnlockSurface(c);
+    SDL_FreeSurface(c);
+    SDL_SetSurfaceBlendMode(o, SDL_BLENDMODE_ADD);
+    vrim_masks[key] = o;
+    return o;
+}
+
 /* draw a tile facing `face`, transformed */
 static void
 vtw_put_tile_x(int x, int y, int tile_id, int face, double sx, double sy,
@@ -1183,6 +1256,20 @@ vtw_put_tile_x(int x, int y, int tile_id, int face, double sx, double sy,
         }
     }
     vtx_blit(img, dx, y + tile->ymod, sx, sy, deg, red, alpha);
+    if (vulture_gpumap_on && vrim_j >= 0 && alpha >= 200 && !vrim_off) { /* s239: its edges toward the lights catch them */
+        vrim_t rl[2];
+        int nl = vrim_lights(vrim_j, vrim_i, rl), k;
+        SDL_Surface *rm;
+
+        for (k = 0; k < nl; k++)
+            if ((rm = vrim_mask(img, rl[k].dir)) != NULL) {
+                SDL_SetSurfaceColorMod(rm, rl[k].r, rl[k].g, rl[k].b);
+                SDL_SetSurfaceAlphaMod(rm, (Uint8) rl[k].al);
+                vtx_blit(rm, dx, y + tile->ymod, sx, sy, deg, false, rl[k].al);
+                SDL_SetSurfaceColorMod(rm, 255, 255, 255);
+                SDL_SetSurfaceAlphaMod(rm, 255);
+            }
+    }
     if (vulture_normal_capture && vulture_gpumap_on) { /* s185: recorded for the GPU */
         SDL_Surface *nm = tnm ? tnm : vulture_get_tile_normal(tile_id, flipped);
 
@@ -9072,6 +9159,14 @@ vspr_probe_tick(Uint32 now)
     ROOTWIN->draw_windows();
     snprintf(p, sizeof p, "%s" "\\" "sprturn_%d.bmp", getenv("VULTURE_SELFTEST"), vspr_probe_n);
     vulture_save_frame_bmp(p);
+    if (tv[vspr_probe_n] == 0) { /* s239: and without the rims of light, and as the art stood (no camera) */
+        vrim_off = true;
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "sprturn_norim.bmp", getenv("VULTURE_SELFTEST"));
+        vulture_save_frame_bmp(p);
+        vrim_off = false;
+    }
     vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "sprturn probe: %d deg (bucket %d)\n", tv[vspr_probe_n],
                       vspr_bucket());
     vspr_probe_n++;
@@ -18955,6 +19050,65 @@ struct vl_pl_t {
 static std::vector<vl_pl_t> vl_pls;
 #define VL_PL_MAX 24 /* the strongest this many - the GPU pass's array (vgl_fs) */
 
+/* s239: the two strongest lights reaching square (j, i) with a clear path
+   (not its own): for each, which way it lies on the screen (eighths from the
+   right, clockwise), its colour and how strong a rim it lays */
+static int
+vrim_lights(int j, int i, vrim_t *out)
+{
+    int k, n = 0, best[2] = { -1, -1 }, m;
+    float bw[2] = { 0.0f, 0.0f };
+
+    for (k = 0; k < (int) vl_pls.size(); k++) {
+        const vl_pl_t &p = vl_pls[k];
+        float d = sqrtf((float) ((p.x - j) * (p.x - j) + (p.y - i) * (p.y - i)));
+        float kk = 1.0f - d / (p.rad + 1.0f), w;
+
+        if (d < 0.5f || kk <= 0.0f)
+            continue;
+        w = p.inten * kk * kk;
+        if (w <= bw[1] || !clear_path(p.x, p.y, j, i))
+            continue;
+        if (w > bw[0])
+            bw[1] = bw[0], best[1] = best[0], bw[0] = w, best[0] = k;
+        else
+            bw[1] = w, best[1] = k;
+    }
+    for (m = 0; m < 2; m++) {
+        int va, vb, dd;
+        float dxs, dyp, rx, ry, ps, cs, sn;
+        vrim_t &o = out[n];
+
+        if (best[m] < 0)
+            continue;
+        const vl_pl_t &p = vl_pls[best[m]];
+
+        v_rot(p.x - j, p.y - i, 4 - vulture_view_rot, &va, &vb);
+        dxs = (float) (V_MAP_XMOD * (va - vb)), dyp = (float) (V_MAP_YMOD * (va + vb));
+        ps = (float) (vulture_view_yaw * 3.14159265358979 / 180.0), cs = cosf(ps), sn = sinf(ps);
+        rx = dxs * cs + dyp * sn * 2.545455f; /* the camera's turn, on the floor */
+        ry = dyp * cs - dxs * sn * 0.392857f - p.lift;
+        dd = (int) floorf(atan2f(ry, rx) / 0.7853982f + 0.5f);
+        o.dir = ((dd % 8) + 8) % 8;
+        o.r = (Uint8) (p.r > 1.0f ? 255 : p.r < 0.0f ? 0 : (int) (p.r * 255.0f));
+        o.g = (Uint8) (p.g > 1.0f ? 255 : p.g < 0.0f ? 0 : (int) (p.g * 255.0f));
+        o.b = (Uint8) (p.b > 1.0f ? 255 : p.b < 0.0f ? 0 : (int) (p.b * 255.0f));
+        o.al = (int) (bw[m] * 2400.0f);
+        o.al = o.al > 150 ? 150 : o.al;
+        if (getenv("VULTURE_RIM_DEBUG")) { /* probe: s239 - full strength, and which light */
+            static Uint32 said = 0;
+
+            if (SDL_GetTicks() - said > 500)
+                vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rim: %d,%d lit from %d,%d (w %.3f) dir %d alpha %d\n",
+                                  j, i, p.x, p.y, bw[m], o.dir, o.al), said = SDL_GetTicks();
+            o.al = 255, o.r = o.g = o.b = 255;
+        }
+        if (o.al >= 12)
+            n++;
+    }
+    return n;
+}
+
 static void
 vl_flash(int x, int y, float r, float g, float b, float inten, float rad, Uint32 dur)
 {
@@ -21313,7 +21467,9 @@ levelwin::draw()
                         if (ha >= 255) /* s213: mirrored in the water in front of it */
                             vrefl_draw(map_data, j, i, map_mon, face, tx, ty, xs, ys, map_centre_x, map_centre_y,
                                        view_x, view_y);
+                        vrim_j = j, vrim_i = i; /* s239: it catches the light on its edge */
                         vtw_put_tile_x(tx, ty, map_mon, face, xs, ys, deg, red, ha);
+                        vrim_j = vrim_i = -1;
                         if (!u_at(j, i)) { /* s210: what the walls in front of it may hide */
                             struct monst *om = m_at(j, i);
                             vxr_mon_t mr;

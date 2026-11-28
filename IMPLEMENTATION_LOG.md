@@ -5142,6 +5142,24 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Probe VULTURE_SELFTEST_SPRTURN: the start room with the creatures held
   turned -32, -16, 0, 16, 32 degrees (the hover card cleared).
 
+### 239. A rim of light on the creatures
+
+- 238's turn shows only while the camera turns; a still frame looked as
+  before.  Now a creature catches each of the two strongest lights reaching
+  its square (a clear path, not its own) on the edge of its shape facing
+  that light on the screen (the camera's turn counted): a band up to 3 px
+  deep, added in the light's colour, its strength the light's there
+  (w x 2400, at most 150).  Two lights each lay their own rim - one picked
+  alone flipped between two flickering torches.
+- The edge masks are made per sprite and direction (eighths) and kept
+  (vrim_mask: a solid pixel whose way toward the light leaves the shape
+  within 3 px).  vtw_put_tile_x lays them for the creature on the square
+  step 5 is drawing (vrim_j / vrim_i).
+- The sprite transformer (vulture_gpumap_blit_ex) now keeps an added
+  surface added, in its colour.
+- Probes: VULTURE_RIM_DEBUG (full white, and which light), and SPRTURN saves
+  sprturn_norim.bmp beside its 0 degree shot.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
