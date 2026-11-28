@@ -7552,6 +7552,7 @@ static bool vwall_hole_on = false;
 static int vwall_hx = 0, vwall_hy = 0; /* your feet on screen this frame */
 static int vwall_amin = 77;            /* how solid a wall stays at the circle's middle */
 static float vl_light_at(int x, int y); /* s212: the light grid at a square (last computed) */
+static float vl_fog_at(int x, int y);   /* s230: the fog of war at a square (1 remembered, out of sight) */
 #define VWALL_DIM 190                   /* s212: a wall's outside facing the dark: this much black over it */
 static bool vwall_probe_off = false;   /* probe: the same view with no circle */
 static int vcut_now = 255; /* s223: this square see-through (the room you are in): its alpha, 255 solid */
@@ -8884,6 +8885,7 @@ vrock_cap(int var, bool normal, bool dark = false) /* a block's top: the square'
  */
 static signed char vtop_style[ROWNO][COLNO]; /* the stone each top is (-1: the plain grain) */
 static float vtop_light[ROWNO][COLNO];       /* the light it is lit by */
+static Uint8 vtop_fog[ROWNO][COLNO];         /* s230: its wall remembered, out of sight */
 
 /* s225/s226: a wall face's art laid flat on a top's diamond, at a scale
    (1: the 1x art, 2: its HD double) - along the wall and into it, the
@@ -9022,6 +9024,7 @@ vtop_prepare(mapdata *md, struct walls (*mw)[COLNO])
 
     memset(vtop_style, -1, sizeof vtop_style);
     memset(vtop_light, 0, sizeof vtop_light);
+    memset(vtop_fog, 0, sizeof vtop_fog);
     if (!md || !vrock_on || !mw)
         return;
     for (pass = 0; pass < 2; pass++) /* walls first: they win a tie */
@@ -9039,6 +9042,7 @@ vtop_prepare(mapdata *md, struct walls (*mw)[COLNO])
                     continue;
                 }
                 vtop_light[y][x] = vl_light_at(x, y);
+                vtop_fog[y][x] = (Uint8) (vl_fog_at(x, y) > 0.5f); /* s230 */
                 q[qt][0] = (short) x, q[qt][1] = (short) y, qt++;
             }
     while (qh < qt) {
@@ -9051,6 +9055,7 @@ vtop_prepare(mapdata *md, struct walls (*mw)[COLNO])
 
             if (isok(nx, ny) && vtop_style[ny][nx] < 0 && vrock_d[ny][nx] >= 1 && vrock_d[ny][nx] <= VROCK_D) {
                 vtop_style[ny][nx] = vtop_style[cy][cx], vtop_light[ny][nx] = vtop_light[cy][cx];
+                vtop_fog[ny][nx] = vtop_fog[cy][cx]; /* s230 */
                 q[qt][0] = (short) nx, q[qt][1] = (short) ny, qt++;
             }
         }
@@ -9263,7 +9268,7 @@ vrock_edge(int e)
    lips: bit 0 its up-left edge, bit 1 its up-right edge drop away */
 static void
 vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool dark = false, int ghost = 0,
-              int edges = 0, int stone = -1)
+              int edges = 0, int stone = -1, bool fogged = false)
 {
     SDL_Surface *c = stone >= 0 ? vrock_top_tex(stone) : NULL, *nm = ghost ? NULL : vrock_cap(0, true);
 
@@ -9274,7 +9279,11 @@ vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool 
 
     if (!c)
         return;
-    SDL_SetSurfaceColorMod(c, (Uint8) sh, (Uint8) sh, (Uint8) sh);
+    if (fogged) /* s230: remembered - cold, as the light grid tints a fogged wall */
+        SDL_SetSurfaceColorMod(c, (Uint8) (sh * 80 / 100), (Uint8) (sh * 90 / 100),
+                               (Uint8) (sh * 112 / 100 > 255 ? 255 : sh * 112 / 100));
+    else
+        SDL_SetSurfaceColorMod(c, (Uint8) sh, (Uint8) sh, (Uint8) sh);
     SDL_SetSurfaceAlphaMod(c, (Uint8) (ghost ? ghost : 255)); /* s219: see-through */
     if (f > 0.0f && vwall_hole_on && vwall_amin < 250 && vulture_gpumap_on && !ghost) { /* s224: not a see-through top */
         float hx = (float) vwall_hx, hy = (float) (vwall_hy - VWALL_BODY);
@@ -9681,7 +9690,7 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
         }
         vrock_cap_put(x, y, h, sh, (j * 7 + i * 3) % 3, (float) (y - vwall_hy) / 22.0f, lips,
                       vrock_style == 1 && b != V_TILE_WALL_GENERIC, ghost, edges,
-                      vrock_style == 1 ? -1 : vtop_style[i][j]); /* s219: dark / see-through; s225: its stone */
+                      vrock_style == 1 ? -1 : vtop_style[i][j], vtop_fog[i][j] != 0); /* s219, s225, s230 */
     }
 }
 
@@ -18078,6 +18087,12 @@ static float
 vl_light_at(int x, int y)
 {
     return isok(x, y) ? vl_L[y][x] : 0.0f;
+}
+
+static float
+vl_fog_at(int x, int y) /* s230 */
+{
+    return isok(x, y) ? vl_F[y][x] : 0.0f;
 }
 
 /* s149: the colour of a magical trap's light right now (0 = not magical);

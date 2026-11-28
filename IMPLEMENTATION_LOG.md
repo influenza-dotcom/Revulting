@@ -4972,6 +4972,13 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   first).  vrock_top_warp lays the face at either scale; vrock_top_tex and
   vghost_surface make both.
 
+### 230. Fogged tops tinted like fogged walls
+
+- The light grid pulls a remembered wall toward a cold dark blue; tops
+  light themselves and stayed neutral, a little warm next to their walls.
+  vtop_fog (from the wall's vl_F, carried through the band with its stone
+  and light; vl_fog_at) tints a remembered top cold (x0.80, x0.90, x1.12).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
