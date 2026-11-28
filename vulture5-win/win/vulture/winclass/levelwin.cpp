@@ -841,15 +841,323 @@ vshadow(int cx, int cy, int w, int alpha)
     vulture_put_img(d.x, d.y, s); /* s183: GPU-aware */
 }
 
+/*
+ * IMPLEMENTATION_LOG s238: sprites that turn in depth.  The art has one view
+ * of each creature, so a turning camera saw a cut-out.  Now each sprite has a
+ * depth field - its solid silhouette rounded out (the square root of the
+ * distance to its edge) and its normal map's slopes summed across it - and is
+ * redrawn turned about its upright axis: each pixel moved across by its depth
+ * (the nearer, the more), the nearer one winning, small gaps closed, and its
+ * normals turned with it so the light slides across it.  When the camera
+ * turns, the creatures turn with the world, then ease round to face you.
+ * Turns are cached per sprite in 4 degree steps.
+ */
+static double vcam_total = 0.0; /* the camera's turn, unwound (degrees; vcam_turn adds to it) */
+static double vspr_lag = 0.0;   /* where the creatures face - it chases vcam_total */
+static double vspr_turn = 0.0;  /* how far they are turned from facing you, this frame */
+static Uint32 vspr_last = 0;
+static bool vspr_freeze = false; /* probe: s238 a turn held for a shot */
+#define VSPR_STEP 4 /* degrees a cached turn */
+#define VSPR_MAX 36 /* the furthest a creature turns */
+
+static void
+vspr_tick(void)
+{
+    Uint32 now = SDL_GetTicks();
+    double dt = vspr_last ? (now - vspr_last) / 1000.0 : 0.016, d;
+
+    vspr_last = now;
+    if (vspr_freeze) /* probe */
+        return;
+    dt = dt > 0.1 ? 0.1 : dt < 0.0 ? 0.0 : dt;
+    vspr_lag += (vcam_total - vspr_lag) * (1.0 - exp(-dt / 0.30));
+    d = vcam_total - vspr_lag;
+    if (d > VSPR_MAX)
+        vspr_lag = vcam_total - VSPR_MAX, d = VSPR_MAX;
+    else if (d < -VSPR_MAX)
+        vspr_lag = vcam_total + VSPR_MAX, d = -VSPR_MAX;
+    if (fabs(d) < 0.5)
+        vspr_lag = vcam_total, d = 0.0;
+    vspr_turn = d;
+}
+
+static bool
+vspr_busy(void)
+{
+    return fabs(vcam_total - vspr_lag) >= 0.5;
+}
+
+static int
+vspr_bucket(void)
+{
+    double b = vspr_turn / VSPR_STEP;
+
+    if (!vulture_persp_live())
+        return 0;
+    return (int) (b >= 0.0 ? b + 0.5 : b - 0.5);
+}
+
+struct vspr_depth_t {
+    int w, h;
+    std::vector<float> z;   /* how near each pixel stands (px) */
+    std::vector<Uint8> a;   /* its alpha */
+};
+static std::map<SDL_Surface *, vspr_depth_t> vspr_depths;
+static std::map<std::pair<SDL_Surface *, int>, SDL_Surface *> vspr_turned_c, vspr_turned_n;
+
+/* a pixel of a 32-bit ARGB surface */
+static inline Uint32 &
+vspr_px(SDL_Surface *s, int x, int y)
+{
+    return ((Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch))[x];
+}
+
+/* s (and its normal map nm, if it has one) - its depth field */
+static const vspr_depth_t *
+vspr_depth(SDL_Surface *s, SDL_Surface *nm)
+{
+    std::map<SDL_Surface *, vspr_depth_t>::iterator it = vspr_depths.find(s);
+    SDL_Surface *c = NULL, *n = NULL;
+    int w, h, x, y, k;
+
+    if (it != vspr_depths.end())
+        return &it->second;
+    if (!s || s->w <= 0 || s->h <= 0 || s->w > 512 || s->h > 512)
+        return NULL;
+    vspr_depth_t &D = vspr_depths[s];
+
+    w = D.w = s->w, h = D.h = s->h;
+    D.z.assign((size_t) w * h, 0.0f);
+    D.a.assign((size_t) w * h, 0);
+    if (!(c = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return &D;
+    if (nm && nm->w == w && nm->h == h)
+        n = SDL_ConvertSurfaceFormat(nm, SDL_PIXELFORMAT_ARGB8888, 0);
+    SDL_LockSurface(c);
+    if (n)
+        SDL_LockSurface(n);
+    {
+        std::vector<float> dist((size_t) w * h, 0.0f), sx((size_t) w * h, 0.0f), sy((size_t) w * h, 0.0f);
+        std::vector<float> integ((size_t) w * h, 0.0f);
+        std::vector<Uint8> cnt((size_t) w * h, 0);
+        std::vector<Uint8> solid((size_t) w * h, 0);
+        const float BIG = 1e9f;
+
+        for (y = 0; y < h; y++)
+            for (x = 0; x < w; x++) {
+                Uint32 p = vspr_px(c, x, y);
+                size_t q = (size_t) y * w + x;
+
+                D.a[q] = (Uint8) (p >> 24);
+                solid[q] = D.a[q] > 128; /* the baked shadow (faint) stays on the floor */
+                dist[q] = solid[q] ? BIG : 0.0f;
+                if (n && solid[q]) {
+                    Uint32 v = vspr_px(n, x, y);
+                    float nx = (float) ((int) ((v >> 16) & 255) - 128) / 127.0f;
+                    float ny = (float) ((int) ((v >> 8) & 255) - 128) / 127.0f;
+                    float nz = (float) ((int) (v & 255) - 128) / 127.0f;
+
+                    nz = nz < 0.15f ? 0.15f : nz;
+                    sx[q] = -nx / nz, sy[q] = ny / nz;
+                }
+            }
+        for (k = 0; k < 2; k++) { /* the distance to the edge (chamfer, two passes) */
+            for (y = 0; y < h; y++)
+                for (x = 0; x < w; x++) {
+                    size_t q = (size_t) y * w + x;
+                    float b = dist[q];
+
+                    if (b == 0.0f)
+                        continue;
+                    b = fminf(b, (x > 0 ? dist[q - 1] : 0.0f) + 1.0f);
+                    b = fminf(b, (y > 0 ? dist[q - w] : 0.0f) + 1.0f);
+                    b = fminf(b, (x > 0 && y > 0 ? dist[q - w - 1] : 0.0f) + 1.414f);
+                    b = fminf(b, (x < w - 1 && y > 0 ? dist[q - w + 1] : 0.0f) + 1.414f);
+                    dist[q] = b;
+                }
+            for (y = h - 1; y >= 0; y--)
+                for (x = w - 1; x >= 0; x--) {
+                    size_t q = (size_t) y * w + x;
+                    float b = dist[q];
+
+                    if (b == 0.0f)
+                        continue;
+                    b = fminf(b, (x < w - 1 ? dist[q + 1] : 0.0f) + 1.0f);
+                    b = fminf(b, (y < h - 1 ? dist[q + w] : 0.0f) + 1.0f);
+                    b = fminf(b, (x < w - 1 && y < h - 1 ? dist[q + w + 1] : 0.0f) + 1.414f);
+                    b = fminf(b, (x > 0 && y < h - 1 ? dist[q + w - 1] : 0.0f) + 1.414f);
+                    dist[q] = b;
+                }
+        }
+        if (n) { /* the slopes summed across, each way along rows and columns */
+            for (y = 0; y < h; y++) {
+                float acc = 0.0f;
+
+                for (x = 0; x < w; x++) {
+                    size_t q = (size_t) y * w + x;
+
+                    acc = solid[q] ? acc + sx[q] : 0.0f;
+                    if (solid[q])
+                        integ[q] += acc, cnt[q]++;
+                }
+                acc = 0.0f;
+                for (x = w - 1; x >= 0; x--) {
+                    size_t q = (size_t) y * w + x;
+
+                    acc = solid[q] ? acc - sx[q] : 0.0f;
+                    if (solid[q])
+                        integ[q] += acc, cnt[q]++;
+                }
+            }
+            for (x = 0; x < w; x++) {
+                float acc = 0.0f;
+
+                for (y = 0; y < h; y++) {
+                    size_t q = (size_t) y * w + x;
+
+                    acc = solid[q] ? acc + sy[q] : 0.0f;
+                    if (solid[q])
+                        integ[q] += acc, cnt[q]++;
+                }
+                acc = 0.0f;
+                for (y = h - 1; y >= 0; y--) {
+                    size_t q = (size_t) y * w + x;
+
+                    acc = solid[q] ? acc - sy[q] : 0.0f;
+                    if (solid[q])
+                        integ[q] += acc, cnt[q]++;
+                }
+            }
+        }
+        for (k = 0; k < w * h; k++) {
+            float zi = cnt[k] ? integ[k] / cnt[k] : 0.0f;
+
+            D.z[k] = solid[k] ? 1.1f * sqrtf(dist[k]) + 0.125f * (zi > 0.0f ? zi : 0.0f) : 0.0f;
+        }
+    }
+    if (n) {
+        SDL_UnlockSurface(n);
+        SDL_FreeSurface(n);
+    }
+    SDL_UnlockSurface(c);
+    SDL_FreeSurface(c);
+    return &D;
+}
+
+/* s turned b steps (its normal map nm turned with it if normal) - cached */
+static SDL_Surface *
+vspr_turned(SDL_Surface *s, SDL_Surface *nm, int b, bool normal)
+{
+    std::map<std::pair<SDL_Surface *, int>, SDL_Surface *> &cache = normal ? vspr_turned_n : vspr_turned_c;
+    std::pair<SDL_Surface *, int> key(s, b);
+    std::map<std::pair<SDL_Surface *, int>, SDL_Surface *>::iterator it = cache.find(key);
+    const vspr_depth_t *D;
+    SDL_Surface *src = NULL, *o = NULL;
+    double ph = b * VSPR_STEP * 3.14159265358979 / 180.0, cs = cos(ph), sn = sin(ph);
+    int w, h, x, y;
+
+    if (it != cache.end())
+        return it->second;
+    if (vspr_turned_c.size() + vspr_turned_n.size() > 900) { /* too many kept: start again */
+        std::map<std::pair<SDL_Surface *, int>, SDL_Surface *>::iterator k;
+
+        for (k = vspr_turned_c.begin(); k != vspr_turned_c.end(); ++k)
+            if (k->second)
+                vulture_gpu_forget(k->second), SDL_FreeSurface(k->second);
+        for (k = vspr_turned_n.begin(); k != vspr_turned_n.end(); ++k)
+            if (k->second)
+                vulture_gpu_forget(k->second), SDL_FreeSurface(k->second);
+        vspr_turned_c.clear(), vspr_turned_n.clear();
+    }
+    cache[key] = NULL;
+    if (!(D = vspr_depth(s, nm)) || D->w != s->w || D->h != s->h || (normal && (!nm || nm->w != s->w || nm->h != s->h)))
+        return NULL;
+    w = D->w, h = D->h;
+    if (!(src = SDL_ConvertSurfaceFormat(normal ? nm : s, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return NULL;
+    if (!(o = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888))) {
+        SDL_FreeSurface(src);
+        return NULL;
+    }
+    SDL_LockSurface(src);
+    SDL_LockSurface(o);
+    {
+        std::vector<float> zb((size_t) w);
+        std::vector<int> from((size_t) w);
+        float cx = w / 2.0f;
+
+        for (y = 0; y < h; y++) {
+            Uint32 *orow = (Uint32 *) ((Uint8 *) o->pixels + (size_t) y * o->pitch);
+            int lo = w, hi = -1, i;
+
+            for (i = 0; i < w; i++)
+                zb[(size_t) i] = -1e9f, from[(size_t) i] = -1, orow[i] = 0;
+            for (x = 0; x < w; x++) {
+                size_t q = (size_t) y * w + x;
+                float z = D->z[q];
+                int xi;
+
+                if (!D->a[q])
+                    continue;
+                xi = (int) floorf((float) (cx + (x + 0.5f - cx) * cs + z * sn));
+                if (xi < 0 || xi >= w || z <= zb[(size_t) xi])
+                    continue;
+                zb[(size_t) xi] = z, from[(size_t) xi] = x;
+                lo = xi < lo ? xi : lo, hi = xi > hi ? xi : hi;
+            }
+            for (i = lo; i <= hi; i++) { /* close gaps of up to 3 px with the nearer neighbour */
+                if (from[(size_t) i] >= 0)
+                    continue;
+                int l = i - 1, r = i + 1;
+
+                while (l >= lo && from[(size_t) l] < 0)
+                    l--;
+                while (r <= hi && from[(size_t) r] < 0)
+                    r++;
+                if (l >= lo && r <= hi && r - l <= 4)
+                    from[(size_t) i] = (i - l <= r - i) ? from[(size_t) l] : from[(size_t) r];
+            }
+            for (i = 0; i < w; i++) {
+                Uint32 v;
+
+                if (from[(size_t) i] < 0)
+                    continue;
+                v = vspr_px(src, from[(size_t) i], y);
+                if (normal) { /* its normal turned about the upright axis */
+                    float nx = (float) ((int) ((v >> 16) & 255) - 128) / 127.0f;
+                    float nz = (float) ((int) (v & 255) - 128) / 127.0f;
+                    float rx = (float) (nx * cs + nz * sn), rz = (float) (-nx * sn + nz * cs);
+                    int R = (int) (rx * 127.0f + 128.0f), B = (int) (rz * 127.0f + 128.0f);
+
+                    R = R < 0 ? 0 : R > 255 ? 255 : R, B = B < 0 ? 0 : B > 255 ? 255 : B;
+                    v = (v & 0xFF00FF00u) | ((Uint32) R << 16) | (Uint32) B;
+                }
+                orow[i] = v;
+            }
+        }
+    }
+    SDL_UnlockSurface(o);
+    SDL_UnlockSurface(src);
+    SDL_FreeSurface(src);
+    {
+        SDL_BlendMode bm = SDL_BLENDMODE_BLEND;
+
+        SDL_GetSurfaceBlendMode(normal ? nm : s, &bm);
+        SDL_SetSurfaceBlendMode(o, bm);
+    }
+    cache[key] = o;
+    return o;
+}
+
 /* draw a tile facing `face`, transformed */
 static void
 vtw_put_tile_x(int x, int y, int tile_id, int face, double sx, double sy,
                double deg, bool red, int alpha)
 {
     vulture_tile *tile = vulture_get_tile(tile_id);
-    SDL_Surface *img;
-    int art, dx;
-    bool flip;
+    SDL_Surface *img, *tnm = NULL;
+    int art, dx, tb = vspr_bucket();
+    bool flip, flipped;
 
     if (!tile || !tile->graphic)
         return;
@@ -865,14 +1173,23 @@ vtw_put_tile_x(int x, int y, int tile_id, int face, double sx, double sy,
             dx = x - tile->xmod - tile->graphic->w + 1;
         }
     }
+    flipped = img != tile->graphic;
+    if (tb) { /* s238: turned in depth with the camera */
+        SDL_Surface *nm0 = vulture_get_tile_normal(tile_id, flipped), *ti = vspr_turned(img, nm0, tb, false);
+
+        if (ti) {
+            tnm = nm0 ? vspr_turned(img, nm0, tb, true) : NULL;
+            img = ti;
+        }
+    }
     vtx_blit(img, dx, y + tile->ymod, sx, sy, deg, red, alpha);
     if (vulture_normal_capture && vulture_gpumap_on) { /* s185: recorded for the GPU */
-        SDL_Surface *nm = vulture_get_tile_normal(tile_id, img != tile->graphic);
+        SDL_Surface *nm = tnm ? tnm : vulture_get_tile_normal(tile_id, flipped);
 
         if (nm)
             vulture_gpumap_normal_ex(nm, dx, y + tile->ymod, sx, sy, deg, alpha);
     } else if (vulture_normal_capture && vulture_normal_buf) { /* s149: its normal map, same pose */
-        SDL_Surface *nm = vulture_get_tile_normal(tile_id, img != tile->graphic);
+        SDL_Surface *nm = tnm ? tnm : vulture_get_tile_normal(tile_id, flipped);
 
         if (nm) {
             SDL_Surface *save = vulture_screen;
@@ -1709,6 +2026,7 @@ static int vcam_racc = 0;       /* how far it has dragged (px) before it turns *
 static void
 vcam_turn(double deg)
 {
+    vcam_total += deg; /* s238 */
     vulture_view_yaw += deg;
     while (vulture_view_yaw > 45.0) {
         vulture_view_yaw -= 90.0;
@@ -8723,6 +9041,42 @@ vcam_pan_probe_tick(Uint32 now)
     vcam_pan_probe_n++;
 }
 
+/* probe: s238 - VULTURE_SELFTEST_SPRTURN: the room you start in with the
+   creatures held turned -32, -16, 0, 16, 32 degrees */
+static Uint32 vspr_probe_t = 0;
+static int vspr_probe_n = 0;
+static void vhv_clear(void); /* probe: s238 no hover card over the shot */
+
+static void
+vspr_probe_tick(Uint32 now)
+{
+    static const int tv[5] = { -32, -16, 0, 16, 32 };
+    char p[700];
+
+    if (now - vspr_probe_t < (vspr_probe_n ? 300u : 2500u))
+        return;
+    vspr_probe_t = SDL_GetTicks();
+    if (vspr_probe_n >= 5) {
+        vspr_freeze = false;
+        vspr_lag = vcam_total, vspr_turn = 0.0;
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "sprturn probe: done (%d turned kept)\n",
+                          (int) (vspr_turned_c.size() + vspr_turned_n.size()));
+        vspr_probe_t = 0;
+        return;
+    }
+    vspr_freeze = true;
+    vspr_turn = tv[vspr_probe_n], vspr_lag = vcam_total - tv[vspr_probe_n];
+    vhv_clear();
+    levwin->set_view(u.ux, u.uy);
+    levwin->force_redraw();
+    ROOTWIN->draw_windows();
+    snprintf(p, sizeof p, "%s" "\\" "sprturn_%d.bmp", getenv("VULTURE_SELFTEST"), vspr_probe_n);
+    vulture_save_frame_bmp(p);
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "sprturn probe: %d deg (bucket %d)\n", tv[vspr_probe_n],
+                      vspr_bucket());
+    vspr_probe_n++;
+}
+
 /* probe: s211 - VULTURE_SELFTEST_TORCH: the room you start in, twice, a
    quarter second apart (the flames move) */
 static Uint32 vtorch_probe_t = 0;
@@ -11500,6 +11854,8 @@ vulture_idle_bob(bool at_map)
         vcam_drag_probe_tick(now);
     if (vcam_pan_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s236 */
         vcam_pan_probe_tick(now);
+    if (vspr_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s238 */
+        vspr_probe_tick(now);
     if (vgrade_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s212 */
         vgrade_probe_tick(now);
     if (vrefl_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s213 */
@@ -11521,7 +11877,7 @@ vulture_idle_bob(bool at_map)
         for (q = 0; q < vfx_list.size(); q++)
             if (vfx_list[q].kind == 3 && now - vfx_list[q].t0 < vfx_list[q].dur)
                 marker = true;
-        if (now - last < ((vsp_active(now) || vstair_busy(now) || vcut_busy(now) || vcam_busy(now)) ? 16u
+        if (now - last < ((vsp_active(now) || vstair_busy(now) || vcut_busy(now) || vcam_busy(now) || vspr_busy()) ? 16u
                           : marker ? 25u : vidle_interval)) /* s198, s216, s223, s236: 60 fps */
             return;
     }
@@ -11996,6 +12352,12 @@ vui_hover_sfx(int id)
  */
 static bool vquiet_search = false;  /* s140: resting - no search pulse/ping */
 static point vhv = { -1, -1 };     /* map square under the pointer */
+
+static void
+vhv_clear(void) /* probe: s238 */
+{
+    vhv.x = vhv.y = -1;
+}
 static Uint32 vhv_since = 0;       /* when the pointer settled there */
 static bool vaim_on = false;       /* a direction prompt is up */
 static point vaim_at = { -1, -1 }; /* aim cursor square */
@@ -14783,6 +15145,8 @@ vselftest(void)
             vcam_drag_probe_t = SDL_GetTicks(), vcam_drag_probe_n = 0;
         if (getenv("VULTURE_SELFTEST_PANFAR")) /* probe: s236 a drag far out */
             vcam_pan_probe_t = SDL_GetTicks(), vcam_pan_probe_n = 0;
+        if (getenv("VULTURE_SELFTEST_SPRTURN")) /* probe: s238 sprites turned */
+            vspr_probe_t = SDL_GetTicks(), vspr_probe_n = 0;
         if (getenv("VULTURE_SELFTEST_TORCH")) { /* probe: s211 torches */
             vtorch_probe_t = SDL_GetTicks(), vtorch_probe_n = 0;
             break;
@@ -20478,6 +20842,7 @@ levelwin::draw()
     }
 
     vcam_tick(); /* s236: an animated turn's step - before anything is laid out */
+    vspr_tick(); /* s238: how far the creatures are turned from facing you */
     if (!vpp_wanted() && (vulture_view_yaw != 0.0 || vcam_left != 0.0)) { /* no camera: quarter turns only */
         vcam_turn(vcam_left), vcam_left = 0.0;
         vcam_turn(vulture_view_yaw > 0.0 ? 90.0 - vulture_view_yaw : -vulture_view_yaw);

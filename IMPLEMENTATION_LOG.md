@@ -5120,6 +5120,28 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   motion, one each way; each was held ("panfar: held ...") with the room
   still on the screen.
 
+### 238. Sprites that turn in depth
+
+- The user: "can you make the sprites look 3d".  The art has one view of
+  each creature; with the camera turning (236) the world turned and the
+  creatures stayed cut-outs.
+- Each sprite gets a depth field (vspr_depth, kept per surface): its solid
+  silhouette (alpha over 128 - the baked shadow stays on the floor) rounded
+  out by the square root of the distance to its edge, plus its normal map's
+  slopes summed across it, each way along rows and columns.
+- vspr_turned redraws it turned about its upright axis: each pixel moved
+  across by cos/sin of the turn and its depth, the nearer one winning, gaps
+  of up to 3 px closed; its normal map is moved the same way and each
+  normal turned with it, so the light slides across the creature.  Kept per
+  sprite in 4 degree steps (the lot dropped past 900).
+- The turn: the creatures' facing (vspr_lag) chases the camera's unwound
+  turn (vcam_total) with a 0.3 s lag, held within 36 degrees - when the
+  camera turns they turn with the world, then ease round to face you.  Only
+  through the camera; none while it is still.
+- vtw_put_tile_x draws the turned sprite and its turned normal map.
+- Probe VULTURE_SELFTEST_SPRTURN: the start room with the creatures held
+  turned -32, -16, 0, 16, 32 degrees (the hover card cleared).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
