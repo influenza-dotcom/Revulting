@@ -291,7 +291,7 @@ void vulture_read_options(void)
 	vulture_opts.render_scale = 1;
 	vulture_opts.gpu = 1; /* s168: on unless the conf says gpu=0 */
 	vulture_opts.depth_blur = 1; /* s205 */
-	vulture_opts.perspective = 130; /* s233 */
+	vulture_opts.perspective = 150; /* s233; s234: 130 -> 150 */
 	/* 0 = auto-fit the overview map; see map::map() */
 	vulture_opts.map_zoom = 0;
 	/* classic permadeath unless the player opts out */

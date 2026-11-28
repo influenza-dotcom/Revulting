@@ -1661,8 +1661,8 @@ vfx_alive(void)
  * sprite standing on its square - and the GPU projects it.  Outside the map
  * pass (effects, text, outlines, the light's grids are the exception) the
  * screen helpers hand back where a square is SEEN, not where it is laid.
- * Option perspective (vulture.conf): 0 off, 130 the default strength (the
- * camera five screen-heights back; 100 is 6.5), more is stronger.
+ * Option perspective (vulture.conf): 0 off, 150 the default strength (the
+ * camera 4.3 screen-heights back; 100 is 6.5), more is stronger.
  * VULTURE_PERSP overrides.
  */
 static bool vpp_hold_iso = false; /* s233: the light's grids are laid on the iso picture */
@@ -6756,7 +6756,7 @@ vlife_apply(int j, int i, int tile, int face, bool moving, int sx, double *xs, d
     unsigned key;
     int art, eff, want, hx, hy;
 
-    if (!vfx_ambient || !vt || !vt->graphic)
+    if (!vt || !vt->graphic) /* s234: not particles - the Atmosphere switch leaves it be */
         return face;
     if (hero) {
         key = 0xFFFFFFFFu;
@@ -6879,7 +6879,7 @@ vtree_draw(int x, int y, int j, int i, int furn)
     float q[8];
     SDL_Rect r;
 
-    if (furn != V_MISC_TREE || !vfx_ambient || !(t = vulture_get_tile(furn)) || !t->graphic)
+    if (furn != V_MISC_TREE || !(t = vulture_get_tile(furn)) || !t->graphic) /* s234: not particles */
         return false;
     tm = SDL_GetTicks() / 1000.0, ph = vsp_hash(j, i, 5) * 6.2832;
     gust = 0.55 + 0.45 * sin(tm * 0.31 + ph * 0.7); /* the wind rises and dies down */
@@ -7731,6 +7731,8 @@ vhole_put(int x, int y, int tile, int shade, float f, int dim = 0)
     return 255;
 }
 
+static int vrock_wall_h(void); /* s234 */
+
 /* steps 1 and 7 of the map: a wall tile of the square drawn at (x, y) - side
    0 west, 1 north (a room's front walls), 2 south, 3 east (its back walls) */
 static void
@@ -7752,7 +7754,9 @@ vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1
             /* s233: its own face, where it stands */
             vulture_persp_wall((float) (side == 0 ? x - V_MAP_XMOD : x), (float) (side == 0 ? y : y - V_MAP_YMOD),
                                side == 0 ? -k : k);
+            vulture_persp_wallshade(true, (float) vrock_wall_h()); /* s234 */
             vulture_put_tile_shaded(x, y, tile, shade);
+            vulture_persp_wallshade(false, 0.0f);
             vulture_persp_restore(ppm, pps);
             return;
         }
@@ -7774,6 +7778,7 @@ vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1
     }
     /* s233: a wall face through the camera - each point its height over the foot */
     vulture_persp_wall((float) (eface ? x : x - V_MAP_XMOD), (float) (eface ? y + V_MAP_YMOD : y), eface ? -k : k);
+    vulture_persp_wallshade(true, (float) vrock_wall_h()); /* s234: shaded by height, lit by the torches */
     /* the wall's foot, carried on to where you stand: in front of you
        (lower on the screen) it hides you; at your side or behind, not */
     foot = eface ? y + V_MAP_YMOD - (vwall_hx - x) * k : y + (vwall_hx - x + V_MAP_XMOD) * k;
@@ -7802,6 +7807,7 @@ vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1
         fc.cut = vcut_now; /* s223 */
         vxr_faces.push_back(fc);
     }
+    vulture_persp_wallshade(false, 0.0f); /* s234 */
     vulture_persp_restore(ppm, pps); /* s233 */
 }
 
@@ -8270,6 +8276,69 @@ vtorch_blob(int x, int y, int ir, int r, int g, int b, int alpha, bool add = tru
     vulture_put_img(x - ir, y - ir, s);
 }
 
+/* s234: a back wall's face (tile) on square (j, i), drawn at (x, y), facing
+   the floor square (fj, fi) - a torch on it?  Where (tx, ty): the middle of
+   the face's foot, a little over half way up it */
+static bool
+vtorch_spot(int x, int y, int j, int i, int fj, int fi, int tile, bool eface, int *tx, int *ty)
+{
+    vulture_tile *wt;
+    int k, seed;
+
+    if (tile < 0 || tile == V_TILE_NONE || !isok(j, i) || !isok(fj, fi)) /* s234: not particles */
+        return false;
+    if (levl[fj][fi].typ != ROOM || !levl[fj][fi].lit || !levl[j][i].seenv || !levl[fj][fi].seenv)
+        return false;
+    seed = (int) ledger_no(&u.uz) * 7;
+    if ((2 * j + i + seed) % 3 != 0) /* every third square, whichever way the wall runs */
+        return false;
+    for (k = 1; k <= 3; k++) /* not on a banner, a painting or a niche (a pillar will do) */
+        if (tile == walls_full[V_WALL_BRICK + k].south || tile == walls_full[V_WALL_BRICK + k].east
+            || tile == walls_half[V_WALL_BRICK + k].south || tile == walls_half[V_WALL_BRICK + k].east)
+            return false;
+    if (!(wt = vulture_get_tile(tile)) || !wt->graphic)
+        return false;
+    *tx = eface ? x + V_MAP_XMOD / 2 : x - V_MAP_XMOD / 2;
+    *ty = y + V_MAP_YMOD / 2 - (int) (-wt->ymod * 0.55);
+    return true;
+}
+
+/* s234: before the walls are drawn, each torch in sight - its flame and its
+   light, for the pools it throws on the walls (vulture_persp_lamps) */
+static void
+vtorch_lamps(mapdata *md, struct walls (*mw)[COLNO], int cx, int cy, int vx, int vy, int map_tr_y, int diff, int sum)
+{
+    std::vector<float> v;
+    double tt = SDL_GetTicks() / 1000.0;
+    int ti, tj, rdj, rdi, j, i, x, y, f, sj, si, ej, ei, tx, ty;
+
+    if (!vulture_persp_live() || !md || !mw)
+        return;
+    v_rot(0, 1, vulture_view_rot, &sj, &si);
+    v_rot(1, 0, vulture_view_rot, &ej, &ei);
+    for (ti = -map_tr_y; ti <= map_tr_y; ti++)
+        for (tj = diff + ti; tj + ti <= sum; tj++) {
+            v_rot(tj, ti, vulture_view_rot, &rdj, &rdi);
+            j = vx + rdj, i = vy + rdi;
+            if (j < 1 || j >= COLNO || i < 0 || i >= ROWNO || md->get_glyph(MAP_BACK, j, i) != V_TILE_WALL_GENERIC)
+                continue;
+            x = cx + V_MAP_XMOD * (tj - ti), y = cy + V_MAP_YMOD * (tj + ti);
+            for (f = 0; f < 2; f++) {
+                int fj = j + (f ? ej : sj), fi = i + (f ? ei : si);
+                int tile = f ? mw[i][j].east : mw[i][j].south;
+                double ph = j * 1.9 + i * 2.7, fl;
+
+                if (!isok(fj, fi) || !cansee(fj, fi) || !vtorch_spot(x, y, j, i, fj, fi, tile, f != 0, &tx, &ty))
+                    continue;
+                fl = 0.82 + 0.10 * sin(tt * 8.3 + ph) + 0.06 * sin(tt * 19.7 + j) + 0.03 * ((rand() % 100) / 100.0);
+                v.push_back((float) tx), v.push_back((float) (ty - 17));
+                v.push_back((float) (150.0 * fl)), v.push_back((float) (86.0 * fl)), v.push_back((float) (38.0 * fl));
+                v.push_back(100.0f);
+            }
+        }
+    vulture_persp_lamps(v.empty() ? NULL : &v[0], (int) (v.size() / 6));
+}
+
 /* step 7 of the map: a back wall's face (tile) on square (j, i), drawn at
    (x, y), facing the floor square (fj, fi) - a torch on it? */
 static void
@@ -8277,28 +8346,14 @@ vtorch_draw(int x, int y, int j, int i, int fj, int fi, int tile, bool eface)
 {
     vulture_tile *wt;
     SDL_Surface *sc;
-    int k, tx, ty, seed;
+    int tx, ty;
 
-    if (!vfx_ambient || tile < 0 || tile == V_TILE_NONE || !isok(j, i) || !isok(fj, fi))
-        return;
-    if (levl[fj][fi].typ != ROOM || !levl[fj][fi].lit || !levl[j][i].seenv || !levl[fj][fi].seenv)
-        return;
-    seed = (int) ledger_no(&u.uz) * 7;
-    if ((2 * j + i + seed) % 3 != 0) /* every third square, whichever way the wall runs */
-        return;
-    for (k = 1; k <= 3; k++) /* not on a banner, a painting or a niche (a pillar will do) */
-        if (tile == walls_full[V_WALL_BRICK + k].south || tile == walls_full[V_WALL_BRICK + k].east
-            || tile == walls_half[V_WALL_BRICK + k].south || tile == walls_half[V_WALL_BRICK + k].east)
-            return;
-    if (!(wt = vulture_get_tile(tile)) || !wt->graphic)
+    if (!vtorch_spot(x, y, j, i, fj, fi, tile, eface, &tx, &ty) || !(wt = vulture_get_tile(tile)) || !wt->graphic)
         return;
     float pps[6], kk = (float) V_MAP_YMOD / V_MAP_XMOD;
     int ppm = vulture_persp_save(pps); /* s233: on its wall face */
 
     vulture_persp_wall((float) (eface ? x : x - V_MAP_XMOD), (float) (eface ? y + V_MAP_YMOD : y), eface ? -kk : kk);
-    /* the middle of the face's foot, a little over half way up it */
-    tx = eface ? x + V_MAP_XMOD / 2 : x - V_MAP_XMOD / 2;
-    ty = y + V_MAP_YMOD / 2 - (int) (-wt->ymod * 0.55);
     if ((sc = vtorch_sconce()) != NULL)
         vulture_put_img(tx - 4, ty - 15, sc);
     {
@@ -8459,7 +8514,7 @@ vrefl_draw(mapdata *md, int j, int i, int tile_id, int face, int tx, int ty, dou
     bool flip, any = false, wet[9], ice[9];
     int wx[9], wy[9];
 
-    if (!vulture_gpumap_on || !md || !vfx_ambient || !(tile = vulture_get_tile(tile_id)) || !tile->graphic)
+    if (!vulture_gpumap_on || !md || !(tile = vulture_get_tile(tile_id)) || !tile->graphic) /* s234: not particles */
         return;
     for (k = 0; k < 9; k++) {
         int dj, di;
@@ -8808,7 +8863,7 @@ vdecal_draw(int j, int i, int x, int y, int style, bool rug, bool furniture)
     int seed = (int) ledger_no(&u.uz) * 131 + 17, kind, var;
     SDL_Surface *s;
 
-    if (!vfx_ambient || style < 0 || rug || furniture)
+    if (style < 0 || rug || furniture) /* s234: not particles */
         return;
     switch (style) {
     case V_FLOOR_COBBLESTONE: case V_FLOOR_DARK: w = wcob, dens = 0.16; break;
@@ -9480,6 +9535,7 @@ vrock_low_face(int x, int y, int tile, int low, int sh, int dim = 0, bool eface 
         return;
     ppm = vulture_persp_save(pps); /* s233: a face, through the camera */
     vulture_persp_wall((float) (eface ? x : x - V_MAP_XMOD), (float) (eface ? y + V_MAP_YMOD : y), eface ? -kk : kk);
+    vulture_persp_wallshade(true, (float) vrock_wall_h()); /* s234 */
     keep = low + V_MAP_YMOD + 1;
     if (keep > t->graphic->h)
         keep = t->graphic->h;
@@ -9499,6 +9555,7 @@ vrock_low_face(int x, int y, int tile, int low, int sh, int dim = 0, bool eface 
     }
     SDL_SetSurfaceColorMod(t->graphic, 255, 255, 255);
     SDL_SetSurfaceAlphaMod(t->graphic, 255);
+    vulture_persp_wallshade(false, 0.0f); /* s234 */
     vulture_persp_restore(ppm, pps); /* s233 */
 }
 
@@ -9732,6 +9789,20 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
         ghost = vcut_r[i][j];
     if ((b == V_TILE_WALL_GENERIC || lintel) && vcut_now < 255) /* s223: a front wall of your room: its top too */
         ghost = vcut_now;
+    if (lintel && !ghost) { /* s234: a doorway counts as its room, so its lintel stayed solid in a see-through
+                               front wall - a dark slab floating over the door; it goes with its wall */
+        static const int l4[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+        int k4, mc = 255;
+
+        for (k4 = 0; k4 < 4; k4++) {
+            int nj = j + l4[k4][0], ni = i + l4[k4][1];
+
+            if (isok(nj, ni) && md->get_glyph(MAP_BACK, nj, ni) == V_TILE_WALL_GENERIC && vcut_a[ni][nj] < mc)
+                mc = vcut_a[ni][nj];
+        }
+        if (mc < 255)
+            ghost = mc;
+    }
     for (side = 0; side < 2 && !lintel; side++) { /* screen-south (side 2), screen-east (side 3); s231: a lintel has none */
         int nj = side ? ej : sj, ni = side ? ei : si, nb, nh, face, dim;
         bool out = !isok(nj, ni);
@@ -9799,7 +9870,9 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
             float L = vtop_style[i][j] >= 0 ? vtop_light[i][j] : 0.3f;
 
             L = L > 1.0f ? 1.0f : L < 0.0f ? 0.0f : L;
-            sh = (int) (sh * (1.0f - (1.0f - L) * 0.94f) * 0.82f); /* a top a little under its lit face (by a lamp, white marble glowed) */
+            sh = (int) (sh * (1.0f - (1.0f - L) * 0.94f)
+                        * (vulture_persp_live() && !ghost ? vulture_persp_wall_light((float) hw) * 0.95f
+                                                          : 0.82f)); /* a top a little under its lit face (by a lamp, white marble glowed); s234: under its face's top - a see-through one as it was */
         }
         { /* s219: the soft edges - toward rock you do not know (or the map's edge) */
             static const int ev[4][2] = { { -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 } };
@@ -18129,7 +18202,7 @@ vl_rockish(mapdata *md, int x, int y) /* wall or rock, as known */
         return true;
     return md && md->get_glyph(MAP_BACK, x, y) == V_TILE_WALL_GENERIC;
 }
-#define VL_LIT 0.70f     /* a lit room in sight (s152: 0.80) */
+#define VL_LIT 0.60f     /* a lit room in sight (s152: 0.80; s234: 0.70 - its torches light it more) */
 #define VL_DARK 0.26f    /* an unlit square in sight - next to you (0.38) */
 #define VL_MEM 0.19f     /* remembered: the fog of war (0.50 on a x0.68 tile; s188: 0.26) */
 #define VL_MEMDARK 0.12f /* a remembered dark room's floor (0.50 on a x0.31 tile; s188: 0.16) */
@@ -18319,7 +18392,7 @@ vl_compute(mapdata *md)
                 nw += vl_rockish(md, x + 1, y);
                 nw += vl_rockish(md, x, y - 1);
                 nw += vl_rockish(md, x, y + 1);
-                base *= 1.0f - 0.055f * (float) nw;
+                base *= 1.0f - 0.08f * (float) nw; /* s234: was 0.055 */
             }
             vl_L[y][x] = base;
             vl_R[y][x] = vl_G[y][x] = vl_B[y][x] = base;
@@ -18348,7 +18421,7 @@ vl_compute(mapdata *md)
             continue;
         fl = 0.80 + 0.10 * sin(t * 8.3 + q.fj * 1.9 + q.fi * 2.7) + 0.06 * sin(t * 19.7 + q.fj)
              + 0.04 * ((rand() % 100) / 100.0);
-        vl_add(q.fj, q.fi, 2.6, 0.34 * fl, 1.0, 0.68, 0.38, 52.0f, 40.0f);
+        vl_add(q.fj, q.fi, 3.2, 0.50 * fl, 1.0, 0.68, 0.38, 52.0f, 40.0f); /* s234: was 2.6, 0.34 */
     }
     for (y = 0; y < ROWNO; y++)
         for (x = 1; x < COLNO; x++) {
@@ -20152,6 +20225,7 @@ levelwin::draw()
     }
 
     Uint32 vpf_a = SDL_GetTicks(); /* probe: s152 frame stages */
+    Uint64 vpf_a0 = SDL_GetPerformanceCounter(); /* probe: s234 */
     bool vgm = false; /* s183: tiles and sprites into the GPU map layer */
 
     if (!vl_on || vulture_gpulit_ok()) { /* s185: lighting on the GPU too */
@@ -20183,6 +20257,7 @@ levelwin::draw()
     bool vl_fog = vl_on && u.ux && !u.uswallow && this->w >= 32 && this->h >= 32;
     vnm_begin(); /* s149: the map's tiles lay their normal maps from here */
     vulture_persp_floor(); /* s233: the floor pass lays the floor */
+    Uint64 vpf_f0 = SDL_GetPerformanceCounter(); /* probe: s234 */
 
     /* without the +-1 small corners within the viewport are not drawn */
     diff = map_tr_x - map_tr_y - 1;
@@ -20199,7 +20274,8 @@ levelwin::draw()
             y = map_centre_y + V_MAP_YMOD * (__j + __i);
 
             if (j < 1 || j >= COLNO || i < 0 || i >= ROWNO) {
-                vulture_put_tile(x, y, V_MISC_OFF_MAP);
+                if (!vulture_persp_live()) /* s234: through the camera the cleared black is the void */
+                    vulture_put_tile(x, y, V_MISC_OFF_MAP);
                 continue;
             }
 
@@ -20262,10 +20338,12 @@ levelwin::draw()
                 tile_id = V_MISC_UNMAPPED_AREA;
 
             /* s187: while lit the void is black (its tile is a dark grey
-               texture, which the light layer drew as the level's outline) */
-            vulture_put_tile_shaded(x, y, vl_fog && tile_id == V_MISC_UNMAPPED_AREA ? V_MISC_OFF_MAP
-                                                                                  : tile_id,
-                                    shadelevel);
+               texture, which the light layer drew as the level's outline);
+               s234: through the camera that black is the cleared layer's */
+            if (!(vl_fog && tile_id == V_MISC_UNMAPPED_AREA && vulture_persp_live()))
+                vulture_put_tile_shaded(x, y, vl_fog && tile_id == V_MISC_UNMAPPED_AREA ? V_MISC_OFF_MAP
+                                                                                      : tile_id,
+                                        shadelevel);
 
             /* shortcut for unmapped case */
             if (tile_id == V_MISC_UNMAPPED_AREA)
@@ -20288,8 +20366,10 @@ levelwin::draw()
             vao_square(map_data, j, i, x, y, map_darkness, vl_fog);
         }
     }
+    Uint64 vpf_f1 = SDL_GetPerformanceCounter(); /* probe: s234 */
     vslab_draw(); /* s205: over the void's tiles, under everything standing */
     vulture_persp_floor(); /* s233: the cast shadows lie on the floor */
+    Uint64 vpf_fl = SDL_GetPerformanceCounter(); /* probe: s234 the floor pass's share */
     vxr_faces.clear(), vxr_mons.clear(), vxr_seq = 0; /* s210 */
     vtorch_list.clear(); /* s211 */
     vrock_prepare(map_data, view_x, view_y, map_tr_y, diff, sum); /* s215: the rock mass */
@@ -20303,6 +20383,7 @@ levelwin::draw()
         vfx_mover_screen(u.ux, u.uy, map_centre_x, map_centre_y, view_x, view_y, &vwall_hx, &vwall_hy);
     }
     vcut_prepare(map_data, view_x, view_y, map_tr_y, diff, sum); /* s223: the room you are in, whole */
+    vtorch_lamps(map_data, maptile_wall, map_centre_x, map_centre_y, view_x, view_y, map_tr_y, diff, sum); /* s234 */
     vhp.ok = false; /* s193 */
     if (vl_fog && vfx_shadows) { /* s191: shadows cast by the lights, on the floor */
         SDL_Rect cr = { (Sint16) this->abs_x, (Sint16) this->abs_y, (Uint16) this->w,
@@ -20559,6 +20640,12 @@ levelwin::draw()
     if (vgm)
         vulture_gpumap_end(); /* s183: effects and the HUD go into the overlay */
     Uint32 vpf_b = SDL_GetTicks(); /* probe */
+    if (getenv("VULTURE_SELFTEST")) /* probe: s234 */
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "frame split: before %u floor %u slab %u standing %u us\n",
+                          (unsigned) ((vpf_f0 - vpf_a0) * 1000000 / SDL_GetPerformanceFrequency()),
+                          (unsigned) ((vpf_f1 - vpf_f0) * 1000000 / SDL_GetPerformanceFrequency()),
+                          (unsigned) ((vpf_fl - vpf_f1) * 1000000 / SDL_GetPerformanceFrequency()),
+                          (unsigned) ((SDL_GetPerformanceCounter() - vpf_fl) * 1000000 / SDL_GetPerformanceFrequency()));
     vl_render(map_data, map_centre_x, map_centre_y, view_x, view_y, this->abs_x,
               this->abs_y, this->w, this->h); /* s133: dynamic lighting */
     Uint32 vpf_c = SDL_GetTicks(); /* probe */

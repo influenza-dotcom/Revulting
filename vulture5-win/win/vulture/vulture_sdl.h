@@ -138,6 +138,9 @@ extern float vulture_persp_scale(float u, float v);
 extern void vulture_persp_unfloor(float x, float y, float *u, float *v);
 extern int vulture_persp_save(float *p);
 extern void vulture_persp_restore(int mode, const float *p);
+extern void vulture_persp_wallshade(bool on, float hw);  /* s234 */
+extern void vulture_persp_lamps(const float *v, int n);   /* s234 */
+extern float vulture_persp_wall_light(float h);           /* s234 */
 extern void vulture_gpu_hd_derive_cut(SDL_Surface *copy, SDL_Surface *orig, SDL_Surface *mask,
                                       bool outside); /* s203 */
 /* the frame as it would be shown (map layer + overlay), copied into out

@@ -5033,6 +5033,35 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   The ROCK probe now saves each shot flat, at the default and at 170.
 - Cost: the map frame went from 6-12 ms to 9-20 ms in the probes.
 
+### 234. Lit like a rendered room; torches you can see
+
+- Through the camera a wall face is shaded by height: dark in the corner at
+  its foot, then falling off toward its top (1 - 0.42 t^2), its vertices
+  carrying the shade (finer cells on a shaded face; the see-through walls
+  round you get it per grid vertex).  A top matches its face's top
+  (vulture_persp_wall_light), a see-through top keeps its old lighter shade
+  (dark and faint over a lit floor it read as a hole).
+- Each torch in sight throws a warm pool on the walls round it: the face's
+  own art laid again, added, its vertices carrying the torches' light, so
+  it lights the stone's colour and follows its shape.  The torches are
+  found before the walls are drawn (vtorch_spot / vtorch_lamps).
+- A lit room leans on its torches: VL_LIT 0.70 -> 0.60, a torch's light
+  2.6 / 0.34 -> 3.2 / 0.50; the floor's contact shadow 0.055 -> 0.08 a side.
+- The user never saw the torches: their Visual effects menu has
+  "Atmosphere particles" off, and that switch also turned off the torches,
+  the water's reflections, the floor's cracks and pebbles, creatures' idle
+  life and the trees' sway.  It now turns off particles only (the ambient
+  motes, the void's dust, furniture's smoke and drips, halos).
+- A doorway counts as its room, so a front doorway's lintel stayed solid in
+  a see-through front wall - a dark slab over the door; it goes with its
+  wall now.
+- Through the camera the void's black tiles are not drawn (the layer is
+  cleared to black; thousands of them past the window's top corners).
+- The default perspective strength is 150 (130 before).
+- Probe logs: "frame split" (before / floor / slab / standing) and the map
+  pass's geometry calls and vertices; VULTURE_NO_WALLSHADE.  The test
+  profile now carries the user's effects.txt.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

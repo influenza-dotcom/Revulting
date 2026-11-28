@@ -483,6 +483,21 @@ static int vpp_mode = 0;                   /* 0 as drawn, 1 floor, 2 billboard, 
 static float vpp_ax = 0.0f, vpp_ay = 0.0f, vpp_bx = 0.0f, vpp_by = 0.0f, vpp_bs = 1.0f; /* billboard */
 static float vpp_wx = 0.0f, vpp_wy = 0.0f, vpp_wk = 0.0f; /* wall: a point of its foot line, its slope */
 static float vpp_h = 0.0f;                 /* ceiling: its height */
+/*
+ * IMPLEMENTATION_LOG s234: walls lit like walls.  A wall face drawn through
+ * the camera is shaded by height - dark in the corner at its foot, then
+ * falling off toward its top, away from the torches and the floor's light -
+ * and each torch near it throws a warm pool on it: the face's own art laid
+ * again, added, its vertices carrying the torches' light (so it lights the
+ * stone's colour, follows its shape and fades with it).
+ */
+static bool vpp_wshade = false;  /* s234: this wall face is shaded by height and lit by the torches */
+static float vpp_whw = 100.0f;   /* the walls' height (px) */
+struct vpp_lamp_t {
+	float x, y, r, g, b, rad;    /* a torch's flame on the iso picture, its light (0..255), its reach */
+};
+static std::vector<vpp_lamp_t> vpp_lamps;
+static unsigned vpp_n_calls = 0, vpp_n_verts = 0, vpp_n_copies = 0; /* probe: s234 */
 #define VPP_IT 2.340823f /* 1 / tan: the camera's sine is 22/56 */
 #define VPP_IK 2.768022f /* 1 / (sin cos) */
 static SDL_Texture *vgm_dof_t[3] = { NULL, NULL, NULL }; /* s205: the map halved, quartered, eighthed */
@@ -949,6 +964,51 @@ static inline bool vpp_active(void)
 	return vpp_live && vpp_mode != 0;
 }
 
+/* s234: how lit a wall face is h px up its face */
+static inline float vpp_wallf(float h)
+{
+	float ao, tt;
+
+	if (h <= 0.0f)
+		return 0.66f;
+	ao = h < 18.0f ? 0.66f + 0.34f * (h / 18.0f) * (2.0f - h / 18.0f) : 1.0f; /* the corner at its foot */
+	tt = h / vpp_whw;
+	tt = tt > 1.0f ? 1.0f : tt;
+	return ao * (1.0f - 0.42f * tt * tt); /* falling off toward the top */
+}
+
+/* s234: the torches' light at iso (u, v), 0..255 a channel */
+static inline void vpp_lamp_at(float u, float v, float *r, float *g, float *b)
+{
+	size_t k;
+
+	*r = *g = *b = 0.0f;
+	for (k = 0; k < vpp_lamps.size(); k++) {
+		const vpp_lamp_t &l = vpp_lamps[k];
+		float dx = u - l.x, dy = (v - l.y) * 1.2f, d2 = (dx * dx + dy * dy) / (l.rad * l.rad), w;
+
+		if (d2 >= 1.0f)
+			continue;
+		w = (1.0f - d2) * (1.0f - d2);
+		*r += l.r * w, *g += l.g * w, *b += l.b * w;
+	}
+	*r = *r > 255.0f ? 255.0f : *r, *g = *g > 255.0f ? 255.0f : *g, *b = *b > 255.0f ? 255.0f : *b;
+}
+
+/* s234: any torch reaching the iso box (x0, y0)-(x1, y1)? */
+static inline bool vpp_lamps_near(float x0, float y0, float x1, float y1)
+{
+	size_t k;
+
+	for (k = 0; k < vpp_lamps.size(); k++) {
+		const vpp_lamp_t &l = vpp_lamps[k];
+
+		if (l.x + l.rad > x0 && l.x - l.rad < x1 && l.y + l.rad > y0 && l.y - l.rad < y1)
+			return true;
+	}
+	return false;
+}
+
 /* s233: texture t's (u0, v0)-(u1, v1) laid over the quad q drawn at (iso:
    top-left, top-right, bottom-right, bottom-left) through the camera -
    coloured, faded (a4: per corner), at the zoom if view */
@@ -957,6 +1017,7 @@ static void vpp_emit(SDL_Texture *t, const float *q, float u0, float v0, float u
 {
 	static std::vector<SDL_Vertex> vx;
 	static std::vector<int> ix;
+	static std::vector<SDL_FPoint> lamp_iso; /* s234: each vertex's iso point */
 	int nx = 1, ny = 1, i, j;
 	float qq[8];
 
@@ -982,6 +1043,12 @@ static void vpp_emit(SDL_Texture *t, const float *q, float u0, float v0, float u
 			else
 				ny++;
 		}
+		if (vpp_wshade && vpp_mode == 3) { /* s234: fine enough for the shade's curve */
+			int sx = (int) ceilf(wd / 28.0f), sy = (int) ceilf(ht / 14.0f);
+
+			nx = nx > sx ? nx : sx > 12 ? 12 : sx;
+			ny = ny > sy ? ny : sy > 24 ? 24 : sy;
+		}
 	}
 	vx.resize((size_t) (nx + 1) * (size_t) (ny + 1));
 	ix.resize((size_t) nx * (size_t) ny * 6);
@@ -993,15 +1060,26 @@ static void vpp_emit(SDL_Texture *t, const float *q, float u0, float v0, float u
 			float px = tx + (bx - tx) * fv, py = ty + (by - ty) * fv;
 			SDL_Vertex &e = vx[(size_t) j * (nx + 1) + i];
 
+			if (vpp_wshade && vpp_mode == 3) { /* s234: lit by height */
+				float m = vpp_wallf(vpp_wy + vpp_wk * (px - vpp_wx) - py);
+
+				e.color.r = (Uint8) (r * m), e.color.g = (Uint8) (g * m), e.color.b = (Uint8) (b * m);
+			} else
+				e.color.r = r, e.color.g = g, e.color.b = b;
+			e.tex_coord.y = py; /* s234: the iso point, for the torches' pass (set again below) */
+			e.tex_coord.x = px;
 			vpp_map(px, py, &px, &py);
 			e.position.x = view ? vgm_vx(px) : px, e.position.y = view ? vgm_vy(py) : py;
-			e.color.r = r, e.color.g = g, e.color.b = b;
 			if (a4) {
 				float at = a4[0] + (a4[1] - a4[0]) * fu, ab = a4[3] + (a4[2] - a4[3]) * fu;
 
 				e.color.a = (Uint8) (at + (ab - at) * fv + 0.5f);
 			} else
 				e.color.a = a;
+			if (lamp_iso.size() < vx.size())
+				lamp_iso.resize(vx.size());
+			lamp_iso[(size_t) j * (nx + 1) + i].x = e.tex_coord.x;
+			lamp_iso[(size_t) j * (nx + 1) + i].y = e.tex_coord.y;
 			e.tex_coord.x = u0 + (u1 - u0) * fu, e.tex_coord.y = v0 + (v1 - v0) * fv;
 		}
 	for (j = 0; j < ny; j++)
@@ -1012,6 +1090,31 @@ static void vpp_emit(SDL_Texture *t, const float *q, float u0, float v0, float u
 			ix[k + 3] = a0, ix[k + 4] = a0 + nx + 2, ix[k + 5] = a0 + nx + 1;
 		}
 	SDL_RenderGeometry(vulture_gpu, t, &vx[0], (int) vx.size(), &ix[0], (int) ix.size());
+	vpp_n_calls++, vpp_n_verts += (unsigned) vx.size(); /* probe */
+	if (vpp_wshade && vpp_mode == 3 && !vpp_lamps.empty() && (r | g | b)) { /* s234: the torches' pools on it (not on a dimming pass) */
+		float x0 = fminf(fminf(q[0], q[2]), fminf(q[4], q[6])), x1 = fmaxf(fmaxf(q[0], q[2]), fmaxf(q[4], q[6]));
+		float y0 = fminf(fminf(q[1], q[3]), fminf(q[5], q[7])), y1 = fmaxf(fmaxf(q[1], q[3]), fmaxf(q[5], q[7]));
+
+		if (vpp_lamps_near(x0, y0, x1, y1)) {
+			SDL_BlendMode bm = SDL_BLENDMODE_BLEND;
+			size_t k;
+			bool any = false;
+
+			for (k = 0; k < vx.size(); k++) {
+				float lr, lg, lb;
+
+				vpp_lamp_at(lamp_iso[k].x, lamp_iso[k].y, &lr, &lg, &lb);
+				vx[k].color.r = (Uint8) lr, vx[k].color.g = (Uint8) lg, vx[k].color.b = (Uint8) lb;
+				any = any || lr + lg + lb > 3.0f;
+			}
+			if (any) {
+				SDL_GetTextureBlendMode(t, &bm);
+				SDL_SetTextureBlendMode(t, SDL_BLENDMODE_ADD);
+				SDL_RenderGeometry(vulture_gpu, t, &vx[0], (int) vx.size(), &ix[0], (int) ix.size());
+				SDL_SetTextureBlendMode(t, bm);
+			}
+		}
+	}
 }
 
 /* s233: the rect (x, y, w, h) of a texture's src (s->w x s->h) through the camera */
@@ -1040,6 +1143,7 @@ static void vpp_emit_rect(SDL_Texture *t, SDL_Surface *s, const SDL_Rect *src, f
 		SDL_SetTextureColorMod(t, r, g, b);
 		SDL_SetTextureAlphaMod(t, a);
 		SDL_RenderCopyF(vulture_gpu, t, sp, &d);
+		vpp_n_copies++; /* probe */
 		return;
 	}
 	if (src && s->w > 0 && s->h > 0) {
@@ -1084,6 +1188,40 @@ bool vulture_persp_live(void)
 void vulture_persp_flat(void)
 {
 	vpp_mode = 0;
+	vpp_wshade = false; /* s234 */
+}
+
+/* s234: the next draws are a wall face (walls hw px tall): shade it by height, light it by the torches */
+void vulture_persp_wallshade(bool on, float hw)
+{
+	static int off = -1; /* probe: VULTURE_NO_WALLSHADE */
+
+	if (off < 0)
+		off = getenv("VULTURE_NO_WALLSHADE") ? 1 : 0;
+	vpp_wshade = on && !off;
+	if (hw > 8.0f)
+		vpp_whw = hw;
+}
+
+/* s234: this frame's torches - n of (x, y, r, g, b, reach) on the iso picture */
+void vulture_persp_lamps(const float *v, int n)
+{
+	int k;
+
+	vpp_lamps.clear();
+	for (k = 0; k < n && v; k++) {
+		vpp_lamp_t l;
+
+		l.x = v[6 * k], l.y = v[6 * k + 1], l.r = v[6 * k + 2], l.g = v[6 * k + 3], l.b = v[6 * k + 4];
+		l.rad = v[6 * k + 5] > 4.0f ? v[6 * k + 5] : 4.0f;
+		vpp_lamps.push_back(l);
+	}
+}
+
+/* s234: how lit a wall face is h px up (1 at the middle of a lit face) - for its top to match */
+float vulture_persp_wall_light(float h)
+{
+	return vpp_wallf(h);
 }
 
 void vulture_persp_floor(void)
@@ -2135,6 +2273,11 @@ void vulture_gpumap_end(void)
 {
 	if (!vulture_gpumap_on)
 		return;
+	if (getenv("VULTURE_SELFTEST")) { /* probe: s234 what the map pass sent */
+		vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "gpumap: %u geometry calls, %u vertices, %u copies\n",
+			vpp_n_calls, vpp_n_verts, vpp_n_copies);
+		vpp_n_calls = vpp_n_verts = vpp_n_copies = 0;
+	}
 	SDL_RenderSetClipRect(vulture_gpu, NULL);
 	SDL_SetRenderTarget(vulture_gpu, NULL);
 	vulture_gpumap_on = false;
@@ -2658,9 +2801,14 @@ static void vgm_holed_geometry(SDL_Texture *t, float x, float y, float w, float 
 				f = f * f * (3.0f - 2.0f * f);
 				al = amin + (255.0f - amin) * f;
 			}
+			if (vpp_live && vpp_wshade && vpp_mode == 3) { /* s234: lit by height */
+				float m = vpp_wallf(vpp_wy + vpp_wk * (px - vpp_wx) - py);
+
+				q.color.r = (Uint8) (r * m), q.color.g = (Uint8) (g * m), q.color.b = (Uint8) (b * m);
+			} else
+				q.color.r = r, q.color.g = g, q.color.b = b;
 			vpp_map(px, py, &px, &py); /* s233: through the camera (the hole was placed before) */
 			q.position.x = view ? vgm_vx(px) : px, q.position.y = view ? vgm_vy(py) : py;
-			q.color.r = r, q.color.g = g, q.color.b = b;
 			q.color.a = (Uint8) (al * a / 255.0f);
 			q.tex_coord.x = u, q.tex_coord.y = s;
 		}
@@ -2866,6 +3014,7 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			SDL_SetTextureBlendMode(t, bm);
 			SDL_SetTextureColorMod(t, 255, 255, 255);
 			vulture_persp_restore(r.pm, r.pp); /* s233 */
+			vpp_wshade = false; /* s234: normals take no light */
 			if (vpp_active() && !r.holed) { /* s233: through the camera, as the map pass laid it */
 				SDL_SetTextureAlphaMod(t, 255);
 				SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);

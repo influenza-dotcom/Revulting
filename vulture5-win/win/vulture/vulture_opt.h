@@ -41,7 +41,7 @@ struct vulture_optstruct {
 	 * camera close over a diorama sees it.  1 (default) on, 0 off. */
 	int depth_blur;
 	/* s233: the map through a perspective camera - 0 off (the flat iso
-	 * picture), 130 (default) the camera five screen-heights back, more is
+	 * picture), 150 (default) the camera 4.3 screen-heights back, more is
 	 * stronger (closer) */
 	int perspective;
 	/* Overview-map (Tab) zoom.  The parchment is a fixed 640x480 painting;
