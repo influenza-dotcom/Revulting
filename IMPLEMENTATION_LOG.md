@@ -4937,6 +4937,15 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
 - Checked: door swings, the stairs fade, water and last-seen ghosts with
   the ceiling (no change needed).
 
+### 226. Tops without the face's shading
+
+- Polish sweep (three random levels, Mines 5/7/8 incl. Minetown): stucco
+  and light walls carry a light-to-dark gradient down the face; laid flat
+  on a top it striped every square, so roofs read louvered.  vrock_top_tex
+  now divides out each face row's mean colour (the face is skewed: column
+  ax starts at 22 ax / 56) and puts the face's mean back - the texture
+  stays, the shading goes.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

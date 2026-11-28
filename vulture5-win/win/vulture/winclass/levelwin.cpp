@@ -8910,6 +8910,24 @@ vrock_top_tex(int style)
     fh = -wt->ymod; /* the face's height (75 full, 43 half) */
     SDL_LockSurface(src);
     SDL_LockSurface(s);
+    /* s226: the mean colour of each row down the face (the face is skewed:
+       column ax starts at 22 ax / 56) - its shading top to bottom, divided
+       out below (laid flat, it striped every top) */
+    double rowm[128][4];
+
+    memset(rowm, 0, sizeof rowm);
+    for (x = 0; x < src->w; x++)
+        for (y = 0; y < src->h; y++) {
+            Uint32 p = ((Uint32 *) ((Uint8 *) src->pixels + (size_t) y * src->pitch))[x];
+            int r = y - (int) (22.0 * x / 56.0);
+
+            if ((p >> 24) < 200 || r < 0 || r >= 128)
+                continue;
+            rowm[r][0] += (p >> 16) & 255, rowm[r][1] += (p >> 8) & 255, rowm[r][2] += p & 255, rowm[r][3]++;
+        }
+    for (y = 0; y < 128; y++)
+        if (rowm[y][3] > 0)
+            rowm[y][0] /= rowm[y][3], rowm[y][1] /= rowm[y][3], rowm[y][2] /= rowm[y][3];
     for (y = 0; y < src->h; y++) /* the face's mean colour: for any hole */
         for (x = 0; x < src->w; x++) {
             Uint32 p = ((Uint32 *) ((Uint8 *) src->pixels + (size_t) y * src->pitch))[x];
@@ -8935,8 +8953,22 @@ vrock_top_tex(int style)
                 ax = ax < 0 ? 0 : ax >= src->w ? src->w - 1 : ax;
                 ay = ay < 0 ? 0 : ay >= src->h ? src->h - 1 : ay;
                 q = ((Uint32 *) ((Uint8 *) src->pixels + (size_t) ay * src->pitch))[ax];
-                if ((q >> 24) < 128) /* off the face: its mean colour */
+                if ((q >> 24) < 128) { /* off the face: its mean colour */
                     q = (Uint32) ar << 16 | (Uint32) ag << 8 | (Uint32) ab;
+                } else { /* s226: this row's shading out, the face's mean in */
+                    int rr = ay - (int) (22.0 * ax / 56.0), ch;
+                    double cc[3] = { (double) ((q >> 16) & 255), (double) ((q >> 8) & 255), (double) (q & 255) },
+                           mm[3] = { ar, ag, ab };
+
+                    if (rr >= 0 && rr < 128 && rowm[rr][3] > 3)
+                        for (ch = 0; ch < 3; ch++) {
+                            double f = rowm[rr][ch] > 4.0 ? mm[ch] / rowm[rr][ch] : 1.0;
+
+                            f = f < 0.5 ? 0.5 : f > 2.0 ? 2.0 : f;
+                            cc[ch] = cc[ch] * f > 255.0 ? 255.0 : cc[ch] * f;
+                        }
+                    q = (Uint32) cc[0] << 16 | (Uint32) cc[1] << 8 | (Uint32) cc[2];
+                }
                 px = 0xFF000000u | (q & 0x00FFFFFFu);
             }
             ((Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch))[x] = px;
