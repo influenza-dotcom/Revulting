@@ -21810,6 +21810,13 @@ levelwin::get_wall_tiles(int y, int x)
                         }
                     }
                 style = get_wall_decor(fbg, y, x, fy, fx);
+                /* IMPLEMENTATION_LOG s232: a jamb (the face toward a doorway,
+                   or toward a corridor) is the plain wall - a painting, a
+                   banner, a niche or a pillar hang on the room's walls, not on
+                   the narrow side of a door */
+                if (bg != V_TILE_FLOOR_COBBLESTONE && bg != V_MISC_FLOOR_NOT_VISIBLE && style > V_WALL_BRICK
+                    && style <= V_WALL_BRICK + 4)
+                    style = V_WALL_BRICK;
                 tile = (side == 0) ? walltiles[style].west
                        : (side == 1) ? walltiles[style].north
                        : (side == 2) ? walltiles[style].east
