@@ -125,6 +125,19 @@ extern bool vulture_gpumap_hd_ok(void);
 extern SDL_Surface *vulture_gpu_hd_surface(SDL_Surface *s);           /* s229 */
 extern void vulture_gpu_hd_set_made(SDL_Surface *s1x, SDL_Surface *hd); /* s229 */
 extern void vulture_gpumap_set_focus(int y); /* s205: depth of field around you */
+/* s233: the perspective camera over the map layer (vulture_sdl.cpp) */
+extern void vulture_persp_frame(bool on, float cx, float cy, float D);
+extern bool vulture_persp_live(void);
+extern void vulture_persp_flat(void);
+extern void vulture_persp_floor(void);
+extern void vulture_persp_billboard(float ax, float ay);
+extern void vulture_persp_wall(float x0, float y0, float k);
+extern void vulture_persp_ceiling(float h);
+extern void vulture_persp_point(float u, float v, float h, float *x, float *y);
+extern float vulture_persp_scale(float u, float v);
+extern void vulture_persp_unfloor(float x, float y, float *u, float *v);
+extern int vulture_persp_save(float *p);
+extern void vulture_persp_restore(int mode, const float *p);
 extern void vulture_gpu_hd_derive_cut(SDL_Surface *copy, SDL_Surface *orig, SDL_Surface *mask,
                                       bool outside); /* s203 */
 /* the frame as it would be shown (map layer + overlay), copied into out

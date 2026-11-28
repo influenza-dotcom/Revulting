@@ -40,6 +40,10 @@ struct vulture_optstruct {
 	/* s205: depth of field - the map far above and below you softens, as a
 	 * camera close over a diorama sees it.  1 (default) on, 0 off. */
 	int depth_blur;
+	/* s233: the map through a perspective camera - 0 off (the flat iso
+	 * picture), 130 (default) the camera five screen-heights back, more is
+	 * stronger (closer) */
+	int perspective;
 	/* Overview-map (Tab) zoom.  The parchment is a fixed 640x480 painting;
 	 * this is the integer factor its art is built at.  0 = auto: the largest
 	 * factor that fits on screen WITHOUT covering the message lines. */

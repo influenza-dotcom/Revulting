@@ -461,6 +461,30 @@ static bool vgm_view = false;     /* this frame's map is drawn at the zoom */
 static bool vgm_tex_view = false; /* the map layer holds a map drawn so */
 static float vgm_vsx = 1.0f, vgm_vsy = 1.0f, vgm_vlx = 0.0f, vgm_vly = 0.0f;
 static float vgm_vpx = 0.0f, vgm_vpy = 0.0f;
+/*
+ * IMPLEMENTATION_LOG s233: a perspective camera over the map.  The map was an
+ * orthographic picture - nothing near was bigger than anything far, and
+ * nothing slid against anything else as the camera moved - so however it was
+ * lit it read as flat art.  Now every vertex the map layer draws goes through
+ * a real perspective projection: the iso picture's own camera (23 degrees
+ * down: the floor's 22/56 squash) set back a finite distance vpp_D (render px)
+ * from the screen's centre.  Each draw says what it is (levelwin sets the
+ * mode): the floor (height 0), a wall face (its height over its foot line), a
+ * ceiling (its height), or a sprite standing on a square (a billboard, at the
+ * square's scale).  An iso point (u, v) h px up goes to c + (p - c) * D / (D +
+ * w), w = -(v - cy) / tan - h / (sin cos): how far along the view it lies.
+ * Planes in perspective are laid as grids of small cells (straight lines stay
+ * straight; the cells' corners are exact), billboards as one quad.
+ */
+static bool vpp_live = false;              /* this frame's map is seen through it */
+static float vpp_cx = 0.0f, vpp_cy = 0.0f; /* its axis on the 1x map */
+static float vpp_D = 7000.0f;              /* how far back it stands (render px) */
+static int vpp_mode = 0;                   /* 0 as drawn, 1 floor, 2 billboard, 3 wall, 4 ceiling */
+static float vpp_ax = 0.0f, vpp_ay = 0.0f, vpp_bx = 0.0f, vpp_by = 0.0f, vpp_bs = 1.0f; /* billboard */
+static float vpp_wx = 0.0f, vpp_wy = 0.0f, vpp_wk = 0.0f; /* wall: a point of its foot line, its slope */
+static float vpp_h = 0.0f;                 /* ceiling: its height */
+#define VPP_IT 2.340823f /* 1 / tan: the camera's sine is 22/56 */
+#define VPP_IK 2.768022f /* 1 / (sin cos) */
 static SDL_Texture *vgm_dof_t[3] = { NULL, NULL, NULL }; /* s205: the map halved, quartered, eighthed */
 static int vgm_dof_w = 0, vgm_dof_h = 0;
 static int vgm_focus_y = -1; /* s205: where the camera focuses (you), 1x map space; < 0: the middle */
@@ -543,7 +567,7 @@ static int vgl_state = -1; /* -1 untried, 0 can't, 1 ready */
 static vgl_uint vgl_prog = 0;
 enum { VGL_U_MAP, VGL_U_NRM, VGL_U_LIGHT, VGL_U_DIRS, VGL_U_SIZE, VGL_U_LG, VGL_U_LGS, VGL_U_DG,
        VGL_U_DGS, VGL_U_AREA, VGL_U_PL, VGL_U_PLI, VGL_U_RKA, VGL_U_RKB, VGL_U_NOISE, VGL_U_FOG,
-       VGL_U_MIST, VGL_U_MCOL, VGL_U_VIEW, VGL_U_VSC, VGL_U_N };
+       VGL_U_MIST, VGL_U_MCOL, VGL_U_VIEW, VGL_U_VSC, VGL_U_PP, VGL_U_N };
 static vgl_int vgl_loc[VGL_U_N];
 static SDL_Texture *vgm_nrm = NULL;   /* the normal layer */
 static SDL_Texture *vgm_lit = NULL;   /* the lit map */
@@ -568,6 +592,8 @@ struct vgm_nrec {
 	bool holed;   /* s209: see-through round (hcx, hcy): hamin within hr0, solid past hr1 */
 	float hcx, hcy, hr0, hr1;
 	int hamin;
+	int pm;       /* s233: the camera's mode it was drawn in, and its numbers */
+	float pp[6];
 };
 static std::vector<vgm_nrec> vgm_nlist; /* this frame's normal-map draws */
 static SDL_Rect vgm_clip;               /* the region the map pass redrew */
@@ -603,14 +629,23 @@ uniform vec4 u_mist;  /* the map's anchor x, y, time, thickness */
 uniform vec4 u_mcol;  /* the mist's colour (0..255) */
 uniform vec4 u_view;  /* s201: a zoomed map - its origin on screen x, y and on the 1x map x, y */
 uniform vec4 u_vsc;   /* s201: 1 / the zoom, x and y */
+uniform vec4 u_pp;    /* s233: the camera - its axis x, y, distance, on */
 void main()
 {
     vec2 tc = gl_TexCoord[0].xy;
-    vec2 px = u_view.zw + (tc * u_size.xy - u_view.xy) * u_vsc.xy; /* s201: on the 1x map */
+    vec2 scr = u_view.zw + (tc * u_size.xy - u_view.xy) * u_vsc.xy; /* s201: on the 1x map */
+    vec2 px = scr;
+    if (u_pp.w > 0.5) { /* s233: the floor seen here, on the iso map the grids and lights are on */
+        float yp = scr.y - u_pp.y;
+        float dv = yp * u_pp.z / max(u_pp.z + yp * 2.340823, u_pp.z * 0.05);
+        float s = u_pp.z / max(u_pp.z - dv * 2.340823, u_pp.z * 0.25);
+
+        px = vec2(u_pp.x + (scr.x - u_pp.x) / s, u_pp.y + dv);
+    }
     vec4 c = texture2D(u_map, tc * u_size.zw);
     vec3 rgb = c.rgb * 255.0;
 
-    if (px.x < u_area.x || px.y < u_area.y || px.x >= u_area.z || px.y >= u_area.w) {
+    if (scr.x < u_area.x || scr.y < u_area.y || scr.x >= u_area.z || scr.y >= u_area.w) {
         gl_FragColor = c;
         return;
     }
@@ -867,6 +902,265 @@ static inline float vgm_vx(float x)
 static inline float vgm_vy(float y)
 {
 	return vgm_vpy + (y - vgm_vly) * vgm_vsy;
+}
+
+/* s233: the scale at a point dv below the axis, h up */
+static inline float vpp_scale(float dv, float h)
+{
+	float d = vpp_D - dv * VPP_IT - h * VPP_IK;
+
+	if (d < vpp_D * 0.25f) /* nearly at the camera: hold it */
+		d = vpp_D * 0.25f;
+	return vpp_D / d;
+}
+
+static inline void vpp_point(float u, float v, float h, float *x, float *y)
+{
+	float s = vpp_scale(v - vpp_cy, h);
+
+	*x = vpp_cx + (u - vpp_cx) * s, *y = vpp_cy + (v - vpp_cy) * s;
+}
+
+/* a map-layer vertex drawn at (u, v), placed as the current mode places it */
+static inline void vpp_map(float u, float v, float *x, float *y)
+{
+	if (!vpp_live || vpp_mode == 0) {
+		*x = u, *y = v;
+		return;
+	}
+	switch (vpp_mode) {
+	case 1:
+		vpp_point(u, v, 0.0f, x, y);
+		break;
+	case 2:
+		*x = vpp_bx + (u - vpp_ax) * vpp_bs, *y = vpp_by + (v - vpp_ay) * vpp_bs;
+		break;
+	case 3:
+		vpp_point(u, v, vpp_wy + vpp_wk * (u - vpp_wx) - v, x, y);
+		break;
+	default:
+		vpp_point(u, v, vpp_h, x, y);
+		break;
+	}
+}
+
+static inline bool vpp_active(void)
+{
+	return vpp_live && vpp_mode != 0;
+}
+
+/* s233: texture t's (u0, v0)-(u1, v1) laid over the quad q drawn at (iso:
+   top-left, top-right, bottom-right, bottom-left) through the camera -
+   coloured, faded (a4: per corner), at the zoom if view */
+static void vpp_emit(SDL_Texture *t, const float *q, float u0, float v0, float u1, float v1, Uint8 r,
+                     Uint8 g, Uint8 b, Uint8 a, const Uint8 *a4, bool view)
+{
+	static std::vector<SDL_Vertex> vx;
+	static std::vector<int> ix;
+	int nx = 1, ny = 1, i, j;
+	float qq[8];
+
+	if (vpp_mode != 2) { /* a plane: each corner a pixel out (the art stretched over it), so the tiles overlap */
+		float mx = (q[0] + q[2] + q[4] + q[6]) * 0.25f, my = (q[1] + q[3] + q[5] + q[7]) * 0.25f;
+		int k;
+
+		for (k = 0; k < 4; k++) {
+			qq[2 * k] = q[2 * k] + (q[2 * k] > mx + 0.5f ? 1.0f : q[2 * k] < mx - 0.5f ? -1.0f : 0.0f);
+			qq[2 * k + 1] = q[2 * k + 1] + (q[2 * k + 1] > my + 0.5f ? 1.0f : q[2 * k + 1] < my - 0.5f ? -1.0f : 0.0f);
+		}
+		q = qq;
+	}
+	if (vpp_mode != 2) { /* a plane in perspective: cells as small as it needs */
+		float wd = fmaxf(hypotf(q[2] - q[0], q[3] - q[1]), hypotf(q[4] - q[6], q[5] - q[7]));
+		float ht = fmaxf(hypotf(q[6] - q[0], q[7] - q[1]), hypotf(q[4] - q[2], q[5] - q[3]));
+		float lim = 2.0f * vpp_D / VPP_IT; /* cell w x h within this keeps it within ~0.5 px (the overlap hides that) */
+
+		nx = 1, ny = 1;
+		while ((wd / nx) * (ht / ny) > lim && nx * ny < 64) {
+			if (wd / nx > 2.0f * (ht / ny))
+				nx++;
+			else
+				ny++;
+		}
+	}
+	vx.resize((size_t) (nx + 1) * (size_t) (ny + 1));
+	ix.resize((size_t) nx * (size_t) ny * 6);
+	for (j = 0; j <= ny; j++)
+		for (i = 0; i <= nx; i++) {
+			float fu = (float) i / nx, fv = (float) j / ny;
+			float tx = q[0] + (q[2] - q[0]) * fu, ty = q[1] + (q[3] - q[1]) * fu;
+			float bx = q[6] + (q[4] - q[6]) * fu, by = q[7] + (q[5] - q[7]) * fu;
+			float px = tx + (bx - tx) * fv, py = ty + (by - ty) * fv;
+			SDL_Vertex &e = vx[(size_t) j * (nx + 1) + i];
+
+			vpp_map(px, py, &px, &py);
+			e.position.x = view ? vgm_vx(px) : px, e.position.y = view ? vgm_vy(py) : py;
+			e.color.r = r, e.color.g = g, e.color.b = b;
+			if (a4) {
+				float at = a4[0] + (a4[1] - a4[0]) * fu, ab = a4[3] + (a4[2] - a4[3]) * fu;
+
+				e.color.a = (Uint8) (at + (ab - at) * fv + 0.5f);
+			} else
+				e.color.a = a;
+			e.tex_coord.x = u0 + (u1 - u0) * fu, e.tex_coord.y = v0 + (v1 - v0) * fv;
+		}
+	for (j = 0; j < ny; j++)
+		for (i = 0; i < nx; i++) {
+			int k = (j * nx + i) * 6, a0 = j * (nx + 1) + i;
+
+			ix[k] = a0, ix[k + 1] = a0 + 1, ix[k + 2] = a0 + nx + 2;
+			ix[k + 3] = a0, ix[k + 4] = a0 + nx + 2, ix[k + 5] = a0 + nx + 1;
+		}
+	SDL_RenderGeometry(vulture_gpu, t, &vx[0], (int) vx.size(), &ix[0], (int) ix.size());
+}
+
+/* s233: the rect (x, y, w, h) of a texture's src (s->w x s->h) through the camera */
+static void vpp_emit_rect(SDL_Texture *t, SDL_Surface *s, const SDL_Rect *src, float x, float y, Uint8 r,
+                          Uint8 g, Uint8 b, Uint8 a, bool view)
+{
+	float w = (float) (src ? src->w : s->w), h = (float) (src ? src->h : s->h), q[8];
+	float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+
+	if (vpp_mode == 2) { /* a billboard: the rect scaled about its square's foot */
+		SDL_FRect d;
+		SDL_Rect sr;
+		const SDL_Rect *sp = NULL;
+		int tw = 0, th = 0;
+
+		d.x = vpp_bx + (x - vpp_ax) * vpp_bs, d.y = vpp_by + (y - vpp_ay) * vpp_bs;
+		d.w = w * vpp_bs, d.h = h * vpp_bs;
+		if (view)
+			d.x = vgm_vx(d.x), d.y = vgm_vy(d.y), d.w *= vgm_vsx, d.h *= vgm_vsy;
+		if (src) { /* in the texture's own pixels (an HD one is bigger) */
+			SDL_QueryTexture(t, NULL, NULL, &tw, &th);
+			sr.x = s->w > 0 ? src->x * tw / s->w : 0, sr.y = s->h > 0 ? src->y * th / s->h : 0;
+			sr.w = s->w > 0 ? src->w * tw / s->w : tw, sr.h = s->h > 0 ? src->h * th / s->h : th;
+			sp = &sr;
+		}
+		SDL_SetTextureColorMod(t, r, g, b);
+		SDL_SetTextureAlphaMod(t, a);
+		SDL_RenderCopyF(vulture_gpu, t, sp, &d);
+		return;
+	}
+	if (src && s->w > 0 && s->h > 0) {
+		u0 = (float) src->x / s->w, v0 = (float) src->y / s->h;
+		u1 = (float) (src->x + src->w) / s->w, v1 = (float) (src->y + src->h) / s->h;
+	}
+	q[0] = x, q[1] = y, q[2] = x + w, q[3] = y, q[4] = x + w, q[5] = y + h, q[6] = x, q[7] = y + h;
+	vpp_emit(t, q, u0, v0, u1, v1, r, g, b, a, NULL, view);
+}
+
+/* s233: the corners of vulture_gpumap_blit_ex's pose (scaled about the feet,
+   turned deg clockwise about them) - top-left, top-right, bottom-right, bottom-left */
+static void vpp_pose(SDL_Surface *s, int dx, int dy, double sx, double sy, double deg, float *q)
+{
+	double w = s->w * sx, h = s->h * sy, fx = dx + s->w * 0.5, fy = dy + (double) s->h;
+	double a = deg * 3.14159265358979 / 180.0, cs = cos(a), sn = sin(a);
+	static const double cx[4] = { -0.5, 0.5, 0.5, -0.5 }, cy[4] = { -1.0, -1.0, 0.0, 0.0 };
+	int k;
+
+	for (k = 0; k < 4; k++) {
+		double rx = cx[k] * w, ry = cy[k] * h;
+
+		q[2 * k] = (float) (fx + rx * cs - ry * sn);
+		q[2 * k + 1] = (float) (fy + rx * sn + ry * cs);
+	}
+}
+
+/* s233: levelwin, each frame: the camera on (the map drawn on the GPU) round (cx, cy), D back */
+void vulture_persp_frame(bool on, float cx, float cy, float D)
+{
+	vpp_live = on;
+	vpp_cx = cx, vpp_cy = cy;
+	vpp_D = D > 500.0f ? D : 500.0f;
+	vpp_mode = 0;
+}
+
+bool vulture_persp_live(void)
+{
+	return vpp_live;
+}
+
+void vulture_persp_flat(void)
+{
+	vpp_mode = 0;
+}
+
+void vulture_persp_floor(void)
+{
+	vpp_mode = 1;
+}
+
+/* a sprite standing at (ax, ay) on the floor: drawn at its square's scale */
+void vulture_persp_billboard(float ax, float ay)
+{
+	vpp_mode = 2;
+	vpp_ax = ax, vpp_ay = ay;
+	vpp_bs = vpp_scale(ay - vpp_cy, 0.0f);
+	vpp_bx = vpp_cx + (ax - vpp_cx) * vpp_bs, vpp_by = vpp_cy + (ay - vpp_cy) * vpp_bs;
+}
+
+/* a wall face whose foot runs through (x0, y0) at slope k (screen px per px) */
+void vulture_persp_wall(float x0, float y0, float k)
+{
+	vpp_mode = 3;
+	vpp_wx = x0, vpp_wy = y0, vpp_wk = k;
+}
+
+/* a flat top h px up */
+void vulture_persp_ceiling(float h)
+{
+	vpp_mode = 4;
+	vpp_h = h;
+}
+
+/* where an iso point (u, v), h px up, is seen (identity with the camera off) */
+void vulture_persp_point(float u, float v, float h, float *x, float *y)
+{
+	if (!vpp_live) {
+		*x = u, *y = v;
+		return;
+	}
+	vpp_point(u, v, h, x, y);
+}
+
+/* the scale things standing at iso (u, v) are drawn at */
+float vulture_persp_scale(float u, float v)
+{
+	(void) u;
+	return vpp_live ? vpp_scale(v - vpp_cy, 0.0f) : 1.0f;
+}
+
+/* the floor's iso point seen at (x, y) - the inverse of the floor's projection */
+void vulture_persp_unfloor(float x, float y, float *u, float *v)
+{
+	float yp, den, dv, s;
+
+	if (!vpp_live) {
+		*u = x, *v = y;
+		return;
+	}
+	yp = y - vpp_cy, den = vpp_D + yp * VPP_IT;
+	if (den < vpp_D * 0.05f)
+		den = vpp_D * 0.05f;
+	dv = yp * vpp_D / den;
+	s = vpp_scale(dv, 0.0f);
+	*u = vpp_cx + (x - vpp_cx) / s, *v = vpp_cy + dv;
+}
+
+/* the mode, kept and put back round a draw that sets its own */
+int vulture_persp_save(float *p)
+{
+	p[0] = vpp_ax, p[1] = vpp_ay, p[2] = vpp_wx, p[3] = vpp_wy, p[4] = vpp_wk, p[5] = vpp_h;
+	return vpp_mode;
+}
+
+void vulture_persp_restore(int mode, const float *p)
+{
+	if (mode == 2)
+		vulture_persp_billboard(p[0], p[1]);
+	else
+		vpp_mode = mode, vpp_wx = p[2], vpp_wy = p[3], vpp_wk = p[4], vpp_h = p[5];
 }
 
 static std::string vgm_hd_name(const vgm_hdkey &k)
@@ -1852,6 +2146,7 @@ void vulture_gpumap_abandon(void)
 {
 	if (vulture_gpumap_on)
 		vulture_gpumap_end();
+	vpp_live = false; /* s233 */
 	vgm_valid = false;
 	vgm_zoom = false;
 	vgm_lit_valid = false; /* s185 */
@@ -1877,6 +2172,18 @@ void vulture_gpumap_blit(SDL_Surface *s, const SDL_Rect *srcrect, int x, int y)
 	SDL_GetSurfaceBlendMode(s, &bm);
 	SDL_GetSurfaceColorMod(s, &r, &g, &b);
 	SDL_GetSurfaceAlphaMod(s, &a);
+	if (vpp_active()) { /* s233: through the camera */
+		SDL_Texture *ht = vgm_view ? vgm_hd_texture(s) : NULL;
+
+		if (ht)
+			t = ht;
+		SDL_SetTextureBlendMode(t, bm);
+		SDL_SetTextureColorMod(t, 255, 255, 255);
+		SDL_SetTextureAlphaMod(t, 255);
+		SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+		vpp_emit_rect(t, s, srcrect, (float) x, (float) y, r, g, b, a, vgm_view);
+		return;
+	}
 	SDL_SetTextureBlendMode(t, bm);
 	SDL_SetTextureColorMod(t, r, g, b);
 	SDL_SetTextureAlphaMod(t, a);
@@ -1922,6 +2229,39 @@ void vulture_gpumap_blit_ex(SDL_Surface *s, int dx, int dy, double sx, double sy
 
 	if (!vulture_gpumap_on || !s || sx <= 0.0 || sy <= 0.0 || !(t = vgm_texture(s)))
 		return;
+	if (vpp_active() && vpp_mode == 2) { /* s233: a billboard - the pose scaled about its square's foot */
+		SDL_Texture *ht = vgm_view ? vgm_hd_texture(s) : NULL;
+
+		if (ht)
+			t = ht;
+		d.w = (float) (s->w * sx * vpp_bs), d.h = (float) (s->h * sy * vpp_bs);
+		d.x = vpp_bx + ((float) (dx + s->w * 0.5) - vpp_ax) * vpp_bs - d.w * 0.5f;
+		d.y = vpp_by + ((float) (dy + s->h) - vpp_ay) * vpp_bs - d.h;
+		if (vgm_view)
+			d.x = vgm_vx(d.x), d.y = vgm_vy(d.y), d.w *= vgm_vsx, d.h *= vgm_vsy;
+		c.x = d.w * 0.5f, c.y = d.h;
+		SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+		SDL_SetTextureColorMod(t, 255, red ? 77 : 255, red ? 77 : 255);
+		SDL_SetTextureAlphaMod(t, (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha));
+		SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+		SDL_RenderCopyExF(vulture_gpu, t, NULL, &d, deg, &c, SDL_FLIP_NONE);
+		return;
+	}
+	if (vpp_active()) { /* s233: through the camera */
+		SDL_Texture *ht = vgm_view ? vgm_hd_texture(s) : NULL;
+		float q[8];
+
+		if (ht)
+			t = ht;
+		vpp_pose(s, dx, dy, sx, sy, deg, q);
+		SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+		SDL_SetTextureColorMod(t, 255, 255, 255);
+		SDL_SetTextureAlphaMod(t, 255);
+		SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+		vpp_emit(t, q, 0.0f, 0.0f, 1.0f, 1.0f, 255, (Uint8) (red ? 77 : 255), (Uint8) (red ? 77 : 255),
+		         (Uint8) (alpha < 0 ? 0 : alpha > 255 ? 255 : alpha), NULL, vgm_view);
+		return;
+	}
 	d.w = (float) (s->w * sx), d.h = (float) (s->h * sy);
 	d.x = (float) (dx + s->w * 0.5 * (1.0 - sx));
 	d.y = (float) (dy + s->h * (1.0 - sy));
@@ -1953,6 +2293,18 @@ bool vulture_gpumap_shadow(SDL_Surface *s, const float *quad, const Uint8 *a4)
 
 	if (!vulture_gpumap_on || !s || !(t = vgm_texture(s)))
 		return false;
+	if (vpp_active()) { /* s233: through the camera */
+		SDL_Texture *ht = vgm_view ? vgm_hd_texture(s) : NULL;
+
+		if (ht)
+			t = ht;
+		SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+		SDL_SetTextureColorMod(t, 255, 255, 255);
+		SDL_SetTextureAlphaMod(t, 255);
+		SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+		vpp_emit(t, quad, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0, 0, 255, a4, vgm_view);
+		return true;
+	}
 	for (k = 0; k < 4; k++) {
 		v[k].position.x = vgm_view ? vgm_vx(quad[2 * k]) : quad[2 * k]; /* s201 */
 		v[k].position.y = vgm_view ? vgm_vy(quad[2 * k + 1]) : quad[2 * k + 1];
@@ -2000,6 +2352,14 @@ bool vulture_gpumap_quad(SDL_Surface *s, const SDL_Rect *src, const float *quad,
 	if (src && s->w > 0 && s->h > 0) {
 		u0 = (float) src->x / s->w, v0 = (float) src->y / s->h;
 		u1 = (float) (src->x + src->w) / s->w, v1 = (float) (src->y + src->h) / s->h;
+	}
+	if (vpp_active()) { /* s233: through the camera */
+		SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+		SDL_SetTextureColorMod(t, 255, 255, 255);
+		SDL_SetTextureAlphaMod(t, 255);
+		SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+		vpp_emit(t, quad, u0, v0, u1, v1, cr, cg, cb, al, NULL, vgm_view);
+		return true;
 	}
 	for (k = 0; k < 4; k++) {
 		v[k].position.x = vgm_view ? vgm_vx(quad[2 * k]) : quad[2 * k];
@@ -2150,7 +2510,7 @@ bool vulture_gpulit_ok(void)
 	vgl_int ok = 0;
 	static const char *const un[VGL_U_N] = { "u_map", "u_nrm", "u_light", "u_dirs", "u_size",
 		"u_lg", "u_lgs", "u_dg", "u_dgs", "u_area", "u_pl[0]", "u_pli", "u_rka", "u_rkb",
-		"u_noise", "u_fog", "u_mist", "u_mcol", "u_view", "u_vsc" };
+		"u_noise", "u_fog", "u_mist", "u_mcol", "u_view", "u_vsc", "u_pp" };
 	int k;
 
 	if (vgl_state >= 0)
@@ -2251,6 +2611,7 @@ void vulture_gpumap_normal(SDL_Surface *s, int x, int y)
 		return;
 	r.s = s, r.x = x, r.y = y, r.ex = false, r.sx = r.sy = 1.0, r.deg = 0.0, r.alpha = 255;
 	r.quad = false, r.holed = false;
+	r.pm = vulture_persp_save(r.pp); /* s233 */
 	vgm_nlist.push_back(r);
 }
 
@@ -2263,6 +2624,7 @@ void vulture_gpumap_normal_ex(SDL_Surface *s, int dx, int dy, double sx, double 
 		return;
 	r.s = s, r.x = dx, r.y = dy, r.ex = true, r.sx = sx, r.sy = sy, r.deg = deg, r.alpha = alpha;
 	r.quad = false, r.holed = false;
+	r.pm = vulture_persp_save(r.pp); /* s233 */
 	vgm_nlist.push_back(r);
 }
 
@@ -2296,6 +2658,7 @@ static void vgm_holed_geometry(SDL_Texture *t, float x, float y, float w, float 
 				f = f * f * (3.0f - 2.0f * f);
 				al = amin + (255.0f - amin) * f;
 			}
+			vpp_map(px, py, &px, &py); /* s233: through the camera (the hole was placed before) */
 			q.position.x = view ? vgm_vx(px) : px, q.position.y = view ? vgm_vy(py) : py;
 			q.color.r = r, q.color.g = g, q.color.b = b;
 			q.color.a = (Uint8) (al * a / 255.0f);
@@ -2333,7 +2696,7 @@ void vulture_gpumap_holed(SDL_Surface *s, int x, int y, float cx, float cy, floa
 	SDL_SetTextureBlendMode(t, bm);
 	SDL_SetTextureColorMod(t, 255, 255, 255);
 	SDL_SetTextureAlphaMod(t, 255);
-	SDL_SetTextureScaleMode(t, vgm_view ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+	SDL_SetTextureScaleMode(t, vgm_view || vpp_active() ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
 	vgm_holed_geometry(t, (float) x, (float) y, (float) s->w, (float) s->h, cx, cy, r0, r1, amin, r, g, b, a,
 	                   vgm_view);
 }
@@ -2348,6 +2711,7 @@ void vulture_gpumap_normal_holed(SDL_Surface *s, int x, int y, float cx, float c
 	r.s = s, r.x = x, r.y = y, r.ex = false, r.sx = r.sy = 1.0, r.deg = 0.0, r.alpha = 255;
 	r.quad = false, r.holed = true;
 	r.hcx = cx, r.hcy = cy, r.hr0 = r0, r.hr1 = r1, r.hamin = amin;
+	r.pm = vulture_persp_save(r.pp); /* s233 */
 	vgm_nlist.push_back(r);
 }
 
@@ -2368,6 +2732,7 @@ void vulture_gpumap_normal_quad(SDL_Surface *s, const SDL_Rect *src, const float
 		r.src = *src;
 	else
 		r.src.x = r.src.y = 0, r.src.w = s->w, r.src.h = s->h;
+	r.pm = vulture_persp_save(r.pp); /* s233 */
 	vgm_nlist.push_back(r);
 }
 
@@ -2500,6 +2865,25 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			SDL_GetSurfaceBlendMode(r.s, &bm);
 			SDL_SetTextureBlendMode(t, bm);
 			SDL_SetTextureColorMod(t, 255, 255, 255);
+			vulture_persp_restore(r.pm, r.pp); /* s233 */
+			if (vpp_active() && !r.holed) { /* s233: through the camera, as the map pass laid it */
+				SDL_SetTextureAlphaMod(t, 255);
+				SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+				if (r.quad && r.s->w > 0 && r.s->h > 0) {
+					vpp_emit(t, r.q, (float) r.src.x / r.s->w, (float) r.src.y / r.s->h,
+					         (float) (r.src.x + r.src.w) / r.s->w, (float) (r.src.y + r.src.h) / r.s->h, 255, 255,
+					         255, (Uint8) (r.alpha < 0 ? 0 : r.alpha > 255 ? 255 : r.alpha), NULL, vgm_tex_view);
+				} else if (r.ex && r.sx > 0.0 && r.sy > 0.0) {
+					float q[8];
+
+					vpp_pose(r.s, r.x, r.y, r.sx, r.sy, r.deg, q);
+					vpp_emit(t, q, 0.0f, 0.0f, 1.0f, 1.0f, 255, 255, 255,
+					         (Uint8) (r.alpha < 0 ? 0 : r.alpha > 255 ? 255 : r.alpha), NULL, vgm_tex_view);
+				} else if (!r.ex) {
+					vpp_emit_rect(t, r.s, NULL, (float) r.x, (float) r.y, 255, 255, 255, 255, vgm_tex_view);
+				}
+				continue;
+			}
 			if (r.holed) { /* s209: as vulture_gpumap_holed laid it */
 				SDL_SetTextureAlphaMod(t, 255);
 				SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
@@ -2557,6 +2941,7 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 				SDL_RenderCopyExF(vulture_gpu, t, NULL, &d, r.deg, &c, SDL_FLIP_NONE);
 			}
 		}
+		vpp_mode = 0; /* s233 */
 		SDL_RenderSetClipRect(vulture_gpu, NULL);
 	}
 	/* the shader pass: map (+ normals) + light -> vgm_lit */
@@ -2643,6 +3028,7 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			vgl.Uniform4f(vgl_loc[VGL_U_VIEW], 0.0f, 0.0f, 0.0f, 0.0f);
 			vgl.Uniform4f(vgl_loc[VGL_U_VSC], 1.0f, 1.0f, 0.0f, 0.0f);
 		}
+		vgl.Uniform4f(vgl_loc[VGL_U_PP], vpp_cx, vpp_cy, vpp_D, vpp_live ? 1.0f : 0.0f); /* s233 */
 		vgl.Disable(VGL_BLEND);
 		vgl.Disable(VGL_SCISSOR_TEST);
 		vgl.Begin(VGL_QUADS);

@@ -4995,6 +4995,44 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   with its decorations, so a door's narrow side could carry a painting or
   a banner.  Those faces take the plain wall (decorated brick -> brick).
 
+### 233. A perspective camera
+
+- The user: "i want it to literally look like a game that was rendered as
+  3D somehow".  The map was an orthographic picture - near things no bigger
+  than far ones, nothing sliding against anything else as the view moved -
+  so it read as flat art however it was lit.
+- Every vertex of the GPU map layer now goes through a real perspective
+  projection: the iso picture's own camera (23 degrees down, the floor's
+  22/56 squash) set back a finite distance from the window's middle.  The
+  map pass still lays everything out on the iso picture; each draw says
+  what it is (vulture_persp_floor / _wall / _ceiling / _billboard), and
+  vulture_sdl.cpp projects it: an iso point h px up goes to c + (p - c) *
+  D / (D - (v - cy) / tan - h / (sin cos)).
+  - Floor tiles, wall faces, tops and the slab's faces are planes: laid as
+    quads (split only as far as the error needs) and each grown a pixel so
+    neighbours overlap - bilinear sampling softens a tile's hard alpha edge
+    and two half-covered edges showed the black as a seam.
+  - Everything standing on a square (creatures, items, furniture, effects
+    on the map layer, shadows) is a billboard at its square's scale - a
+    plain scaled copy.
+  - Normal-map draws keep the mode they were made in and replay with it.
+- The light's grids stay on the iso picture: the shader works out the
+  floor each pixel sees (the floor's inverse projection) and looks there,
+  point lights included.  vl_render holds the screen helpers on the iso
+  picture while it works; the grid's margin grows to what the camera sees
+  past the window's top corners (a change of margin rebuilds the grid).
+- Outside the map pass the screen helpers (vfx_square_screen,
+  vfx_mover_screen, so vsp_screen and everything built on them) hand back
+  where a square is SEEN.  Outlines through walls and your conditions are
+  laid on the iso picture and shown where you are seen, at your scale.
+  Clicks go through the floor's inverse projection.
+- More squares are drawn at the top (things there are smaller, so more of
+  the map shows), and every frame is a full redraw while the camera is on.
+- Option perspective (vulture.conf): 0 off, 130 the default (the camera
+  five window-heights back), more is stronger.  VULTURE_PERSP overrides.
+  The ROCK probe now saves each shot flat, at the default and at 170.
+- Cost: the map frame went from 6-12 ms to 9-20 ms in the probes.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

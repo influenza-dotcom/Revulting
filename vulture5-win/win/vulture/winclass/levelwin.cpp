@@ -1654,14 +1654,94 @@ vfx_alive(void)
     return n > 0;
 }
 
+/*
+ * IMPLEMENTATION_LOG s233: the map is seen through a perspective camera
+ * (vulture_sdl.cpp).  The map pass still lays everything out on the iso
+ * picture and says what each draw is - floor, wall face, ceiling, or a
+ * sprite standing on its square - and the GPU projects it.  Outside the map
+ * pass (effects, text, outlines, the light's grids are the exception) the
+ * screen helpers hand back where a square is SEEN, not where it is laid.
+ * Option perspective (vulture.conf): 0 off, 130 the default strength (the
+ * camera five screen-heights back; 100 is 6.5), more is stronger.
+ * VULTURE_PERSP overrides.
+ */
+static bool vpp_hold_iso = false; /* s233: the light's grids are laid on the iso picture */
+static int vpp_probe_strength = -1; /* probe: s233 the same frame at other strengths */
+
+static int
+vpp_strength(void)
+{
+    static int env = -2;
+
+    if (vpp_probe_strength >= 0)
+        return vpp_probe_strength;
+    if (env == -2) {
+        const char *e = getenv("VULTURE_PERSP");
+
+        env = e ? atoi(e) : -1;
+    }
+    return env >= 0 ? env : vulture_opts.perspective;
+}
+
+static bool
+vpp_wanted(void)
+{
+    return vpp_strength() > 0;
+}
+
+/* how far back the camera stands for a map h px tall */
+static float
+vpp_distance(int h)
+{
+    int s = vpp_strength();
+
+    return (float) h * 6.5f * 100.0f / (float) (s > 5 ? s : 5);
+}
+
+/* the iso picture's reach past the window's edges that the camera sees at
+   the top (things there are smaller, so more of the map shows) */
 static void
-vfx_square_screen(int j, int i, int cx, int cy, int vx, int vy, int *sx, int *sy)
+vpp_extent(int w, int h, int *ex, int *ey)
+{
+    float D = vpp_distance(h), yp = -h / 2.0f, dv, s;
+
+    *ex = *ey = 0;
+    if (!vpp_wanted())
+        return;
+    dv = yp * D / (D + yp * 2.340823f);
+    s = D / (D - dv * 2.340823f);
+    *ex = (int) (w / 2.0f / s - w / 2.0f) + 8;
+    *ey = (int) (-dv - h / 2.0f) + 8;
+}
+
+/* a point laid on the iso picture, as it is seen (outside the map pass) */
+static inline void
+vpp_seen(int *sx, int *sy)
+{
+    if (vulture_persp_live() && !vulture_gpumap_on && !vpp_hold_iso) {
+        float px, py;
+
+        vulture_persp_point((float) *sx, (float) *sy, 0.0f, &px, &py);
+        *sx = (int) floorf(px + 0.5f), *sy = (int) floorf(py + 0.5f);
+    }
+}
+
+/* where square (j, i)'s middle is laid on the iso picture */
+static void
+vfx_square_iso(int j, int i, int cx, int cy, int vx, int vy, int *sx, int *sy)
 {
     int va, vb;
 
     v_rot(j - vx, i - vy, 4 - vulture_view_rot, &va, &vb);
     *sx = cx + V_MAP_XMOD * (va - vb);
     *sy = cy + V_MAP_YMOD * (va + vb);
+}
+
+static void
+vfx_square_screen(int j, int i, int cx, int cy, int vx, int vy, int *sx, int *sy)
+{
+    vfx_square_iso(j, i, cx, cy, vx, vy, sx, sy);
+    vpp_seen(sx, sy); /* s233 */
 }
 
 /* s184: where the creature on square (j, i) is DRAWN right now - the square
@@ -1673,11 +1753,12 @@ vfx_square_screen(int j, int i, int cx, int cy, int vx, int vy, int *sx, int *sy
 static void
 vfx_mover_screen(int j, int i, int cx, int cy, int vx, int vy, int *sx, int *sy)
 {
-    vfx_square_screen(j, i, cx, cy, vx, vy, sx, sy);
+    vfx_square_iso(j, i, cx, cy, vx, vy, sx, sy);
     if (j >= 0 && j < COLNO && i >= 0 && i < ROWNO) {
         *sx += vtw_ox[i][j];
         *sy += vtw_oy[i][j];
     }
+    vpp_seen(sx, sy); /* s233 */
 }
 
 /* a small filled square, clipped */
@@ -6619,6 +6700,7 @@ vslab_draw(void)
 
         q[0] = x0, q[1] = y0, q[2] = x1, q[3] = y1;
         q[4] = x1, q[5] = y1 + VSLAB_D, q[6] = x0, q[7] = y0 + VSLAB_D;
+        vulture_persp_wall(x0, y0, (y1 - y0) / (x1 - x0)); /* s233: hanging from the floor's edge */
         vdr_quad_rgb(vslab_tex, r, q, sh, sh, sh, 255);
     }
     vslab_list.clear();
@@ -7662,9 +7744,16 @@ vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1
 
     if (tile < 0 || tile == V_TILE_NONE)
         return;
+    float pps[6];
+    int ppm = vulture_persp_save(pps); /* s233 */
+
     if (side <= 1) {
         if ((out = vwall_outer(tile)) < 0) {
+            /* s233: its own face, where it stands */
+            vulture_persp_wall((float) (side == 0 ? x - V_MAP_XMOD : x), (float) (side == 0 ? y : y - V_MAP_YMOD),
+                               side == 0 ? -k : k);
             vulture_put_tile_shaded(x, y, tile, shade);
+            vulture_persp_restore(ppm, pps);
             return;
         }
         tile = out; /* the face toward you, on this edge */
@@ -7683,6 +7772,8 @@ vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1
             dim = (int) (VWALL_DIM * (lo >= 1.0f ? 0.0f : lo <= 0.0f ? 1.0f : 1.0f - lo));
         }
     }
+    /* s233: a wall face through the camera - each point its height over the foot */
+    vulture_persp_wall((float) (eface ? x : x - V_MAP_XMOD), (float) (eface ? y + V_MAP_YMOD : y), eface ? -k : k);
     /* the wall's foot, carried on to where you stand: in front of you
        (lower on the screen) it hides you; at your side or behind, not */
     foot = eface ? y + V_MAP_YMOD - (vwall_hx - x) * k : y + (vwall_hx - x + V_MAP_XMOD) * k;
@@ -7711,6 +7802,7 @@ vwall_draw(int x, int y, int tile, int side, int shade, int ox = -1, int oy = -1
         fc.cut = vcut_now; /* s223 */
         vxr_faces.push_back(fc);
     }
+    vulture_persp_restore(ppm, pps); /* s233 */
 }
 
 /* the void's dust: is screen point (sx, sy) clear of the dungeon - nothing
@@ -8004,7 +8096,15 @@ vxr_draw(void)
         }
         sr.x = 0, sr.y = 0, sr.w = bx1 - bx0, sr.h = by1 - by0;
         dr.x = bx0, dr.y = by0, dr.w = sr.w, dr.h = sr.h;
-        SDL_BlitSurface(scr, &sr, vulture_screen, &dr);
+        if (vulture_persp_live()) { /* s233: where it is seen, at its square's scale */
+            float ax, ay, ps = vulture_persp_scale((float) c.tx, (float) c.ty);
+
+            vulture_persp_point((float) c.tx, (float) c.ty, 0.0f, &ax, &ay);
+            dr.x = (int) floorf(ax + (bx0 - c.tx) * ps), dr.y = (int) floorf(ay + (by0 - c.ty) * ps);
+            dr.w = (int) ceilf(sr.w * ps), dr.h = (int) ceilf(sr.h * ps);
+            SDL_BlitScaled(scr, &sr, vulture_screen, &dr);
+        } else
+            SDL_BlitSurface(scr, &sr, vulture_screen, &dr);
     }
 }
 
@@ -8192,6 +8292,10 @@ vtorch_draw(int x, int y, int j, int i, int fj, int fi, int tile, bool eface)
             return;
     if (!(wt = vulture_get_tile(tile)) || !wt->graphic)
         return;
+    float pps[6], kk = (float) V_MAP_YMOD / V_MAP_XMOD;
+    int ppm = vulture_persp_save(pps); /* s233: on its wall face */
+
+    vulture_persp_wall((float) (eface ? x : x - V_MAP_XMOD), (float) (eface ? y + V_MAP_YMOD : y), eface ? -kk : kk);
     /* the middle of the face's foot, a little over half way up it */
     tx = eface ? x + V_MAP_XMOD / 2 : x - V_MAP_XMOD / 2;
     ty = y + V_MAP_YMOD / 2 - (int) (-wt->ymod * 0.55);
@@ -8217,6 +8321,7 @@ vtorch_draw(int x, int y, int j, int i, int fj, int fi, int tile, bool eface)
         vtorch_blob(tx + lean, fy - 7 - (int) (2.5 * fl), 2, 250, 150, 45, (int) (200 * fl), false);
         vtorch_blob(tx, fy - 1, 2, 255, 245, 200, 255, false);
     }
+    vulture_persp_restore(ppm, pps); /* s233 */
 }
 
 /* probe: s211 - VULTURE_SELFTEST_TORCH: the room you start in, twice, a
@@ -9292,6 +9397,10 @@ vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool 
 
     if (!c)
         return;
+    float pps[6];
+    int ppm = vulture_persp_save(pps); /* s233: a flat top, h up */
+
+    vulture_persp_ceiling((float) h);
     if (fogged) /* s230: remembered - cold, as the light grid tints a fogged wall */
         SDL_SetSurfaceColorMod(c, (Uint8) (sh * 80 / 100), (Uint8) (sh * 90 / 100),
                                (Uint8) (sh * 112 / 100 > 255 ? 255 : sh * 112 / 100));
@@ -9349,6 +9458,7 @@ vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool 
         SDL_SetSurfaceColorMod(ls, 255, 255, 255);
         SDL_SetSurfaceAlphaMod(ls, 255);
     }
+    vulture_persp_restore(ppm, pps); /* s233 */
     fc.x0 = (float) x, fc.y0 = (float) (y - h), fc.k = 0.0f, fc.h = 0;
     fc.seq = ++vxr_seq, fc.amin = amin, fc.cap = true;
     fc.cut = ghost ? ghost : 255; /* s223: see-through rock or a see-through wall's top */
@@ -9358,14 +9468,18 @@ vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool 
 /* the foot of a rough rock face, low high: the bottom of its art; s218:
    darkened by dim (black over it) like a wall's outside */
 static void
-vrock_low_face(int x, int y, int tile, int low, int sh, int dim = 0)
+vrock_low_face(int x, int y, int tile, int low, int sh, int dim = 0, bool eface = false)
 {
     vulture_tile *t = vulture_get_tile(tile);
     SDL_Rect src;
     int keep, pass;
+    float pps[6], kk = (float) V_MAP_YMOD / V_MAP_XMOD;
+    int ppm;
 
     if (!t || !t->graphic)
         return;
+    ppm = vulture_persp_save(pps); /* s233: a face, through the camera */
+    vulture_persp_wall((float) (eface ? x : x - V_MAP_XMOD), (float) (eface ? y + V_MAP_YMOD : y), eface ? -kk : kk);
     keep = low + V_MAP_YMOD + 1;
     if (keep > t->graphic->h)
         keep = t->graphic->h;
@@ -9385,6 +9499,7 @@ vrock_low_face(int x, int y, int tile, int low, int sh, int dim = 0)
     }
     SDL_SetSurfaceColorMod(t->graphic, 255, 255, 255);
     SDL_SetSurfaceAlphaMod(t->graphic, 255);
+    vulture_persp_restore(ppm, pps); /* s233 */
 }
 
 /* s218: the light outside a block's face - toward rock (or anything not
@@ -9661,7 +9776,7 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
                 if (ft && ft->graphic && ghost)
                     SDL_SetSurfaceAlphaMod(ft->graphic, 255);
             } else {
-                vrock_low_face(x, y, face, h, sh, dim);
+                vrock_low_face(x, y, face, h, sh, dim, side != 0); /* s233: which face */
             }
         }
     }
@@ -10243,21 +10358,17 @@ vrock_probe_shot(const char *name)
     int keep = vrock_style, s;
 
     levwin->set_view(u.ux, u.uy);
-    for (s = 0; s < 4; s++) { /* s219: each style, the same frame */
-        static const int sv[4] = { 3, 4, 2, 0 };
+    for (s = 0; s < 3; s++) { /* s233: the same frame flat, through the camera, and closer */
+        static const int sv[3] = { 0, -1, 170 };
+        static const char *const sn[3] = { "flat", "s4", "strong" };
 
-        vrock_style = sv[s];
+        vrock_style = 4, vpp_probe_strength = sv[s];
         levwin->force_redraw();
         ROOTWIN->draw_windows();
-        snprintf(p, sizeof p, "%s" "\\" "%s_s%d.bmp", getenv("VULTURE_SELFTEST"), name, sv[s]);
+        snprintf(p, sizeof p, "%s" "\\" "%s_%s.bmp", getenv("VULTURE_SELFTEST"), name, sn[s]);
         vulture_save_frame_bmp(p);
     }
-    vrock_style = 4, vcut_probe_off = true; /* s223: the same, the room you are in not cut */
-    levwin->force_redraw();
-    ROOTWIN->draw_windows();
-    snprintf(p, sizeof p, "%s" "\\" "%s_s4nocut.bmp", getenv("VULTURE_SELFTEST"), name);
-    vulture_save_frame_bmp(p);
-    vcut_probe_off = false;
+    vpp_probe_strength = -1;
     vrock_style = keep;
     levwin->force_redraw();
     vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rock probe: %s at %d,%d\n", name, u.ux, u.uy);
@@ -19191,8 +19302,20 @@ vl_mist(SDL_Surface *fog, int mx, int my, int mw, int mh, int ox, int oy, int FS
         SDL_UnlockSurface(s);
 }
 
+static void vl_render_iso(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, int h);
+
+/* s233: the light is worked out on the iso picture; the shader finds the
+   floor each pixel sees there (its point lights too) */
 static void
 vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, int h)
+{
+    vpp_hold_iso = true;
+    vl_render_iso(md, cx, cy, vx, vy, ax, ay, w, h);
+    vpp_hold_iso = false;
+}
+
+static void
+vl_render_iso(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, int h)
 {
     extern int vulture_render_scale;
     static int c_cx, c_cy, c_vx = -99, c_vy, c_ux, c_uy, c_rot, c_w, c_h;
@@ -19203,6 +19326,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     int FS = 8 * (vulture_render_scale > 0 ? vulture_render_scale : 1);
     int M = 128; /* margin: a cached layer can slide with the camera (s152: 96 -> 64;
                     s186: 128 - panning slides it instead of rebuilding) */
+    static int c_M = 0;
     int pvx = 0, pvy = 0, sox, soy; /* s186: a view shift, in pixels */
     int lw, lh, i, j;
     Uint32 now = SDL_GetTicks();
@@ -19214,6 +19338,13 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
 
     if (!vl_on || !u.ux || w < 32 || h < 32 || u.uswallow)
         return;
+    if (vulture_persp_live()) { /* s233: the camera sees past the window's top corners */
+        int pex, pey;
+
+        vpp_extent(w, h, &pex, &pey);
+        M = (pex > pey ? pex : pey) + 64;
+        M = M < 128 ? 128 : M > 640 ? 640 : M;
+    }
     /* reuse the last layer (shifted with the camera) unless the scene
        changed or ~90 ms passed (flicker); during a slide, always reuse */
     /* s186: a pan that changed the view square is a slide too - the grid is
@@ -19221,7 +19352,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     if (c_vx != -99 && abs(vx - c_vx) <= 8 && abs(vy - c_vy) <= 8)
         vtw_proj(vx - c_vx, vy - c_vy, &pvx, &pvy);
     sox = (cx - c_cx) - pvx, soy = (cy - c_cy) - pvy;
-    if (vl_low && abs(vx - c_vx) <= 8 && abs(vy - c_vy) <= 8 && c_ux == u.ux && c_uy == u.uy
+    if (vl_low && c_M == M && abs(vx - c_vx) <= 8 && abs(vy - c_vy) <= 8 && c_ux == u.ux && c_uy == u.uy
         && c_moves == svm.moves && c_rot == vulture_view_rot && c_w == w && c_h == h
         && abs(sox) < M && abs(soy) < M
         && (vtw_animating || now - c_when < (vl_magic ? 50u : 120u)) && vl_flashes.empty()) {
@@ -19247,6 +19378,7 @@ vl_render(mapdata *md, int cx, int cy, int vx, int vy, int ax, int ay, int w, in
     }
     c_cx = cx, c_cy = cy, c_vx = vx, c_vy = vy, c_ux = u.ux, c_uy = u.uy;
     c_moves = svm.moves, c_rot = vulture_view_rot, c_w = w, c_h = h, c_when = now;
+    c_M = M; /* s233 */
     ax -= M, ay -= M, w += 2 * M, h += 2 * M;
     lw = w / FS + 2, lh = h / FS + 2;
     vl_compute(md);
@@ -19839,12 +19971,21 @@ vcond_draw(void)
         b = seg == 3 || seg == 4 ? 255 : seg == 2 ? up : seg == 5 ? dn : 0;
         tint = (r << 16) | (g << 8) | b, ta = 75;
     }
+    double ppx = vhp.x, ppy = vhp.y, pps = 1.0; /* s233: where you are seen, at your scale */
+
+    if (vulture_persp_live()) {
+        float ax, ay;
+
+        vulture_persp_point((float) vhp.x, (float) vhp.y, 0.0f, &ax, &ay);
+        ppx = ax, ppy = ay, pps = vulture_persp_scale((float) vhp.x, (float) vhp.y);
+    }
     if (tint >= 0) {
         vtx_tint = tint;
-        vtw_put_tile_x(vhp.x, vhp.y, vhp.tile, vhp.face, vhp.sx, vhp.sy, vhp.deg, false, ta);
+        vtw_put_tile_x((int) floor(ppx + 0.5), (int) floor(ppy + 0.5), vhp.tile, vhp.face, vhp.sx * pps,
+                       vhp.sy * pps, vhp.deg, false, ta);
         vtx_tint = -1;
     }
-    hx = vhp.x, hy = vhp.y + vcond_top(vhp.tile) + 5 + vbob_offset(u.ux, u.uy);
+    hx = ppx, hy = ppy + (vcond_top(vhp.tile) + 5 + vbob_offset(u.ux, u.uy)) * pps;
     for (k = 0; k < 3; k++) { /* things circling your head: behind it dimmer */
         double a = t * 3.2 + k * 2.0944, sn = sin(a);
 
@@ -19922,8 +20063,8 @@ levelwin::draw()
         map_centre_y += vtw_gy + (int) vpan_py + jy;
     }
 
-    if (vzoom > 1.0)
-        prev_cx = -1; /* s121: zoomed, every frame is a full redraw */
+    if (vzoom > 1.0 || vpp_wanted())
+        prev_cx = -1; /* s121: zoomed, every frame is a full redraw (s233: and through the camera) */
     { /* s183: the map on the GPU when there is a renderer and lighting is
          off (the light passes work on the map's pixels); switching between
          the two, or textures lost, redraws everything */
@@ -19998,12 +20139,17 @@ levelwin::draw()
     map_highlight = mouse_to_map(vulture_get_mouse_pos());
 
     /* coords of the top right corner */
-    map_tr_x = (-V_MAP_YMOD * (map_centre_x + 50)
-                + V_MAP_XMOD * (map_centre_y + 50) + V_MAP_XMOD * V_MAP_YMOD)
-               / (2 * V_MAP_XMOD * V_MAP_YMOD);
-    map_tr_y = (V_MAP_YMOD * (map_centre_x + 50)
-                + V_MAP_XMOD * (map_centre_y + 50) + V_MAP_XMOD * V_MAP_YMOD)
-               / (2 * V_MAP_XMOD * V_MAP_YMOD);
+    {
+        int pex, pey; /* s233: the camera sees past the edges at the top */
+
+        vpp_extent(this->w, this->h, &pex, &pey);
+        map_tr_x = (-V_MAP_YMOD * (map_centre_x + 50 + pex)
+                    + V_MAP_XMOD * (map_centre_y + 50 + pey) + V_MAP_XMOD * V_MAP_YMOD)
+                   / (2 * V_MAP_XMOD * V_MAP_YMOD);
+        map_tr_y = (V_MAP_YMOD * (map_centre_x + 50 + pex)
+                    + V_MAP_XMOD * (map_centre_y + 50 + pey) + V_MAP_XMOD * V_MAP_YMOD)
+                   / (2 * V_MAP_XMOD * V_MAP_YMOD);
+    }
 
     Uint32 vpf_a = SDL_GetTicks(); /* probe: s152 frame stages */
     bool vgm = false; /* s183: tiles and sprites into the GPU map layer */
@@ -20028,11 +20174,15 @@ levelwin::draw()
         SDL_FillRect(vulture_screen, NULL, 0); /* the overlay starts clear over the map */
     else
         vulture_gpumap_abandon();
+    /* s233: the camera - its axis the window's middle (the map glides under it) */
+    vulture_persp_frame(vgm && vpp_wanted(), (float) (this->abs_x + this->w / 2),
+                        (float) (this->abs_y + this->h / 2), vpp_distance(this->h));
     vl_gpu_frame = vgm && vl_on; /* s185 */
     /* s187: while lighting is on, the light layer draws the fog of war -
        remembered squares' tiles aren't darkened (vl_render's own test) */
     bool vl_fog = vl_on && u.ux && !u.uswallow && this->w >= 32 && this->h >= 32;
     vnm_begin(); /* s149: the map's tiles lay their normal maps from here */
+    vulture_persp_floor(); /* s233: the floor pass lays the floor */
 
     /* without the +-1 small corners within the viewport are not drawn */
     diff = map_tr_x - map_tr_y - 1;
@@ -20139,6 +20289,7 @@ levelwin::draw()
         }
     }
     vslab_draw(); /* s205: over the void's tiles, under everything standing */
+    vulture_persp_floor(); /* s233: the cast shadows lie on the floor */
     vxr_faces.clear(), vxr_mons.clear(), vxr_seq = 0; /* s210 */
     vtorch_list.clear(); /* s211 */
     vrock_prepare(map_data, view_x, view_y, map_tr_y, diff, sum); /* s215: the rock mass */
@@ -20173,6 +20324,7 @@ levelwin::draw()
             /* Find position of tile centre */
             x = map_centre_x + V_MAP_XMOD * (__j - __i);
             y = map_centre_y + V_MAP_YMOD * (__j + __i);
+            vulture_persp_billboard((float) x, (float) y); /* s233: what stands on this square */
 
             map_back = map_data->get_glyph(MAP_BACK, j, i);
             map_obj = map_data->get_glyph(MAP_OBJ, j, i);
@@ -20395,6 +20547,7 @@ levelwin::draw()
 
                 x = map_centre_x + V_MAP_XMOD * (__j - __i);
                 y = map_centre_y + V_MAP_YMOD * (__j + __i);
+                vulture_persp_billboard((float) x, (float) y); /* s233 */
 
                 vulture_put_tilehighlight(x, y,
                                           map_data->get_glyph(MAP_OBJ, j, i));
@@ -20402,6 +20555,7 @@ levelwin::draw()
         }
     }
     vulture_normal_capture = false; /* s149 */
+    vulture_persp_flat(); /* s233 */
     if (vgm)
         vulture_gpumap_end(); /* s183: effects and the HUD go into the overlay */
     Uint32 vpf_b = SDL_GetTicks(); /* probe */
@@ -21442,6 +21596,12 @@ levelwin::mouse_to_map(point mouse)
         mouse.x = w / 2 + (int) floor((mouse.x - w / 2) / vzoom);
         mouse.y = h / 2 + (int) floor((mouse.y - h / 2) / vzoom);
     }
+    if (vulture_persp_live()) { /* s233: the floor the camera sees there */
+        float fu, fv;
+
+        vulture_persp_unfloor((float) mouse.x, (float) mouse.y, &fu, &fv);
+        mouse.x = (int) floorf(fu), mouse.y = (int) floorf(fv);
+    }
     px = mouse.x - (w / 2), py = mouse.y - (h / 2);
 
     /* §62: screen -> VIEW offset (the stock formula, with the view centre
@@ -21472,6 +21632,12 @@ levelwin::map_to_mouse(point mappos)
           &vi);
     mouse.x = map_centre_x + V_MAP_XMOD * (vj - vi);
     mouse.y = map_centre_y + V_MAP_YMOD * (vj + vi);
+    if (vulture_persp_live()) { /* s233: where the camera shows it */
+        float fx, fy;
+
+        vulture_persp_point((float) mouse.x, (float) mouse.y, 0.0f, &fx, &fy);
+        mouse.x = (int) floorf(fx + 0.5f), mouse.y = (int) floorf(fy + 0.5f);
+    }
     if (vzoom > 1.0) { /* s121 */
         mouse.x = map_centre_x + (int) ((mouse.x - map_centre_x) * vzoom);
         mouse.y = map_centre_y + (int) ((mouse.y - map_centre_y) * vzoom);
