@@ -1748,6 +1748,49 @@ vcam_tick(void)
     vcam_left -= step;
 }
 
+/* s236: the camera stays over what you know of the level.  A drag or an
+   edge scroll stops at the known map's edge (two squares past it) - never
+   out into the black.  The box: every square you have mapped, and you. */
+static void
+vcam_bounds(mapdata *md, int *x0, int *y0, int *x1, int *y1)
+{
+    int x, y, b;
+
+    *x0 = COLNO, *y0 = ROWNO, *x1 = -1, *y1 = -1;
+    for (y = 0; y < ROWNO; y++)
+        for (x = 1; x < COLNO; x++) {
+            b = md ? md->get_glyph(MAP_BACK, x, y) : V_TILE_NONE;
+            if (b == V_MISC_UNMAPPED_AREA || b == V_TILE_NONE)
+                continue;
+            *x0 = x < *x0 ? x : *x0, *x1 = x > *x1 ? x : *x1;
+            *y0 = y < *y0 ? y : *y0, *y1 = y > *y1 ? y : *y1;
+        }
+    if (u.ux) {
+        *x0 = u.ux < *x0 ? u.ux : *x0, *x1 = u.ux > *x1 ? u.ux : *x1;
+        *y0 = u.uy < *y0 ? u.uy : *y0, *y1 = u.uy > *y1 ? u.uy : *y1;
+    }
+    if (*x1 < 0) { /* nothing known: the middle of the map */
+        *x0 = *x1 = COLNO / 2, *y0 = *y1 = ROWNO / 2;
+        return;
+    }
+    *x0 -= 2, *y0 -= 2, *x1 += 2, *y1 += 2;
+    *x0 = *x0 < 1 ? 1 : *x0, *y0 = *y0 < 0 ? 0 : *y0;
+    *x1 = *x1 > COLNO - 1 ? COLNO - 1 : *x1, *y1 = *y1 > ROWNO - 1 ? ROWNO - 1 : *y1;
+}
+
+static void
+vcam_clamp(mapdata *md, int *vx, int *vy)
+{
+    int x0, y0, x1, y1;
+
+    vcam_bounds(md, &x0, &y0, &x1, &y1);
+    if (getenv("VULTURE_SELFTEST_PANFAR") && (*vx < x0 || *vx > x1 || *vy < y0 || *vy > y1)) /* probe: s236 */
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "panfar: held %d,%d to the known %d,%d - %d,%d\n", *vx, *vy,
+                          x0, y0, x1, y1);
+    *vx = *vx < x0 ? x0 : *vx > x1 ? x1 : *vx;
+    *vy = *vy < y0 ? y0 : *vy > y1 ? y1 : *vy;
+}
+
 /* PageUp / PageDown: on to the next quarter turn that way (dir -1, +1) */
 static void
 vcam_quarter(int dir)
@@ -8637,6 +8680,49 @@ vcam_drag_probe_tick(Uint32 now)
     }
 }
 
+/* probe: s236 - VULTURE_SELFTEST_PANFAR: a middle drag far past the known
+   map each way, pushed as mouse motion: the camera must stop over what you
+   know (vcam_clamp logs each hold) */
+static Uint32 vcam_pan_probe_t = 0;
+static int vcam_pan_probe_n = 0;
+
+static void
+vcam_pan_probe_tick(Uint32 now)
+{
+    extern SDL_Window *vulture_sdl_window;
+    static const int dx[4] = { 1, -1, 0, 0 }, dy[4] = { 0, 0, 1, -1 };
+    char p[700];
+    int k;
+
+    if (now - vcam_pan_probe_t < (vcam_pan_probe_n ? 500u : 2500u))
+        return;
+    vcam_pan_probe_t = SDL_GetTicks();
+    if (vcam_pan_probe_n > 0) { /* the last drag's end */
+        levwin->force_redraw();
+        ROOTWIN->draw_windows();
+        snprintf(p, sizeof p, "%s" "\\" "panfar_%d.bmp", getenv("VULTURE_SELFTEST"), vcam_pan_probe_n - 1);
+        vulture_save_frame_bmp(p);
+    }
+    if (vcam_pan_probe_n >= 4) {
+        vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "panfar probe: done\n");
+        vcam_pan_probe_t = 0;
+        return;
+    }
+    vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "panfar probe: drag %d\n", vcam_pan_probe_n);
+    for (k = 0; k < 40; k++) {
+        SDL_Event e;
+
+        memset(&e, 0, sizeof e);
+        e.type = SDL_MOUSEMOTION;
+        e.motion.windowID = vulture_sdl_window ? SDL_GetWindowID(vulture_sdl_window) : 0;
+        e.motion.x = 960, e.motion.y = 540;
+        e.motion.xrel = 150 * dx[vcam_pan_probe_n], e.motion.yrel = 150 * dy[vcam_pan_probe_n];
+        e.motion.state = SDL_BUTTON_MMASK;
+        SDL_PushEvent(&e);
+    }
+    vcam_pan_probe_n++;
+}
+
 /* probe: s211 - VULTURE_SELFTEST_TORCH: the room you start in, twice, a
    quarter second apart (the flames move) */
 static Uint32 vtorch_probe_t = 0;
@@ -11412,6 +11498,8 @@ vulture_idle_bob(bool at_map)
         vcam_probe_tick(now);
     if (vcam_drag_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s236 */
         vcam_drag_probe_tick(now);
+    if (vcam_pan_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s236 */
+        vcam_pan_probe_tick(now);
     if (vgrade_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s212 */
         vgrade_probe_tick(now);
     if (vrefl_probe_t && at_map && getenv("VULTURE_SELFTEST")) /* probe: s213 */
@@ -14693,6 +14781,8 @@ vselftest(void)
             vcam_probe_t = SDL_GetTicks(), vcam_probe_n = 0;
         if (getenv("VULTURE_SELFTEST_RDRAG")) /* probe: s236 a right drag */
             vcam_drag_probe_t = SDL_GetTicks(), vcam_drag_probe_n = 0;
+        if (getenv("VULTURE_SELFTEST_PANFAR")) /* probe: s236 a drag far out */
+            vcam_pan_probe_t = SDL_GetTicks(), vcam_pan_probe_n = 0;
         if (getenv("VULTURE_SELFTEST_TORCH")) { /* probe: s211 torches */
             vtorch_probe_t = SDL_GetTicks(), vtorch_probe_n = 0;
             break;
@@ -21102,10 +21192,7 @@ levelwin::handle_timer_event(window *target, void *result, int time)
         view_y += mdy;
         }
 
-        view_x = (view_x < 0) ? 0 : view_x;
-        view_y = (view_y < 0) ? 0 : view_y;
-        view_x = (view_x > COLNO) ? COLNO : view_x;
-        view_y = (view_y > ROWNO) ? ROWNO : view_y;
+        vcam_clamp(map_data, &view_x, &view_y); /* s236: over what you know, never out into the black */
         vulture_cam_follow = false; /* s123: you moved the camera */
         vulture_cam_manual = true;
 
@@ -21292,8 +21379,7 @@ levelwin::handle_mousemotion_event(window *target, void *result, int xrel,
             v_rot(ra, rb, vulture_view_rot, &mdx, &mdy);
             view_x -= mdx;
             view_y -= mdy;
-            view_x = (view_x < 0) ? 0 : (view_x > COLNO) ? COLNO : view_x;
-            view_y = (view_y < 0) ? 0 : (view_y > ROWNO) ? ROWNO : view_y;
+            vcam_clamp(map_data, &view_x, &view_y); /* s236: over what you know, never out into the black */
             vulture_cam_follow = false; /* s123: you moved the camera */
             vpan_px -= V_MAP_XMOD * (ra - rb);
             vpan_py -= V_MAP_YMOD * (ra + rb);

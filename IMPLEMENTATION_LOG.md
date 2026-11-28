@@ -5108,6 +5108,18 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   90, 135, 200 degrees), VULTURE_SELFTEST_RDRAG (a right drag pushed as
   mouse events, then PageDown).
 
+### 237. The camera stays over what you know
+
+- The user: "make it impossible to drag the camera out of bounds".  A
+  middle drag or an edge scroll could take the view's middle anywhere on the
+  80 x 21 map - out into black, the level off the screen.
+- vcam_clamp holds it to the box round every square you have mapped (and
+  you), two squares past it, inside the map; both the middle drag and the
+  edge scroll go through it.
+- Probe VULTURE_SELFTEST_PANFAR: four 6000 px middle drags pushed as mouse
+  motion, one each way; each was held ("panfar: held ...") with the room
+  still on the screen.
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.
