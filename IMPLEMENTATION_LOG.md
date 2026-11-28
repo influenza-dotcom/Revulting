@@ -4921,6 +4921,22 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   - A lone block of seen rock with no rock or wall beside it floated like a
     loose tile: not drawn.
 
+### 225. The ceiling in its wall's stone
+
+- The user: "can you make the ceiling color actually match the wall".
+- A top is its wall style's own face art laid flat on the square's diamond
+  (vrock_top_tex: along the wall, and into it, from the face below its top
+  band; a hole takes the face's mean colour) - brick tops on brick, marble
+  on marble, vines on vines.  The band's rock takes the nearest wall's
+  stone, the rock beside a corridor the corridor's dark rock (vtop_prepare:
+  a BFS from walls first, then corridors and doorways, through the band).
+- Lit as its wall is: the nearest wall's (or corridor's) light through the
+  light grid's darkness curve (1 - (1 - L) x VL_DMAX), x0.82 so a top sits a
+  little under its lit face (by a lamp, white marble tops glowed).  So the
+  fogged tops are as dim as the fogged walls.
+- Checked: door swings, the stairs fade, water and last-seen ghosts with
+  the ceiling (no change needed).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

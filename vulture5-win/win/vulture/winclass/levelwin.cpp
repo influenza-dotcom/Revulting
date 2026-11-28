@@ -8872,6 +8872,149 @@ vrock_cap(int var, bool normal, bool dark = false) /* a block's top: the square'
     return s;
 }
 
+/*
+ * IMPLEMENTATION_LOG s225: the ceiling in its wall's stone.  The user: "make
+ * the ceiling color actually match the wall".  A top is its wall style's own
+ * face art laid flat on the square's diamond (along the wall, and into it) -
+ * a brick wall's top is brick, marble's marble, vines' vines - and the rock
+ * of the band takes the nearest wall's stone (beside a corridor, the
+ * corridor's dark rock).  It is lit as that wall is (its light, through the
+ * light grid's own darkness curve), so in a lit room it matches the lit
+ * face and in the fog it is as dim as the fogged wall.
+ */
+static signed char vtop_style[ROWNO][COLNO]; /* the stone each top is (-1: the plain grain) */
+static float vtop_light[ROWNO][COLNO];       /* the light it is lit by */
+
+static SDL_Surface *
+vrock_top_tex(int style)
+{
+    static SDL_Surface *c[V_WALL_STYLE_MAX][2];
+    bool full = vulture_opts.wall_style == V_WALL_DISPLAY_STYLE_FULL;
+    const int W = 2 * V_MAP_XMOD, H = 2 * V_MAP_YMOD;
+    vulture_tile *wt;
+    SDL_Surface *src, *s;
+    double ar = 0, ag = 0, ab = 0, an = 0;
+    int x, y, fh;
+
+    if (style < 0 || style >= V_WALL_STYLE_MAX)
+        return NULL;
+    if (c[style][full ? 0 : 1])
+        return c[style][full ? 0 : 1];
+    wt = vulture_get_tile(full ? walls_full[style].south : walls_half[style].south);
+    if (!wt || !wt->graphic || !(src = SDL_ConvertSurfaceFormat(wt->graphic, SDL_PIXELFORMAT_ARGB8888, 0)))
+        return NULL;
+    if (!(s = SDL_CreateRGBSurfaceWithFormat(0, W, H, 32, SDL_PIXELFORMAT_ARGB8888))) {
+        SDL_FreeSurface(src);
+        return NULL;
+    }
+    fh = -wt->ymod; /* the face's height (75 full, 43 half) */
+    SDL_LockSurface(src);
+    SDL_LockSurface(s);
+    for (y = 0; y < src->h; y++) /* the face's mean colour: for any hole */
+        for (x = 0; x < src->w; x++) {
+            Uint32 p = ((Uint32 *) ((Uint8 *) src->pixels + (size_t) y * src->pitch))[x];
+
+            if ((p >> 24) >= 200)
+                ar += (p >> 16) & 255, ag += (p >> 8) & 255, ab += p & 255, an++;
+        }
+    if (an > 0)
+        ar /= an, ag /= an, ab /= an;
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            double u = (x + 0.5 - W / 2.0) / (W / 2.0), v = (y + 0.5 - H / 2.0) / (H / 2.0);
+            double a = (1.0 + u - v) / 2.0, b = (1.0 + u + v) / 2.0; /* into the wall, along it */
+            Uint32 px = 0;
+
+            if (fabs(u) + fabs(v) <= 1.03) {
+                int ax, ay;
+                Uint32 q;
+
+                a = a < 0.0 ? 0.0 : a > 1.0 ? 1.0 : a, b = b < 0.0 ? 0.0 : b > 1.0 ? 1.0 : b;
+                ax = (int) (b * (src->w - 2));
+                ay = (int) (22.0 * ax / 56.0 + 4.0 + a * (fh - 10));
+                ax = ax < 0 ? 0 : ax >= src->w ? src->w - 1 : ax;
+                ay = ay < 0 ? 0 : ay >= src->h ? src->h - 1 : ay;
+                q = ((Uint32 *) ((Uint8 *) src->pixels + (size_t) ay * src->pitch))[ax];
+                if ((q >> 24) < 128) /* off the face: its mean colour */
+                    q = (Uint32) ar << 16 | (Uint32) ag << 8 | (Uint32) ab;
+                px = 0xFF000000u | (q & 0x00FFFFFFu);
+            }
+            ((Uint32 *) ((Uint8 *) s->pixels + (size_t) y * s->pitch))[x] = px;
+        }
+    SDL_UnlockSurface(s);
+    SDL_UnlockSurface(src);
+    SDL_FreeSurface(src);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND);
+    c[style][full ? 0 : 1] = s;
+    return s;
+}
+
+static int vrock_style_of(int tile); /* s218, below */
+
+/* s225: the stone a wall square is built of (from its tiles, else a neighbour's) */
+static int
+vrock_wall_stone(struct walls (*mw)[COLNO], int j, int i)
+{
+    static const int d8[8][2] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 }, { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } };
+    int st = -1, k, n;
+
+    for (n = 0; n < 9 && st < 0; n++) {
+        int x = n ? j + d8[n - 1][0] : j, y = n ? i + d8[n - 1][1] : i;
+
+        if (!isok(x, y))
+            continue;
+        for (k = 0; k < 4 && st < 0; k++)
+            st = vrock_style_of(k == 0 ? mw[y][x].north : k == 1 ? mw[y][x].west : k == 2 ? mw[y][x].south
+                                                                                         : mw[y][x].east);
+    }
+    return st;
+}
+
+/* s225: once a frame, after the band: each top's stone and light - a wall
+   its own, the band the nearest wall's (a corridor's: dark rock) */
+static void
+vtop_prepare(mapdata *md, struct walls (*mw)[COLNO])
+{
+    static short q[ROWNO * COLNO][2];
+    int qh = 0, qt = 0, x, y, k, pass;
+
+    memset(vtop_style, -1, sizeof vtop_style);
+    memset(vtop_light, 0, sizeof vtop_light);
+    if (!md || !vrock_on || !mw)
+        return;
+    for (pass = 0; pass < 2; pass++) /* walls first: they win a tie */
+        for (y = 0; y < ROWNO; y++)
+            for (x = 1; x < COLNO; x++) {
+                int kd = vrock_kind(md, x, y);
+
+                if (pass == 0 && kd == 1) {
+                    int st = vrock_wall_stone(mw, x, y);
+
+                    vtop_style[y][x] = (signed char) (st >= 0 ? st : V_WALL_DARK);
+                } else if (pass == 1 && (kd == 2 || kd == 4)) {
+                    vtop_style[y][x] = (signed char) V_WALL_DARK;
+                } else {
+                    continue;
+                }
+                vtop_light[y][x] = vl_light_at(x, y);
+                q[qt][0] = (short) x, q[qt][1] = (short) y, qt++;
+            }
+    while (qh < qt) {
+        static const int d4[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+        int cx = q[qh][0], cy = q[qh][1];
+
+        qh++;
+        for (k = 0; k < 4; k++) {
+            int nx = cx + d4[k][0], ny = cy + d4[k][1];
+
+            if (isok(nx, ny) && vtop_style[ny][nx] < 0 && vrock_d[ny][nx] >= 1 && vrock_d[ny][nx] <= VROCK_D) {
+                vtop_style[ny][nx] = vtop_style[cy][cx], vtop_light[ny][nx] = vtop_light[cy][cx];
+                q[qt][0] = (short) nx, q[qt][1] = (short) ny, qt++;
+            }
+        }
+    }
+}
+
 /* before the second pass: the band, and each block's height */
 static void
 vrock_prepare(mapdata *md, int vx, int vy, int tr, int diff, int sum)
@@ -9078,9 +9221,12 @@ vrock_edge(int e)
    lips: bit 0 its up-left edge, bit 1 its up-right edge drop away */
 static void
 vrock_cap_put(int x, int y, int h, int sh, int var, float f, int lips = 0, bool dark = false, int ghost = 0,
-              int edges = 0)
+              int edges = 0, int stone = -1)
 {
-    SDL_Surface *c = vrock_cap(var, false, dark), *nm = ghost ? NULL : vrock_cap(0, true);
+    SDL_Surface *c = stone >= 0 ? vrock_top_tex(stone) : NULL, *nm = ghost ? NULL : vrock_cap(0, true);
+
+    if (!c) /* s225: its wall's stone - or the plain grain */
+        c = vrock_cap(var, false, dark);
     int cx0 = x - V_MAP_XMOD, cy0 = y - V_MAP_YMOD - h, amin = 255;
     vxr_face_t fc;
 
@@ -9468,7 +9614,12 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
             else if (!ghost && vrock_ghost_at(md, nj, ni)) /* s219: the solid ceiling's edge */
                 lips |= 1 << e;
         }
-        sh = sh * 72 / 100; /* s219, s224: one shade for every top (per-square light made a patchwork) */
+        { /* s225: lit as its wall is - its light through the light grid's darkness curve (VL_DMAX) */
+            float L = vtop_style[i][j] >= 0 ? vtop_light[i][j] : 0.3f;
+
+            L = L > 1.0f ? 1.0f : L < 0.0f ? 0.0f : L;
+            sh = (int) (sh * (1.0f - (1.0f - L) * 0.94f) * 0.82f); /* a top a little under its lit face (by a lamp, white marble glowed) */
+        }
         { /* s219: the soft edges - toward rock you do not know (or the map's edge) */
             static const int ev[4][2] = { { -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 } };
 
@@ -9487,7 +9638,8 @@ vrock_draw(mapdata *md, int j, int i, int x, int y, int sj, int si, int ej, int 
             }
         }
         vrock_cap_put(x, y, h, sh, (j * 7 + i * 3) % 3, (float) (y - vwall_hy) / 22.0f, lips,
-                      vrock_style == 1 && b != V_TILE_WALL_GENERIC, ghost, edges); /* s219: dark / see-through */
+                      vrock_style == 1 && b != V_TILE_WALL_GENERIC, ghost, edges,
+                      vrock_style == 1 ? -1 : vtop_style[i][j]); /* s219: dark / see-through; s225: its stone */
     }
 }
 
@@ -19824,6 +19976,7 @@ levelwin::draw()
     vxr_faces.clear(), vxr_mons.clear(), vxr_seq = 0; /* s210 */
     vtorch_list.clear(); /* s211 */
     vrock_prepare(map_data, view_x, view_y, map_tr_y, diff, sum); /* s215: the rock mass */
+    vtop_prepare(map_data, maptile_wall); /* s225: each top's stone and light */
     vghost_update(map_data); /* s221: who you see, who you lost */
     vwall_hole_on = u.ux && !u.uswallow && !vwall_probe_off; /* s209: the walls in front of you see-through round you */
     if (vwall_hole_on) {
