@@ -87,6 +87,8 @@ void vulture_read_main_config(FILE * fp)
 			vulture_opts.depth_blur = atoi(param);
 		else if (!strncmp(configline, "perspective", optend - configline)) /* s233 */
 			vulture_opts.perspective = atoi(param);
+		else if (!strncmp(configline, "camera_tilt", optend - configline)) /* s235 */
+			vulture_opts.camera_tilt = atoi(param);
 		else if (!strncmp(configline, "map_zoom", optend - configline))
 			vulture_opts.map_zoom = atoi(param);
 		else if (!strncmp(configline, "no_permadeath", optend - configline))
@@ -292,6 +294,7 @@ void vulture_read_options(void)
 	vulture_opts.gpu = 1; /* s168: on unless the conf says gpu=0 */
 	vulture_opts.depth_blur = 1; /* s205 */
 	vulture_opts.perspective = 150; /* s233; s234: 130 -> 150 */
+	vulture_opts.camera_tilt = 40; /* s235 */
 	/* 0 = auto-fit the overview map; see map::map() */
 	vulture_opts.map_zoom = 0;
 	/* classic permadeath unless the player opts out */
@@ -444,7 +447,7 @@ void vulture_write_userconfig(void)
 	fp = fopen(filename.c_str(), "rb");
 	if (fp) {
 		static const char *known_keys[] = {
-			"screen_xsize", "screen_ysize", "render_scale", "gpu", "depth_blur", "perspective", "map_zoom",
+			"screen_xsize", "screen_ysize", "render_scale", "gpu", "depth_blur", "perspective", "camera_tilt", "map_zoom",
 				"no_permadeath",
 				"wall_style", "wall_opacity",
 			"recenter_after_movement", "play_music", "play_effects",
@@ -500,6 +503,7 @@ void vulture_write_userconfig(void)
 		fprintf(fp, "gpu=%d\n", vulture_opts.gpu); /* s168 */
 		fprintf(fp, "depth_blur=%d\n", vulture_opts.depth_blur); /* s205 */
 		fprintf(fp, "perspective=%d\n", vulture_opts.perspective); /* s233 */
+		fprintf(fp, "camera_tilt=%d\n", vulture_opts.camera_tilt); /* s235 */
 		fprintf(fp, "map_zoom=%d\n",     vulture_opts.map_zoom);
 		fprintf(fp, "no_permadeath=%d\n", vulture_opts.no_permadeath);
 		fprintf(fp, "fullscreen=%d\n",   vulture_opts.fullscreen);

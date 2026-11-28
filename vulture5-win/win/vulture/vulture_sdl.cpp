@@ -498,6 +498,20 @@ struct vpp_lamp_t {
 };
 static std::vector<vpp_lamp_t> vpp_lamps;
 static unsigned vpp_n_calls = 0, vpp_n_verts = 0, vpp_n_copies = 0; /* probe: s234 */
+/*
+ * IMPLEMENTATION_LOG s235: the camera is free of the art's angle.  Each iso
+ * point is a point in the world - across X = u - cx, up Y = h / cos0, along
+ * Z = -((v - cy) + h) / sin0, the art's own camera being sin0 = 22/56 down -
+ * so it can be seen from any tilt and turn: the floor, the walls and the
+ * tops re-project as the planes they are; what stands on a square stays a
+ * cut-out facing the camera.
+ */
+static float vpp_se = 0.392857f, vpp_ce = 0.919589f; /* the camera's tilt: sin, cos */
+static float vpp_sy = 0.0f, vpp_cyw = 1.0f;           /* its turn: sin, cos */
+static bool vpp_hdfloor = false;                      /* tilted past the art: the floor from the HD art */
+#define VPP_IS0 2.545455f /* 1 / sin0 */
+#define VPP_IC0 1.087440f /* 1 / cos0 */
+#define VPP_S0 0.392857f
 #define VPP_IT 2.340823f /* 1 / tan: the camera's sine is 22/56 */
 #define VPP_IK 2.768022f /* 1 / (sin cos) */
 static SDL_Texture *vgm_dof_t[3] = { NULL, NULL, NULL }; /* s205: the map halved, quartered, eighthed */
@@ -582,7 +596,7 @@ static int vgl_state = -1; /* -1 untried, 0 can't, 1 ready */
 static vgl_uint vgl_prog = 0;
 enum { VGL_U_MAP, VGL_U_NRM, VGL_U_LIGHT, VGL_U_DIRS, VGL_U_SIZE, VGL_U_LG, VGL_U_LGS, VGL_U_DG,
        VGL_U_DGS, VGL_U_AREA, VGL_U_PL, VGL_U_PLI, VGL_U_RKA, VGL_U_RKB, VGL_U_NOISE, VGL_U_FOG,
-       VGL_U_MIST, VGL_U_MCOL, VGL_U_VIEW, VGL_U_VSC, VGL_U_PP, VGL_U_N };
+       VGL_U_MIST, VGL_U_MCOL, VGL_U_VIEW, VGL_U_VSC, VGL_U_PP, VGL_U_PC, VGL_U_N };
 static vgl_int vgl_loc[VGL_U_N];
 static SDL_Texture *vgm_nrm = NULL;   /* the normal layer */
 static SDL_Texture *vgm_lit = NULL;   /* the lit map */
@@ -645,17 +659,20 @@ uniform vec4 u_mcol;  /* the mist's colour (0..255) */
 uniform vec4 u_view;  /* s201: a zoomed map - its origin on screen x, y and on the 1x map x, y */
 uniform vec4 u_vsc;   /* s201: 1 / the zoom, x and y */
 uniform vec4 u_pp;    /* s233: the camera - its axis x, y, distance, on */
+uniform vec4 u_pc;    /* s235: its tilt's sin, cos, its turn's sin, cos */
 void main()
 {
     vec2 tc = gl_TexCoord[0].xy;
     vec2 scr = u_view.zw + (tc * u_size.xy - u_view.xy) * u_vsc.xy; /* s201: on the 1x map */
     vec2 px = scr;
     if (u_pp.w > 0.5) { /* s233: the floor seen here, on the iso map the grids and lights are on */
-        float yp = scr.y - u_pp.y;
-        float dv = yp * u_pp.z / max(u_pp.z + yp * 2.340823, u_pp.z * 0.05);
-        float s = u_pp.z / max(u_pp.z - dv * 2.340823, u_pp.z * 0.25);
+        vec2 q = scr - u_pp.xy;
+        float den = max(u_pc.x + u_pc.y * q.y / u_pp.z, 0.02);
+        float tt = u_pp.z * u_pc.x / den;
+        float xr = tt * q.x / u_pp.z;
+        float zr = -u_pp.z * u_pc.y + tt * (u_pc.y - u_pc.x * q.y / u_pp.z);
 
-        px = vec2(u_pp.x + (scr.x - u_pp.x) / s, u_pp.y + dv);
+        px = vec2(u_pp.x + xr * u_pc.w + zr * u_pc.z, u_pp.y - (-xr * u_pc.z + zr * u_pc.w) * 0.392857);
     }
     vec4 c = texture2D(u_map, tc * u_size.zw);
     vec3 rgb = c.rgb * 255.0;
@@ -920,20 +937,47 @@ static inline float vgm_vy(float y)
 }
 
 /* s233: the scale at a point dv below the axis, h up */
-static inline float vpp_scale(float dv, float h)
+/* s235: an iso point (u, v) h px up, in the camera's frame: across, up the view, along it */
+static inline void vpp_cam(float u, float v, float h, float *xr, float *yc, float *d)
 {
-	float d = vpp_D - dv * VPP_IT - h * VPP_IK;
+	float X = u - vpp_cx, Y = h * VPP_IC0, Z = -((v - vpp_cy) + h) * VPP_IS0;
+	float Xr = X * vpp_cyw - Z * vpp_sy, Zr = X * vpp_sy + Z * vpp_cyw;
 
-	if (d < vpp_D * 0.25f) /* nearly at the camera: hold it */
-		d = vpp_D * 0.25f;
-	return vpp_D / d;
+	*xr = Xr, *yc = Y * vpp_ce + Zr * vpp_se;
+	*d = vpp_D - Y * vpp_se + Zr * vpp_ce;
+	if (*d < vpp_D * 0.25f) /* nearly at the camera: hold it */
+		*d = vpp_D * 0.25f;
 }
 
 static inline void vpp_point(float u, float v, float h, float *x, float *y)
 {
-	float s = vpp_scale(v - vpp_cy, h);
+	float xr, yc, d;
 
-	*x = vpp_cx + (u - vpp_cx) * s, *y = vpp_cy + (v - vpp_cy) * s;
+	vpp_cam(u, v, h, &xr, &yc, &d);
+	*x = vpp_cx + vpp_D * xr / d, *y = vpp_cy - vpp_D * yc / d;
+}
+
+/* the scale things standing at iso (u, v) are drawn at */
+static inline float vpp_scale_at(float u, float v)
+{
+	float xr, yc, d;
+
+	vpp_cam(u, v, 0.0f, &xr, &yc, &d);
+	return vpp_D / d;
+}
+
+/* the floor's iso point seen at (x, y): the view's ray met with the floor */
+static inline void vpp_unfloor_raw(float x, float y, float *u, float *v)
+{
+	float xp = x - vpp_cx, yp = y - vpp_cy, den = vpp_se + vpp_ce * yp / vpp_D, tt, Xr, Zr;
+
+	if (den < 0.02f) /* at or past the horizon: hold it */
+		den = 0.02f;
+	tt = vpp_D * vpp_se / den;
+	Xr = tt * xp / vpp_D;
+	Zr = -vpp_D * vpp_ce + tt * (vpp_ce - vpp_se * yp / vpp_D);
+	*u = vpp_cx + Xr * vpp_cyw + Zr * vpp_sy;
+	*v = vpp_cy - (-Xr * vpp_sy + Zr * vpp_cyw) * VPP_S0;
 }
 
 /* a map-layer vertex drawn at (u, v), placed as the current mode places it */
@@ -1021,13 +1065,14 @@ static void vpp_emit(SDL_Texture *t, const float *q, float u0, float v0, float u
 	int nx = 1, ny = 1, i, j;
 	float qq[8];
 
-	if (vpp_mode != 2) { /* a plane: each corner a pixel out (the art stretched over it), so the tiles overlap */
+	if (vpp_mode != 2) { /* a plane: each corner out (the art stretched over it), so the tiles overlap */
 		float mx = (q[0] + q[2] + q[4] + q[6]) * 0.25f, my = (q[1] + q[3] + q[5] + q[7]) * 0.25f;
+		float e = vpp_mode == 1 || vpp_mode == 4 ? 2.0f : 1.0f; /* s235: a diamond's stepped edge needs 2 */
 		int k;
 
 		for (k = 0; k < 4; k++) {
-			qq[2 * k] = q[2 * k] + (q[2 * k] > mx + 0.5f ? 1.0f : q[2 * k] < mx - 0.5f ? -1.0f : 0.0f);
-			qq[2 * k + 1] = q[2 * k + 1] + (q[2 * k + 1] > my + 0.5f ? 1.0f : q[2 * k + 1] < my - 0.5f ? -1.0f : 0.0f);
+			qq[2 * k] = q[2 * k] + (q[2 * k] > mx + 0.5f ? e : q[2 * k] < mx - 0.5f ? -e : 0.0f);
+			qq[2 * k + 1] = q[2 * k + 1] + (q[2 * k + 1] > my + 0.5f ? e : q[2 * k + 1] < my - 0.5f ? -e : 0.0f);
 		}
 		q = qq;
 	}
@@ -1172,12 +1217,46 @@ static void vpp_pose(SDL_Surface *s, int dx, int dy, double sx, double sy, doubl
 }
 
 /* s233: levelwin, each frame: the camera on (the map drawn on the GPU) round (cx, cy), D back */
-void vulture_persp_frame(bool on, float cx, float cy, float D)
+static void vpp_set_camera(float D, float tilt, float turn)
+{
+	float a, b;
+
+	vpp_D = D > 500.0f ? D : 500.0f;
+	tilt = tilt < 10.0f ? 10.0f : tilt > 70.0f ? 70.0f : tilt;
+	a = tilt * 0.01745329f, b = turn * 0.01745329f;
+	vpp_se = sinf(a), vpp_ce = cosf(a);
+	vpp_sy = sinf(b), vpp_cyw = cosf(b);
+	vpp_hdfloor = tilt > 26.0f;
+}
+
+/* s233: levelwin, each frame: the camera on (the map drawn on the GPU) round (cx, cy), D back;
+   s235: tilted tilt degrees down (the art's own: 23.13), turned turn degrees */
+void vulture_persp_frame(bool on, float cx, float cy, float D, float tilt, float turn)
 {
 	vpp_live = on;
 	vpp_cx = cx, vpp_cy = cy;
-	vpp_D = D > 500.0f ? D : 500.0f;
+	vpp_set_camera(D, tilt, turn);
 	vpp_mode = 0;
+}
+
+/* s235: how far past a w x h window's edges (on the iso picture) such a camera sees */
+void vulture_persp_reach(float w, float h, float D, float tilt, float turn, int *ex, int *ey)
+{
+	float keep[8] = { vpp_cx, vpp_cy, vpp_D, vpp_se, vpp_ce, vpp_sy, vpp_cyw, vpp_hdfloor ? 1.0f : 0.0f };
+	float mx = 0.0f, my = 0.0f, u, v;
+	int k;
+
+	vpp_cx = w / 2.0f, vpp_cy = h / 2.0f;
+	vpp_set_camera(D, tilt, turn);
+	for (k = 0; k < 4; k++) {
+		vpp_unfloor_raw((k & 1) ? w : 0.0f, (k & 2) ? h : 0.0f, &u, &v);
+		mx = fmaxf(mx, fabsf(u - w / 2.0f) - w / 2.0f);
+		my = fmaxf(my, fabsf(v - h / 2.0f) - h / 2.0f);
+	}
+	vpp_cx = keep[0], vpp_cy = keep[1], vpp_D = keep[2], vpp_se = keep[3], vpp_ce = keep[4];
+	vpp_sy = keep[5], vpp_cyw = keep[6], vpp_hdfloor = keep[7] > 0.5f;
+	*ex = (int) mx + 8, *ey = (int) my + 8;
+	*ex = *ex < 0 ? 0 : *ex, *ey = *ey < 0 ? 0 : *ey;
 }
 
 bool vulture_persp_live(void)
@@ -1234,8 +1313,8 @@ void vulture_persp_billboard(float ax, float ay)
 {
 	vpp_mode = 2;
 	vpp_ax = ax, vpp_ay = ay;
-	vpp_bs = vpp_scale(ay - vpp_cy, 0.0f);
-	vpp_bx = vpp_cx + (ax - vpp_cx) * vpp_bs, vpp_by = vpp_cy + (ay - vpp_cy) * vpp_bs;
+	vpp_bs = vpp_scale_at(ax, ay);
+	vpp_point(ax, ay, 0.0f, &vpp_bx, &vpp_by);
 }
 
 /* a wall face whose foot runs through (x0, y0) at slope k (screen px per px) */
@@ -1265,25 +1344,17 @@ void vulture_persp_point(float u, float v, float h, float *x, float *y)
 /* the scale things standing at iso (u, v) are drawn at */
 float vulture_persp_scale(float u, float v)
 {
-	(void) u;
-	return vpp_live ? vpp_scale(v - vpp_cy, 0.0f) : 1.0f;
+	return vpp_live ? vpp_scale_at(u, v) : 1.0f;
 }
 
 /* the floor's iso point seen at (x, y) - the inverse of the floor's projection */
 void vulture_persp_unfloor(float x, float y, float *u, float *v)
 {
-	float yp, den, dv, s;
-
 	if (!vpp_live) {
 		*u = x, *v = y;
 		return;
 	}
-	yp = y - vpp_cy, den = vpp_D + yp * VPP_IT;
-	if (den < vpp_D * 0.05f)
-		den = vpp_D * 0.05f;
-	dv = yp * vpp_D / den;
-	s = vpp_scale(dv, 0.0f);
-	*u = vpp_cx + (x - vpp_cx) / s, *v = vpp_cy + dv;
+	vpp_unfloor_raw(x, y, u, v); /* s235 */
 }
 
 /* the mode, kept and put back round a draw that sets its own */
@@ -2316,7 +2387,8 @@ void vulture_gpumap_blit(SDL_Surface *s, const SDL_Rect *srcrect, int x, int y)
 	SDL_GetSurfaceColorMod(s, &r, &g, &b);
 	SDL_GetSurfaceAlphaMod(s, &a);
 	if (vpp_active()) { /* s233: through the camera */
-		SDL_Texture *ht = vgm_view ? vgm_hd_texture(s) : NULL;
+		SDL_Texture *ht = vgm_view || (vpp_hdfloor && (vpp_mode == 1 || vpp_mode == 4)) ? vgm_hd_texture(s)
+		                                                                              : NULL; /* s235 */
 
 		if (ht)
 			t = ht;
@@ -2653,7 +2725,7 @@ bool vulture_gpulit_ok(void)
 	vgl_int ok = 0;
 	static const char *const un[VGL_U_N] = { "u_map", "u_nrm", "u_light", "u_dirs", "u_size",
 		"u_lg", "u_lgs", "u_dg", "u_dgs", "u_area", "u_pl[0]", "u_pli", "u_rka", "u_rkb",
-		"u_noise", "u_fog", "u_mist", "u_mcol", "u_view", "u_vsc", "u_pp" };
+		"u_noise", "u_fog", "u_mist", "u_mcol", "u_view", "u_vsc", "u_pp", "u_pc" };
 	int k;
 
 	if (vgl_state >= 0)
@@ -3178,6 +3250,7 @@ void vulture_gpulit_frame(SDL_Surface *low, int lox, int loy, int FS, const shor
 			vgl.Uniform4f(vgl_loc[VGL_U_VSC], 1.0f, 1.0f, 0.0f, 0.0f);
 		}
 		vgl.Uniform4f(vgl_loc[VGL_U_PP], vpp_cx, vpp_cy, vpp_D, vpp_live ? 1.0f : 0.0f); /* s233 */
+		vgl.Uniform4f(vgl_loc[VGL_U_PC], vpp_se, vpp_ce, vpp_sy, vpp_cyw); /* s235 */
 		vgl.Disable(VGL_BLEND);
 		vgl.Disable(VGL_SCISSOR_TEST);
 		vgl.Begin(VGL_QUADS);

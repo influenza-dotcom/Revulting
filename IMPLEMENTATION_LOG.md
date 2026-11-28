@@ -5062,6 +5062,31 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   pass's geometry calls and vertices; VULTURE_NO_WALLSHADE.  The test
   profile now carries the user's effects.txt.
 
+### 235. A camera free of the art's angle
+
+- The user, after 233-234: "try harder".  The camera still looked down at
+  the art's own 23 degrees, the angle every 2D isometric game has.
+- Each iso point is now a point in the world (across X = u - cx, up
+  Y = h / cos0, along Z = -((v - cy) + h) / sin0, sin0 = 22/56), seen by a
+  camera of any tilt and turn: the floor, the walls and the tops re-project
+  as the planes they are; what stands on a square stays a cut-out facing the
+  camera (HD-2D's way).  The floor's inverse is the view's ray met with the
+  floor (vpp_unfloor_raw, and the same in the shader with u_pc).
+- Option camera_tilt (degrees; 0 = the art's 23): default 40.  VULTURE_TILT
+  overrides.  The ROCK probe saves each shot flat, at 23, at the default and
+  at 44 degrees.
+- What lies flat on a square (contact shadows, blood, traps) is laid on the
+  floor, so it opens up with the tilt; a door stands in its wall's plane
+  (the wall's direction from the walls beside it), so it shortens with its
+  wall instead of standing up out of it.
+- Floors and tops come from the HD art once the camera tilts past the art's
+  angle (they stretch up the view); a tiled diamond overlaps its neighbours
+  by 2 px - its pixel-art stepped edge opened into dotted seams at 1.
+- Each torch's flame glows in the air round it (vtorch_halo_draw): a wide
+  warm bloom and a bright heart, at its distance's scale.
+- The extents the camera sees past the window come from the corners'
+  inverse (vulture_persp_reach).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

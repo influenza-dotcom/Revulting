@@ -1689,6 +1689,27 @@ vpp_wanted(void)
     return vpp_strength() > 0;
 }
 
+/* s235: how far down the camera looks (degrees): option camera_tilt, 0 = the
+   art's own angle (23.13); VULTURE_TILT overrides */
+static float vpp_probe_tilt = -1.0f; /* probe: s235 the same frame at other tilts */
+
+static float
+vpp_tilt(void)
+{
+    static float env = -2.0f;
+    float tl;
+
+    if (vpp_probe_tilt >= 0.0f)
+        return vpp_probe_tilt;
+    if (env == -2.0f) {
+        const char *e = getenv("VULTURE_TILT");
+
+        env = e ? (float) atof(e) : -1.0f;
+    }
+    tl = env >= 0.0f ? env : (float) vulture_opts.camera_tilt;
+    return tl <= 0.0f ? 23.13f : tl;
+}
+
 /* how far back the camera stands for a map h px tall */
 static float
 vpp_distance(int h)
@@ -1703,15 +1724,10 @@ vpp_distance(int h)
 static void
 vpp_extent(int w, int h, int *ex, int *ey)
 {
-    float D = vpp_distance(h), yp = -h / 2.0f, dv, s;
-
     *ex = *ey = 0;
     if (!vpp_wanted())
         return;
-    dv = yp * D / (D + yp * 2.340823f);
-    s = D / (D - dv * 2.340823f);
-    *ex = (int) (w / 2.0f / s - w / 2.0f) + 8;
-    *ey = (int) (-dv - h / 2.0f) + 8;
+    vulture_persp_reach((float) w, (float) h, vpp_distance(h), vpp_tilt(), 0.0f, ex, ey); /* s235 */
 }
 
 /* a point laid on the iso picture, as it is seen (outside the map pass) */
@@ -8303,8 +8319,15 @@ vtorch_spot(int x, int y, int j, int i, int fj, int fi, int tile, bool eface, in
     return true;
 }
 
+/* s235: each torch's flame in sight - on the iso picture, h px up its wall, flickering by fl */
+struct vth_t {
+    float u, v, h, fl;
+};
+static std::vector<vth_t> vtorch_halos;
+
 /* s234: before the walls are drawn, each torch in sight - its flame and its
-   light, for the pools it throws on the walls (vulture_persp_lamps) */
+   light, for the pools it throws on the walls (vulture_persp_lamps); s235:
+   and the glow round its flame (vtorch_halo_draw) */
 static void
 vtorch_lamps(mapdata *md, struct walls (*mw)[COLNO], int cx, int cy, int vx, int vy, int map_tr_y, int diff, int sum)
 {
@@ -8312,7 +8335,8 @@ vtorch_lamps(mapdata *md, struct walls (*mw)[COLNO], int cx, int cy, int vx, int
     double tt = SDL_GetTicks() / 1000.0;
     int ti, tj, rdj, rdi, j, i, x, y, f, sj, si, ej, ei, tx, ty;
 
-    if (!vulture_persp_live() || !md || !mw)
+    vtorch_halos.clear();
+    if (!md || !mw)
         return;
     v_rot(0, 1, vulture_view_rot, &sj, &si);
     v_rot(1, 0, vulture_view_rot, &ej, &ei);
@@ -8331,12 +8355,68 @@ vtorch_lamps(mapdata *md, struct walls (*mw)[COLNO], int cx, int cy, int vx, int
                 if (!isok(fj, fi) || !cansee(fj, fi) || !vtorch_spot(x, y, j, i, fj, fi, tile, f != 0, &tx, &ty))
                     continue;
                 fl = 0.82 + 0.10 * sin(tt * 8.3 + ph) + 0.06 * sin(tt * 19.7 + j) + 0.03 * ((rand() % 100) / 100.0);
+                {
+                    vth_t hh; /* s235: the face's foot runs through y + 11 under the flame */
+
+                    hh.u = (float) tx, hh.v = (float) (ty - 17), hh.h = (float) (y + 11 - (ty - 17)), hh.fl = (float) fl;
+                    vtorch_halos.push_back(hh);
+                }
                 v.push_back((float) tx), v.push_back((float) (ty - 17));
                 v.push_back((float) (150.0 * fl)), v.push_back((float) (86.0 * fl)), v.push_back((float) (38.0 * fl));
                 v.push_back(100.0f);
             }
         }
-    vulture_persp_lamps(v.empty() ? NULL : &v[0], (int) (v.size() / 6));
+    if (vulture_persp_live())
+        vulture_persp_lamps(v.empty() ? NULL : &v[0], (int) (v.size() / 6));
+}
+
+/* s235: the overlay, after the light: each torch's flame glows in the air
+   round it - a soft warm bloom, round, at its distance's scale */
+static void
+vtorch_halo_draw(void)
+{
+    static SDL_Surface *disc = NULL;
+    size_t k;
+
+    if (vtorch_halos.empty() || !vulture_screen || u.uswallow || Underwater)
+        return;
+    if (!disc) {
+        int x, y, n = 128;
+
+        if (!(disc = SDL_CreateRGBSurfaceWithFormat(0, n, n, 32, SDL_PIXELFORMAT_ARGB8888)))
+            return;
+        SDL_LockSurface(disc);
+        for (y = 0; y < n; y++) {
+            Uint32 *row = (Uint32 *) ((Uint8 *) disc->pixels + y * disc->pitch);
+
+            for (x = 0; x < n; x++) {
+                double dx = (x + 0.5 - n / 2.0) / (n / 2.0), dy = (y + 0.5 - n / 2.0) / (n / 2.0);
+                double r2 = dx * dx + dy * dy, a = r2 >= 1.0 ? 0.0 : pow(1.0 - r2, 2.6);
+
+                row[x] = ((Uint32) (a * 255) << 24) | 0x00FFFFFFu;
+            }
+        }
+        SDL_UnlockSurface(disc);
+        SDL_SetSurfaceBlendMode(disc, SDL_BLENDMODE_ADD);
+    }
+    for (k = 0; k < vtorch_halos.size(); k++) {
+        const vth_t &q = vtorch_halos[k];
+        float sx, sy, s = vulture_persp_scale(q.u, q.v + q.h);
+        int pass;
+
+        vulture_persp_point(q.u, q.v, q.h, &sx, &sy);
+        for (pass = 0; pass < 2; pass++) { /* the wide warm air, then the bright heart */
+            int rad = (int) ((pass ? 22.0f : 70.0f) * s), al = (int) ((pass ? 95.0f : 34.0f) * q.fl);
+            SDL_Rect d;
+
+            if (rad < 3)
+                continue;
+            SDL_SetSurfaceColorMod(disc, 255, (Uint8) (pass ? 176 : 128), (Uint8) (pass ? 92 : 48));
+            SDL_SetSurfaceAlphaMod(disc, (Uint8) (al > 255 ? 255 : al));
+            d.x = (int) sx - rad, d.y = (int) sy - rad, d.w = rad * 2, d.h = rad * 2;
+            SDL_BlitScaled(disc, NULL, vulture_screen, &d);
+        }
+    }
 }
 
 /* step 7 of the map: a back wall's face (tile) on square (j, i), drawn at
@@ -10431,17 +10511,18 @@ vrock_probe_shot(const char *name)
     int keep = vrock_style, s;
 
     levwin->set_view(u.ux, u.uy);
-    for (s = 0; s < 3; s++) { /* s233: the same frame flat, through the camera, and closer */
-        static const int sv[3] = { 0, -1, 170 };
-        static const char *const sn[3] = { "flat", "s4", "strong" };
+    for (s = 0; s < 4; s++) { /* s233: the same frame flat and through the camera; s235: at tilts */
+        static const int sv[4] = { 0, -1, -1, -1 };
+        static const float tv[4] = { -1.0f, 23.13f, -1.0f, 44.0f };
+        static const char *const sn[4] = { "flat", "t23", "s4", "t44" };
 
-        vrock_style = 4, vpp_probe_strength = sv[s];
+        vrock_style = 4, vpp_probe_strength = sv[s], vpp_probe_tilt = tv[s];
         levwin->force_redraw();
         ROOTWIN->draw_windows();
         snprintf(p, sizeof p, "%s" "\\" "%s_%s.bmp", getenv("VULTURE_SELFTEST"), name, sn[s]);
         vulture_save_frame_bmp(p);
     }
-    vpp_probe_strength = -1;
+    vpp_probe_strength = -1, vpp_probe_tilt = -1.0f;
     vrock_style = keep;
     levwin->force_redraw();
     vulture_write_log(V_LOG_NOTE, __FILE__, __LINE__, "rock probe: %s at %d,%d\n", name, u.ux, u.uy);
@@ -20250,7 +20331,7 @@ levelwin::draw()
         vulture_gpumap_abandon();
     /* s233: the camera - its axis the window's middle (the map glides under it) */
     vulture_persp_frame(vgm && vpp_wanted(), (float) (this->abs_x + this->w / 2),
-                        (float) (this->abs_y + this->h / 2), vpp_distance(this->h));
+                        (float) (this->abs_y + this->h / 2), vpp_distance(this->h), vpp_tilt(), 0.0f); /* s235: tilted */
     vl_gpu_frame = vgm && vl_on; /* s185 */
     /* s187: while lighting is on, the light layer draws the fog of war -
        remembered squares' tiles aren't darkened (vl_render's own test) */
@@ -20443,7 +20524,18 @@ levelwin::draw()
                    part way through a swing is drawn by vdr_draw) */
                 {
                     int furn = map_data->get_glyph(MAP_FURNITURE, j, i);
+                    bool pdoor = furn != V_TILE_NONE && IS_DOOR(levl[j][i].typ); /* s235: a door stands in its wall */
 
+                    if (pdoor) {
+                        int wa, wb;
+                        bool along_x = (j > 1 && map_data->get_glyph(MAP_BACK, j - 1, i) == V_TILE_WALL_GENERIC)
+                                       || (j < COLNO - 1 && map_data->get_glyph(MAP_BACK, j + 1, i) == V_TILE_WALL_GENERIC);
+
+                        v_rot(along_x ? 1 : 0, along_x ? 0 : 1, 4 - vulture_view_rot, &wa, &wb);
+                        if (wa != wb)
+                            vulture_persp_wall((float) x, (float) y,
+                                               (float) (V_MAP_YMOD * (wa + wb)) / (float) (V_MAP_XMOD * (wa - wb)));
+                    }
                     if (!vdr_draw(x, y, j, i, furn) && !vtree_draw(x, y, j, i, furn)) { /* s206: trees sway */
                         vulture_tile *dt = vcut_now < 255 && furn != V_TILE_NONE ? vulture_get_tile(v_rot_door(furn)) : NULL;
 
@@ -20457,13 +20549,17 @@ levelwin::draw()
                         if (dt && dt->graphic)
                             SDL_SetSurfaceAlphaMod(dt->graphic, 255);
                     }
+                    if (pdoor) /* s235 */
+                        vulture_persp_billboard((float) x, (float) y);
                 }
 
                 /* s93: blood stains on the floor */
+                vulture_persp_floor(); /* s235: these lie on the floor */
                 vst_draw(j, i, x, y);
 
                 /* 3. Traps */
                 vulture_put_tile(x, y, map_data->get_glyph(MAP_TRAP, j, i));
+                vulture_persp_billboard((float) x, (float) y); /* s235 */
                 vmagic_sprite(j, i, x, y, map_data->get_glyph(MAP_TRAP, j, i)); /* s154 */
 
                 /* 4. Objects (s83: falling while a drop plays) */
@@ -20472,8 +20568,11 @@ levelwin::draw()
                     int rox = 0, roy = 0;
 
                     vbr_offset(j, i, &rox, &roy); /* s204: under a boulder rolling in */
-                    if (ot && ot->graphic)
+                    if (ot && ot->graphic) {
+                        vulture_persp_floor(); /* s235: on the floor */
                         vshadow(x + rox, y + 2 + roy, ot->graphic->w * 3 / 4, 90);
+                        vulture_persp_billboard((float) x, (float) y);
+                    }
                 }
                 vanim_draw_object(j, i, x, y, map_obj);
                 if (map_obj != V_TILE_NONE) { /* s212: an item the walls in front of it may hide */
@@ -20504,8 +20603,10 @@ levelwin::draw()
 
                         if (sw < 18)
                             sw = 18;
+                        vulture_persp_floor(); /* s235: on the floor */
                         vshadow(tx, ty - vbob_offset(j, i) + 3, up ? sw * 3 / 4 : sw,
                                 up ? 90 : 150);
+                        vulture_persp_billboard((float) x, (float) y);
                     }
 
                     /* s79: squash & stretch + lean while stepping */
@@ -20653,6 +20754,7 @@ levelwin::draw()
             this->abs_y, this->w, this->h); /* s86: light, night, dust, panel */
     Uint32 vpf_d = SDL_GetTicks(); /* probe */
     vhalo_draw(map_centre_x, map_centre_y, view_x, view_y); /* s171 */
+    vtorch_halo_draw(); /* s235: torches glow in the air */
     vcond_draw(); /* s193: your conditions, on you */
     vambient_draw(this->abs_x, this->abs_y, this->w, this->h); /* s160 */
     vxr_draw(); /* s210: creatures behind walls, outlined */

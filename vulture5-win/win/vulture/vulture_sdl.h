@@ -126,7 +126,8 @@ extern SDL_Surface *vulture_gpu_hd_surface(SDL_Surface *s);           /* s229 */
 extern void vulture_gpu_hd_set_made(SDL_Surface *s1x, SDL_Surface *hd); /* s229 */
 extern void vulture_gpumap_set_focus(int y); /* s205: depth of field around you */
 /* s233: the perspective camera over the map layer (vulture_sdl.cpp) */
-extern void vulture_persp_frame(bool on, float cx, float cy, float D);
+extern void vulture_persp_frame(bool on, float cx, float cy, float D, float tilt, float turn);
+extern void vulture_persp_reach(float w, float h, float D, float tilt, float turn, int *ex, int *ey); /* s235 */
 extern bool vulture_persp_live(void);
 extern void vulture_persp_flat(void);
 extern void vulture_persp_floor(void);

@@ -44,6 +44,9 @@ struct vulture_optstruct {
 	 * picture), 150 (default) the camera 4.3 screen-heights back, more is
 	 * stronger (closer) */
 	int perspective;
+	/* s235: how many degrees down the camera looks - 0 the art's own
+	 * angle (23); default 40 */
+	int camera_tilt;
 	/* Overview-map (Tab) zoom.  The parchment is a fixed 640x480 painting;
 	 * this is the integer factor its art is built at.  0 = auto: the largest
 	 * factor that fits on screen WITHOUT covering the message lines. */
