@@ -4946,6 +4946,14 @@ Inspired by Pathos: NetHack Codex's "comprehensive inbuilt help on all items, en
   ax starts at 22 ax / 56) and puts the face's mean back - the texture
   stays, the shading goes.
 
+### 227. One relief read
+
+- vgl_fs read the normal texel twice for most pixels since 219 (the top
+  marker test, then the relief): one read now.  Timing check across 218-226
+  probes: the map pass is 2-3 ms throughout; the present's swap moved
+  5.6 -> 9.2 ms in the hidden window, which is vsync phase as much as GPU
+  (it swings run to run, see 217).
+
 ## 6. Open risks
 
 - R1 **Build system mismatch:** RESOLVED — WSL2 Unix build chosen; both 5.0.0 and Vulture build cleanly.

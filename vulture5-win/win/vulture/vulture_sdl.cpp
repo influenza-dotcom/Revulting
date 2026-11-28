@@ -612,13 +612,12 @@ void main()
     }
     bool selflit = false; /* s219: a block's top - its normal is the marker (0.5, 0.5, 0): it was
                              shaded by its own square's light, not the floor's under it on screen */
+    vec4 nn = vec4(0.0); /* s227: read once - the marker test and the relief share it */
     if (u_dg.w > 0.5) {
-        vec4 n0 = texture2D(u_nrm, tc * u_size.zw);
-
-        selflit = n0.a > 0.5 && n0.b < 0.1 && abs(n0.r - 0.5) < 0.06 && abs(n0.g - 0.5) < 0.06;
+        nn = texture2D(u_nrm, tc * u_size.zw);
+        selflit = nn.a > 0.5 && nn.b < 0.1 && abs(nn.r - 0.5) < 0.06 && abs(nn.g - 0.5) < 0.06;
     }
     if (u_dg.w > 0.5 && !selflit && rgb.r + rgb.g + rgb.b > 0.5) { /* s190: vl_nmap */
-        vec4 nn = texture2D(u_nrm, tc * u_size.zw);
         float a = nn.a * 255.0;
 
         if (a >= 24.0) {
